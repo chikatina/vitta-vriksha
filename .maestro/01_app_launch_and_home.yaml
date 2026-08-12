@@ -1,0 +1,23 @@
+appId: org.chikatistudio.vittavriksha
+---
+# Flow 01: Initial Setup / Unlock Flow & Home Navigation
+- launchApp:
+    clearState: false
+
+# Handle setup/lock if present or verify Home app bar
+- runFlow:
+    when:
+      visible: "Set up PIN"
+    commands:
+      - tapOn: "Skip"
+
+- runFlow:
+    when:
+      visible: "Enter PIN"
+    commands:
+      - tapOn: "Forgot PIN"
+
+# Assert Home Screen Loaded
+- assertVisible: "Home"
+- assertVisible: "Add"
+- assertVisible: "Net worth"

@@ -1,0 +1,10 @@
+appId: org.chikatistudio.vittavriksha
+---
+# Master Flow: Complete E2E Suite Executing All Flows
+- runFlow: 01_app_launch_and_home.yaml
+- runFlow: 02_tab_navigation.yaml
+- runFlow: 03_add_transaction.yaml
+- runFlow: 04_wealth_pages.yaml
+- runFlow: 05_more_pages.yaml
+- runFlow: 06_sticky_headers.yaml
+

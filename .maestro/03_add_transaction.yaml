@@ -1,0 +1,23 @@
+appId: org.chikatistudio.vittavriksha
+---
+# Flow 03: Add Transaction (Expense & Income) & Edit/Delete
+- launchApp:
+    clearState: false
+
+- tapOn: "Home"
+- tapOn: "Add"
+
+# Enter Expense Transaction
+- inputText: "500"
+- tapOn: "Category"
+- tapOn: "Food"
+- tapOn: "Save"
+
+# Verify in Ledger
+- tapOn: "Ledger"
+- assertVisible: "500"
+
+# Filter & Search in Ledger
+- tapOn: "Search"
+- inputText: "Food"
+- assertVisible: "500"

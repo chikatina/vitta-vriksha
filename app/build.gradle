@@ -1,0 +1,115 @@
+plugins {
+    alias(libs.plugins.android.application)
+}
+
+// Signing credentials live outside the repository. Without them a release build still
+// assembles, it is just unsigned. Run ./scripts/dev keystore to create them.
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
+android {
+    namespace 'org.chikatistudio.vittavriksha'
+    compileSdk 37
+
+    defaultConfig {
+        applicationId "org.chikatistudio.vittavriksha"
+        minSdk 24
+        targetSdk 37
+        versionCode 1
+        versionName "1.0.0"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        // No abiFilters and no ndk block. The app carries no native code of its own, so
+        // one universal APK serves every device.
+    }
+
+    // The backend used to be Python, embedded through Chaquopy, and that runtime was 59 MB
+    // of a 75 MB APK. It is now JavaScript, running in the WebView that already hosts the
+    // UI, which removed the runtime, the ABI-specific builds, and the build-time
+    // dependency on a Python interpreter being on PATH.
+    //
+    // The one thing Python was genuinely needed for was reading a consolidated account
+    // statement, and that was the part that did not work: the only casparser releases able
+    // to read a depository statement need pydantic v2, which needs a Rust extension that
+    // has no build for this environment. The parser is now our own, in JavaScript, and
+    // reads all four issuers. See docs/MIGRATION-JS-BACKEND.md.
+
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            release {
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+        }
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    lint {
+        warningsAsErrors false
+        abortOnError false
+        checkReleaseBuilds true
+    }
+
+    androidResources {
+        // The reference database and the WebAssembly build are both already compact and
+        // are read straight out of the APK; leaving them compressed costs a decompression
+        // on every read for no saving worth having.
+        noCompress += ['wasm']
+    }
+
+    packaging {
+        resources {
+            excludes += ['META-INF/AL2.0', 'META-INF/LGPL2.1', 'META-INF/*.kotlin_module']
+        }
+    }
+}
+
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.google.material)
+    implementation(libs.androidx.biometric)
+    implementation(libs.androidx.webkit)
+}
+
+tasks.register('validateWebAssets', Exec) {
+    description = 'Validates JavaScript web assets and runs the test suite before packing APK.'
+    group = 'verification'
+    def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
+    commandLine(isWindows ? ['cmd', '/c', 'node --test test/smoke_app_build.test.mjs'] : ['sh', '-c', 'node --test test/smoke_app_build.test.mjs'])
+    workingDir rootProject.projectDir
+}
+
+tasks.matching { it.name.startsWith('generate') && it.name.endsWith('Assets') }.configureEach {
+    dependsOn 'validateWebAssets'
+}
+

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Jade brand ramp. Shared with the WebView design tokens in assets/www/css/style.css. -->
+    <color name="brand_10">#04241D</color>
+    <color name="brand_20">#07392F</color>
+    <color name="brand_30">#0A5244</color>
+    <color name="brand_40">#0E6B5A</color>
+    <color name="brand_60">#1FA98C</color>
+    <color name="brand_70">#4CC7AC</color>
+    <color name="brand_90">#B8F0E3</color>
+
+    <color name="surface_light">#FBFCFB</color>
+    <color name="surface_dark">#0E1512</color>
+
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

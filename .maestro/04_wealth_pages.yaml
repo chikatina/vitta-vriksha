@@ -1,0 +1,47 @@
+appId: org.chikatistudio.vittavriksha
+---
+# Flow 04: Wealth Hub Pages (Accounts, SIPs, Loans, Cards, Subscriptions, Goals, FIRE, Statements)
+- launchApp:
+    clearState: false
+
+- tapOn: "Wealth"
+
+# Test Accounts Page
+- tapOn: "Accounts"
+- assertVisible: "Accounts"
+- tapOn: "Back"
+
+# Test SIPs Page
+- tapOn: "SIPs"
+- assertVisible: "SIPs"
+- tapOn: "Back"
+
+# Test Loans Page
+- tapOn: "Loans"
+- assertVisible: "Loans"
+- tapOn: "Back"
+
+# Test Credit Cards Page
+- tapOn: "Credit cards"
+- assertVisible: "Credit cards"
+- tapOn: "Back"
+
+# Test Subscriptions Page
+- tapOn: "Subscriptions"
+- assertVisible: "Subscriptions"
+- tapOn: "Back"
+
+# Test Goals Page
+- tapOn: "Goals"
+- assertVisible: "Goals"
+- tapOn: "Back"
+
+# Test Retirement (FIRE) Page
+- tapOn: "Retirement"
+- assertVisible: "Retirement"
+- tapOn: "Back"
+
+# Test Account Statements (CAS) Page
+- tapOn: "Account statement"
+- assertVisible: "Account statement"
+- tapOn: "Back"
