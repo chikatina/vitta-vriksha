@@ -1,0 +1,66 @@
+# Android & Gradle
+.gradle/
+build/
+app/build/
+*.apk
+*.aab
+*.aar
+local.properties
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+.kotlin/
+*.keystore
+*.jks
+!default.keystore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv
+venv/
+ENV/
+env/
+
+# App local database & backups (user data)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.vittavriksha
+*.vittafamily
+
+# IDE & OS
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Claude Code / AI assistant workspace
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+
+# Font subsetting input, downloaded on demand (see tools/README.md)
+tools/material-symbols-full.woff2
+
+# Release signing credentials, never commit these
+keystore.properties
+*.jks
+
+tools/preview.png
+
+scripts/sms_backup.txt
+scripts/parse_out.txt
+scripts/*.out.txt
+*.pdf
+*.PDF
+scripts/sms_clean.csv
+scripts/sms_review.csv
+scripts/*.csv
+scripts/*.json
+tools/screenshot_*.png
+tools/uidump.xml

@@ -1,0 +1,27 @@
+appId: org.chikatistudio.vittavriksha
+---
+# Flow 06: Verify Sticky Headers on Home, Ledger, and Wealth tabs
+- launchApp:
+    clearState: false
+
+# 1. Verify Home Tab
+- tapOn: "Home"
+- assertVisible: "Everyone"
+- scroll:
+    direction: DOWN
+- assertVisible: "Everyone"
+
+# 2. Verify Ledger Tab
+- tapOn: "Ledger"
+- assertVisible: "Search by shop, note or category"
+- scroll:
+    direction: DOWN
+- assertVisible: "Search by shop, note or category"
+- assertVisible: "Everyone"
+
+# 3. Verify Wealth Tab
+- tapOn: "Wealth"
+- assertVisible: "Everyone"
+- scroll:
+    direction: DOWN
+- assertVisible: "Everyone"

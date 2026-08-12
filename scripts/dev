@@ -1,0 +1,435 @@
+#!/usr/bin/env bash
+#
+# Build, install and run Vitta Vriksha without Android Studio.
+#
+# Works anywhere bash does, including Git Bash on Windows. Everything the build needs is
+# discovered rather than assumed: the JDK, the Android SDK, adb, and the application id.
+#
+#   ./scripts/dev doctor      check the toolchain before anything else
+#   ./scripts/dev run         build, install, launch, follow the logs
+#
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+BOLD=$'\033[1m'; DIM=$'\033[2m'; RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; OFF=$'\033[0m'
+if [ ! -t 1 ]; then BOLD=""; DIM=""; RED=""; GREEN=""; YELLOW=""; OFF=""; fi
+
+say()  { printf '%s==>%s %s\n' "$BOLD" "$OFF" "$*"; }
+warn() { printf '%s warn%s %s\n' "$YELLOW" "$OFF" "$*" >&2; }
+die()  { printf '%s fail%s %s\n' "$RED" "$OFF" "$*" >&2; exit 1; }
+
+# --------------------------------------------------------------------- toolchain
+
+# Android Gradle Plugin needs a JDK 17 or newer. Android Studio ships one, so prefer that
+# over whatever happens to be on PATH.
+find_java_home() {
+  if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+    printf '%s' "$JAVA_HOME"; return
+  fi
+
+  local candidate
+  for candidate in \
+    "/c/Program Files/Android/Android Studio/jbr" \
+    "/d/Program Files/Android Studio/jbr" \
+    "/c/Program Files/Android Studio/jbr" \
+    "$HOME/AppData/Local/Programs/Android Studio/jbr" \
+    "/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+    "/opt/android-studio/jbr" \
+    "/usr/lib/jvm/default-java"
+  do
+    [ -x "$candidate/bin/java" ] && { printf '%s' "$candidate"; return; }
+  done
+
+  if command -v java >/dev/null 2>&1; then
+    local bin; bin="$(command -v java)"
+    printf '%s' "$(cd "$(dirname "$bin")/.." && pwd)"
+  fi
+}
+
+find_sdk() {
+  local candidate
+  for candidate in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}"; do
+    [ -n "$candidate" ] && [ -d "$candidate" ] && { printf '%s' "$candidate"; return; }
+  done
+
+  # local.properties is what Android Studio writes, and it wins over a guess.
+  if [ -f local.properties ]; then
+    local from_props
+    from_props="$(sed -n 's/^sdk\.dir=//p' local.properties | head -1 | sed 's/\\\\/\//g; s/\\:/:/g; s/^\([A-Za-z]\):/\/\l\1/')"
+    [ -n "$from_props" ] && [ -d "$from_props" ] && { printf '%s' "$from_props"; return; }
+  fi
+
+  for candidate in "$HOME/AppData/Local/Android/Sdk" "$HOME/Library/Android/sdk" "$HOME/Android/Sdk"; do
+    [ -d "$candidate" ] && { printf '%s' "$candidate"; return; }
+  done
+}
+
+JAVA_HOME="$(find_java_home)"
+[ -n "$JAVA_HOME" ] || die "No JDK found. Install JDK 17 or newer, or set JAVA_HOME."
+export JAVA_HOME
+
+SDK="$(find_sdk)"
+ADB="${SDK:+$SDK/platform-tools/adb}"
+[ -x "$ADB" ] || [ -x "$ADB.exe" ] || ADB="$(command -v adb || true)"
+
+# The application id is the single source of truth for install and launch, so read it
+# from the build file instead of repeating it here.
+APP_ID="$(sed -n 's/.*applicationId *"\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
+DEBUG_SUFFIX="$(sed -n 's/.*applicationIdSuffix *"\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
+DEBUG_ID="${APP_ID}${DEBUG_SUFFIX}"
+
+GRADLEW="./gradlew"
+[ -x "$GRADLEW" ] || GRADLEW="sh ./gradlew"
+
+# ------------------------------------------------------------------------- adb
+
+adb_cmd() {
+  [ -n "$ADB" ] || die "adb not found. Install Android platform-tools, or set ANDROID_HOME."
+  if [ -n "${ANDROID_SERIAL:-}" ]; then
+    "$ADB" -s "$ANDROID_SERIAL" "$@"
+  else
+    "$ADB" "$@"
+  fi
+}
+
+device_count() {
+  "$ADB" devices 2>/dev/null | awk 'NR>1 && $2=="device"' | wc -l | tr -d ' '
+}
+
+require_device() {
+  [ -n "$ADB" ] || die "adb not found. Install Android platform-tools, or set ANDROID_HOME."
+
+  local count; count="$(device_count)"
+  if [ "$count" -eq 0 ]; then
+    printf '%s\n' "No device is connected." >&2
+    printf '%s\n' "  Plug in a phone with USB debugging on, or start an emulator." >&2
+    printf '%s\n' "  Then run: ${DIM}./scripts/dev devices${OFF}" >&2
+    exit 1
+  fi
+
+  if [ "$count" -gt 1 ] && [ -z "${ANDROID_SERIAL:-}" ]; then
+    printf '%s\n' "More than one device is attached. Pick one:" >&2
+    "$ADB" devices | awk 'NR>1 && $2=="device" {print "  export ANDROID_SERIAL=" $1}' >&2
+    exit 1
+  fi
+}
+
+# The launcher component is resolved on device so a rename of MainActivity does not
+# silently break this script.
+launch_component() {
+  local resolved
+  resolved="$(adb_cmd shell cmd package resolve-activity --brief "$DEBUG_ID" 2>/dev/null \
+    | tr -d '\r' | tail -1)"
+  if [ -n "$resolved" ] && [ "${resolved#*/}" != "$resolved" ]; then
+    printf '%s' "$resolved"
+  fi
+}
+
+# ---------------------------------------------------------------------- commands
+
+cmd_doctor() {
+  say "Toolchain"
+  printf '  %-16s %s\n' "java" "$JAVA_HOME"
+  "$JAVA_HOME/bin/java" -version 2>&1 | head -1 | sed 's/^/                   /'
+
+  printf '  %-16s %s\n' "sdk" "${SDK:-${RED}not found${OFF}}"
+  printf '  %-16s %s\n' "adb" "${ADB:-${RED}not found${OFF}}"
+  printf '  %-16s %s\n' "application id" "$APP_ID"
+  printf '  %-16s %s\n' "debug id" "$DEBUG_ID"
+
+  # The build needs neither of these. Node runs the tests; Python runs the generators
+  # under tools/, which are only used when the fonts, icons or reference data change.
+  local node_bin; node_bin="$(find_node)"
+  if [ -n "$node_bin" ]; then
+    printf '  %-16s %s\n' "node" "$("$node_bin" --version 2>&1), for the tests"
+  else
+    printf '  %-16s %s\n' "node" "${YELLOW}not found, needed to run the tests${OFF}"
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    printf '  %-16s %s\n' "python" "$(python --version 2>&1), for tools/"
+  else
+    printf '  %-16s %s\n' "python" "${DIM}not found, only tools/ needs it${OFF}"
+  fi
+
+  if [ -f keystore.properties ]; then
+    printf '  %-16s %s\n' "signing" "keystore.properties present, release builds are signed"
+  else
+    printf '  %-16s %s\n' "signing" "${DIM}none, release builds are unsigned (./scripts/dev keystore)${OFF}"
+  fi
+
+  if [ -n "$ADB" ]; then
+    say "Devices"
+    "$ADB" devices -l | tail -n +2 | sed 's/^/  /'
+    [ "$(device_count)" -eq 0 ] && printf '  %s\n' "${DIM}none attached${OFF}"
+  fi
+}
+
+cmd_build() {
+  say "Building the debug APK"
+  $GRADLEW assembleDebug "$@"
+  local apk; apk="$(find app/build/outputs/apk/debug -name '*.apk' 2>/dev/null | head -1)"
+  [ -n "$apk" ] && printf '%s ok%s %s (%s)\n' "$GREEN" "$OFF" "$apk" "$(du -h "$apk" | cut -f1)"
+}
+
+cmd_install() {
+  require_device
+  cmd_build "$@"
+
+  local apk; apk="$(find app/build/outputs/apk/debug -name '*.apk' | head -1)"
+  [ -n "$apk" ] || die "No APK was produced."
+
+  say "Installing on $(adb_cmd shell getprop ro.product.model | tr -d '\r')"
+  # -r reinstalls in place, -d allows a downgrade while iterating on versionCode.
+  adb_cmd install -r -d "$apk"
+  printf '%s ok%s %s installed\n' "$GREEN" "$OFF" "$DEBUG_ID"
+}
+
+cmd_launch() {
+  require_device
+  local component; component="$(launch_component)"
+
+  if [ -n "$component" ]; then
+    adb_cmd shell am start -n "$component" >/dev/null
+  else
+    warn "Could not resolve the launcher activity, falling back to monkey."
+    adb_cmd shell monkey -p "$DEBUG_ID" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 \
+      || die "Could not launch $DEBUG_ID. Is it installed?"
+  fi
+  printf '%s ok%s launched\n' "$GREEN" "$OFF"
+}
+
+cmd_run() {
+  cmd_install "$@"
+  adb_cmd logcat -c || true
+  cmd_launch
+  say "Following logs, press Ctrl+C to stop"
+  cmd_logs
+}
+
+cmd_logs() {
+  require_device
+  local pid=""
+  local attempt
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    pid="$(adb_cmd shell pidof -s "$DEBUG_ID" 2>/dev/null | tr -d '\r')"
+    [ -n "$pid" ] && break
+    sleep 0.5
+  done
+
+  if [ -z "$pid" ]; then
+    warn "$DEBUG_ID is not running. Showing unfiltered logs instead."
+    adb_cmd logcat
+  else
+    # One process covers Kotlin, Python and the WebView console, so filtering by pid
+    # catches everything the app says without the rest of the system.
+    adb_cmd logcat --pid="$pid"
+  fi
+}
+
+cmd_stop() {
+  require_device
+  adb_cmd shell am force-stop "$DEBUG_ID"
+  printf '%s ok%s stopped\n' "$GREEN" "$OFF"
+}
+
+cmd_uninstall() {
+  require_device
+  say "Removing $DEBUG_ID"
+  adb_cmd uninstall "$DEBUG_ID" || warn "It was not installed."
+}
+
+cmd_devices() {
+  [ -n "$ADB" ] || die "adb not found."
+  "$ADB" devices -l
+}
+
+#
+# A screenshot of this app, and only of this app.
+#
+# There is a one-line version of this and it is the wrong one. A device screen belongs to
+# whoever is holding it, and at any moment it may be showing their messages, their browser
+# or somebody else's bank balance. Capturing it blind and handing the picture to whoever
+# asked is a small thing to write and not a small thing to do.
+#
+# So this asks the system what is in front and refuses if the answer is not us. For a
+# picture of anything else on the device, take it yourself.
+#
+# To keep the figures out of the shot, turn on "Hide amounts" in More, Settings first.
+# That is a real setting the app reads, so what comes out is a real screenshot rather than
+# something blurred afterwards.
+#
+cmd_shot() {
+  [ -n "$ADB" ] || die "adb not found."
+  out="${1:-screenshot.png}"
+
+  # The focused window, which is the honest answer to what the user is looking at: it
+  # accounts for dialogs and for another app sitting on top of ours.
+  focus="$(adb_cmd shell dumpsys window 2>/dev/null | grep -m1 -E 'mCurrentFocus|mFocusedApp' || true)"
+
+  case "$focus" in
+    *"$DEBUG_ID"*|*"$APP_ID"*) ;;
+    *)
+      warn "Vitta Vriksha is not the app in front, so nothing was captured."
+      printf '  the device is showing: %s\n' "${focus:-nothing this could read}" >&2
+      die "Bring the app to the front and run this again."
+      ;;
+  esac
+
+  # Git's bash on Windows helpfully rewrites anything that looks like a Unix path into a
+  # Windows one before the program sees it, which turns /sdcard/x.png into something adb
+  # cannot write and screencap answers with its usage text. This says to leave it alone.
+  MSYS2_ARG_CONV_EXCL='*'
+  MSYS_NO_PATHCONV=1
+  export MSYS2_ARG_CONV_EXCL MSYS_NO_PATHCONV
+
+  remote="/sdcard/vitta-shot-$$.png"
+  adb_cmd shell screencap -p "$remote"
+  adb_cmd pull "$remote" "$out" >/dev/null
+  adb_cmd shell rm "$remote"
+  say "ok $out"
+}
+
+cmd_release() {
+  if [ ! -f keystore.properties ]; then
+    warn "No keystore.properties, so this APK will be unsigned and will not install."
+    warn "Run ./scripts/dev keystore first to create one."
+  fi
+  say "Building the release APK"
+  $GRADLEW assembleRelease "$@"
+  find app/build/outputs/apk/release -name '*.apk' 2>/dev/null | sed "s/^/  /"
+}
+
+cmd_bundle() {
+  [ -f keystore.properties ] || die "A signed bundle needs keystore.properties. Run ./scripts/dev keystore."
+  say "Building the release bundle for Play"
+  $GRADLEW bundleRelease "$@"
+  find app/build/outputs/bundle -name '*.aab' 2>/dev/null | sed "s/^/  /"
+}
+
+cmd_keystore() {
+  [ -f keystore.properties ] && die "keystore.properties already exists. Delete it first if you mean to replace it."
+
+  local keytool="$JAVA_HOME/bin/keytool"
+  [ -x "$keytool" ] || keytool="$(command -v keytool)" || die "keytool not found."
+
+  local store="release.jks" alias="vittavriksha"
+  say "Creating a signing key"
+  printf '%s\n' "  This key signs every release. Back it up and keep the password safe:" \
+                "  losing it means you can never update the app on Play again." ""
+
+  printf 'Keystore password: '; read -rs password; printf '\n'
+  [ ${#password} -ge 6 ] || die "The password must be at least 6 characters."
+  printf 'Confirm: '; read -rs confirm; printf '\n'
+  [ "$password" = "$confirm" ] || die "The passwords did not match."
+
+  "$keytool" -genkeypair -v \
+    -keystore "$store" -alias "$alias" \
+    -keyalg RSA -keysize 4096 -validity 10000 \
+    -storepass "$password" -keypass "$password" \
+    -dname "CN=Vitta Vriksha, OU=Chikati Studio, O=Chikati Studio, C=IN"
+
+  cat > keystore.properties <<EOF
+# Signing credentials. This file is gitignored and must never be committed.
+storeFile=$store
+storePassword=$password
+keyAlias=$alias
+keyPassword=$password
+EOF
+
+  printf '%s ok%s %s and keystore.properties written, both gitignored\n' "$GREEN" "$OFF" "$store"
+}
+
+# npm installs a `node` shim on Windows that only works from cmd or PowerShell, so a
+# plain `node` here can resolve to something bash cannot run. Prefer a real executable.
+find_node() {
+  local candidate
+  for candidate in \
+    "/c/Program Files/nodejs/node.exe" \
+    "/c/Program Files (x86)/nodejs/node.exe" \
+    "$HOME/.nvm/versions/node/*/bin/node"
+  do
+    [ -x "$candidate" ] && { printf '%s' "$candidate"; return; }
+  done
+  if command -v node >/dev/null 2>&1 && node --version >/dev/null 2>&1; then
+    printf 'node'
+  fi
+}
+
+cmd_test() {
+  local node; node="$(find_node)"
+  [ -n "$node" ] || die "node not found. Install Node 20 or newer."
+  say "Backend tests"
+  "$node" --test 'test/*.test.mjs' "$@"
+}
+
+cmd_web() {
+  local port="${1:-8000}"
+  say "Serving the web UI on http://localhost:$port"
+  printf '%s\n' "  The whole backend runs in the browser, so every screen is real." \
+                "  Press Ctrl+C to stop." ""
+  python -m http.server "$port" --directory app/src/main/assets/www
+}
+
+cmd_clean() {
+  say "Cleaning build outputs"
+  $GRADLEW clean
+}
+
+usage() {
+  cat <<EOF
+${BOLD}Vitta Vriksha${OFF}  build and deploy without Android Studio
+
+  ${BOLD}./scripts/dev <command>${OFF}
+
+  ${BOLD}Daily${OFF}
+    run             build, install, launch, and follow the logs
+    install         build and install on the connected device
+    build           assemble the debug APK
+    logs            follow this app's logs only
+    stop            force-stop the app
+    uninstall       remove the app from the device
+
+  ${BOLD}Release${OFF}
+    keystore        create a signing key and keystore.properties
+    release         assemble a release APK
+    bundle          assemble a release AAB for Play
+
+  ${BOLD}Development${OFF}
+    web [port]      serve the web UI in a browser with a mocked backend
+    test            run the backend tests
+    devices         list attached devices
+    shot [file]     screenshot, but only when this app is the one in front
+    doctor          check the toolchain
+    clean           delete build outputs
+
+  Anything after the command is passed to Gradle, so ${DIM}./scripts/dev build --offline${OFF} works.
+  With more than one device attached, set ${DIM}ANDROID_SERIAL${OFF} to choose.
+EOF
+}
+
+command="${1:-}"
+[ $# -gt 0 ] && shift || true
+
+case "$command" in
+  run)        cmd_run "$@" ;;
+  build)      cmd_build "$@" ;;
+  install)    cmd_install "$@" ;;
+  launch)     cmd_launch ;;
+  logs|log)   cmd_logs ;;
+  stop)       cmd_stop ;;
+  uninstall)  cmd_uninstall ;;
+  release)    cmd_release "$@" ;;
+  bundle)     cmd_bundle "$@" ;;
+  keystore)   cmd_keystore ;;
+  test)       cmd_test "$@" ;;
+  web)        cmd_web "$@" ;;
+  devices)    cmd_devices ;;
+  shot)       cmd_shot "$@" ;;
+  doctor)     cmd_doctor ;;
+  clean)      cmd_clean ;;
+  ""|-h|--help|help) usage ;;
+  *) printf '%sUnknown command: %s%s\n\n' "$RED" "$command" "$OFF" >&2; usage >&2; exit 1 ;;
+esac

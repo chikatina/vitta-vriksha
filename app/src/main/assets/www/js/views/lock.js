@@ -1,0 +1,468 @@
+/* First run setup and the PIN lock screen. */
+
+import { Bridge } from '../bridge.js';
+import { confirmDialog, icon, h, toast } from '../ui.js';
+import { brandMark } from '../brand-mark.js';
+
+const PIN_LENGTH = 4;
+
+function overlay(html) {
+  document.querySelectorAll('.overlay-screen').forEach((node) => node.remove());
+  const node = document.createElement('div');
+  node.className = 'overlay-screen';
+  node.innerHTML = html;
+  document.body.appendChild(node);
+  return node;
+}
+
+/*
+ * Ten digits, a blank, and a delete.
+ *
+ * The blank is where a fingerprint key used to be. It is not there because a fingerprint
+ * answers yes or no, and what this screen needs is the key the records are encrypted with.
+ * See `renderLock`.
+ */
+function keypad() {
+  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'del'];
+  return `<div class="keypad">${keys.map((key) => {
+    if (!key) return '<span class="key key-blank"></span>';
+    if (key === 'del') return `<button class="key" data-key="del" aria-label="Delete">${icon('backspace')}</button>`;
+    return `<button class="key" data-key="${key}">${key}</button>`;
+  }).join('')}</div>`;
+}
+
+function dots(filled) {
+  return Array.from({ length: PIN_LENGTH }, (_, i) =>
+    `<span class="pin-dot ${i < filled ? 'filled' : ''}"></span>`).join('');
+}
+
+/**
+ * Drives a keypad. onComplete receives the entered PIN and returns true to accept it,
+ * false to shake and clear, or a string to shake with that message.
+ */
+function wireKeypad(node, { onComplete }) {
+  let buffer = '';
+  const dotHost = node.querySelector('.pin-dots');
+  const errorHost = node.querySelector('[data-error]');
+
+  const paint = () => { dotHost.innerHTML = dots(buffer.length); };
+
+  const reject = (message) => {
+    errorHost.textContent = message;
+    dotHost.classList.add('shake');
+    setTimeout(() => {
+      dotHost.classList.remove('shake');
+      buffer = '';
+      paint();
+    }, 420);
+  };
+
+  node.querySelectorAll('[data-key]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const key = btn.dataset.key;
+
+      if (key === 'del') {
+        buffer = buffer.slice(0, -1);
+        errorHost.textContent = '';
+        paint();
+        return;
+      }
+      if (buffer.length >= PIN_LENGTH) return;
+
+      buffer += key;
+      paint();
+
+      if (buffer.length === PIN_LENGTH) {
+        const accepted = await onComplete(buffer);
+        if (accepted === false) reject('That PIN did not match.');
+        else if (typeof accepted === 'string') reject(accepted);
+      }
+    });
+  });
+
+  paint();
+}
+
+/* ------------------------------------------------------------------- lock */
+
+/*
+ * The lock screen, which is now the only way into the data.
+ *
+ * It asks the vault rather than comparing a hash, because there is no hash to compare
+ * against while the app is locked: the settings table it used to live in is ciphertext
+ * until the PIN opens it. A wrong PIN is rejected by the key wrapping's own tag, which
+ * has the pleasant property of leaking nothing at all about how wrong it was.
+ *
+ * No fingerprint. A fingerprint is a yes or a no, and what is needed here is a key. Making
+ * it work means keeping a second copy of the key in the Android Keystore behind a
+ * biometric, which is a real design and not a checkbox, and until it exists a button that
+ * seems to unlock and then leaves every screen empty is worse than no button.
+ */
+export function renderLock(app) {
+  const node = overlay(`
+    <div class="lock-body">
+      <div class="lock-mark">${brandMark()}</div>
+      <div class="lock-title">
+        <div class="headline">Vitta Vriksha</div>
+        <div class="caption">Enter your PIN to continue</div>
+      </div>
+      <div class="pin-dots">${dots(0)}</div>
+      <div class="caption lock-error" data-error></div>
+    </div>
+    ${keypad()}
+    <div class="lock-footer">
+      <button class="btn btn-text" data-forgot>Forgot your PIN?</button>
+    </div>`);
+
+  wireKeypad(node, {
+    async onComplete(pin) {
+      const res = await Bridge.db('unlock_vault', { pin });
+      if (res.status === 'success') {
+        await app.resume();
+        return true;
+      }
+
+      // The reply carries how many tries have been used and how long the wait is, so the
+      // screen can say what is happening rather than repeating "wrong PIN" nine times and
+      // then appearing to break.
+      if (res.locked_for_ms) return `${res.message} ${res.hint || ''}`.trim();
+      const left = res.failed_attempts ? ` (${res.failed_attempts} wrong so far)` : '';
+      return `That is not your PIN.${left}`;
+    },
+  });
+
+  node.querySelector('[data-forgot]').addEventListener('click', () => forgetPin(app));
+  return node;
+}
+
+/**
+ * What happens when the PIN is genuinely gone.
+ *
+ * There is nothing to recover. The key exists in exactly one place, wrapped in the PIN,
+ * and no part of this app can open it without one. So the only honest offer is to start
+ * again, and the only thing worth doing well is making sure nobody does it by accident:
+ * the wording says what goes, what stays, and asks twice.
+ */
+async function forgetPin(app) {
+  const warned = await confirmDialog(
+    'Start again?',
+    'Your PIN is what your records are encrypted with. Without it they cannot be read, '
+    + 'by this app or by anything else, and there is no way to recover them.\n\n'
+    + 'Starting again deletes every account, transaction and holding on this device. '
+    + 'Your rules, categories and learned merchants are kept, so the app does not have to '
+    + 'be taught them a second time.',
+    { confirmLabel: 'Continue', danger: true },
+  );
+  if (!warned) return;
+
+  const sure = await confirmDialog(
+    'This cannot be undone',
+    'Delete everything recorded on this device and set a new PIN?',
+    { confirmLabel: 'Delete everything', danger: true },
+  );
+  if (!sure) return;
+
+  const res = await Bridge.db('factory_reset');
+  if (res.status !== 'success') {
+    toast(res.message || 'That did not work.', 'error');
+    return;
+  }
+  await app.restart();
+}
+
+/**
+ * When the app cannot even ask whether it is locked.
+ *
+ * Reached only if the one action that works while locked fails, which means something is
+ * wrong with the WebView's storage rather than with anything the user did. Showing the
+ * home screen at that point would show a screen with no data on it and no explanation, so
+ * this says what happened and offers the only two things that can help: try again, or
+ * start over.
+ */
+export function renderStartupFailure(app, res) {
+  const node = overlay(`
+    <div class="lock-body">
+      <div class="lock-mark">${brandMark()}</div>
+      <div class="lock-title">
+        <div class="headline">Something is wrong with the app's storage</div>
+        <p class="body muted">
+          Vitta Vriksha could not check whether your records are locked, so it has not
+          opened them. Nothing has been changed or deleted.
+        </p>
+        <p class="caption">${h(res && res.code ? `${res.code}: ${res.message || ''}` : 'No reply from storage.')}</p>
+      </div>
+    </div>
+    <div class="lock-footer">
+      <button class="btn btn-filled" data-retry>Try again</button>
+    </div>`);
+
+  node.querySelector('[data-retry]').addEventListener('click', () => window.location.reload());
+}
+
+/* ------------------------------------------------------------------ setup */
+
+const STEP_COUNT = 4;
+
+export function renderSetup(app) {
+  let step = 1;
+  let chosenPin = '';
+
+  const shell = (index, body, footer) => `
+    <div class="setup">
+      <div class="setup-top">
+        ${index > 1
+          ? `<button class="icon-button" data-back aria-label="Go back a step">${icon('arrow_back')}</button>`
+          : '<span class="setup-top-spacer"></span>'}
+        <div class="setup-steps">
+          ${Array.from({ length: STEP_COUNT }, (_, i) =>
+            `<span class="setup-step-dot ${i < index ? 'active' : ''}"></span>`).join('')}
+        </div>
+        <span class="setup-top-spacer"></span>
+      </div>
+      <div class="setup-content">${body}</div>
+      <div class="setup-footer">${footer}</div>
+    </div>`;
+
+  const hero = (glyph, title, blurb) => `
+    <div class="setup-hero">${glyph === 'brand' ? brandMark() : icon(glyph)}</div>
+    <h1 class="headline">${h(title)}</h1>
+    <p class="body muted" style="max-width:34ch">${blurb}</p>`;
+
+  /*
+   * Going back a step.
+   *
+   * Setup used to be one way, so the device's back gesture found nothing to pop and left
+   * the app instead. Each step now pushes a history entry, which is what the gesture and
+   * the button below both act on, so the two can never disagree about which step you are
+   * on. Nothing before this point is written to the database, so stepping back only has
+   * to undo what is held here.
+   */
+  const onPop = () => {
+    if (step <= 1) return;
+    step -= 1;
+    chosenPin = '';
+    paint();
+  };
+  window.addEventListener('popstate', onPop);
+
+  const next = () => {
+    step += 1;
+    if (step > STEP_COUNT) {
+      finish();
+      return;
+    }
+    history.pushState({ setup: step }, '');
+    paint();
+  };
+
+  const finish = async () => {
+    window.removeEventListener('popstate', onPop);
+    window.onAppResumed = null;
+    await Bridge.db('update_setting', { key: 'setup_complete', value: '1' });
+    // Through `resume` rather than straight to `unlock`, so the currency, the locale and
+    // the theme are read the same way they are on every later start.
+    await app.resume();
+  };
+
+  const STEPS = {
+    /* ------------------------------------------------------------ welcome */
+    1() {
+      const node = overlay(shell(1, hero('brand', 'Vitta Vriksha',
+        'Track what you own, what you owe, and where the money actually goes.'), `
+        <button class="btn btn-filled btn-block" data-next>Get started</button>`));
+
+      node.querySelector('.setup-content').insertAdjacentHTML('beforeend', `
+        <div class="card" style="width:100%;text-align:left;margin-top:8px">
+          ${[
+            ['cloud_off', 'Nothing leaves this device',
+             'The app has no internet permission, so it cannot send your records anywhere.'],
+            ['lock', 'Locked behind a PIN', 'Or your fingerprint, if the device has one.'],
+            ['backup', 'Yours to export', 'One encrypted file, whenever you want it.'],
+          ].map(([glyph, title, body]) => `
+            <div class="row" style="align-items:flex-start;gap:12px;margin-bottom:14px">
+              <span class="avatar avatar-sm" style="background:var(--accent-container);color:var(--on-accent-container)">
+                ${icon(glyph)}
+              </span>
+              <span class="list-row-main">
+                <span class="list-row-title">${h(title)}</span>
+                <span class="caption">${h(body)}</span>
+              </span>
+            </div>`).join('')}
+        </div>`);
+
+      node.querySelector('[data-next]').addEventListener('click', next);
+    },
+
+    /* ---------------------------------------------------------------- pin */
+    2() {
+      const node = overlay(shell(2, `
+        <div class="setup-hero">${icon('lock')}</div>
+        <h1 class="headline">${chosenPin ? 'Enter it once more' : 'Choose a PIN'}</h1>
+        <p class="caption" style="max-width:32ch">
+          ${chosenPin
+    ? 'So we know it was not a slip.'
+    : 'Four digits. This is what your records are locked with, so there is no way '
+      + 'into them without it and no way to reset it.'}
+        </p>
+        <div class="pin-dots">${dots(0)}</div>
+        <div class="caption" data-error style="color:var(--expense);min-height:18px"></div>
+        ${keypad()}`, `
+        <p class="caption">
+          Write it down somewhere safe. It is not stored anywhere, so nobody can look it up
+          for you, and forgetting it means starting again with an empty ledger.
+        </p>`));
+
+      wireKeypad(node, {
+        async onComplete(pin) {
+          if (!chosenPin) {
+            chosenPin = pin;
+            paint();
+            return true;
+          }
+          if (pin !== chosenPin) {
+            chosenPin = '';
+            paint();
+            return true;
+          }
+
+          /*
+           * The moment the key is made, and the first moment anything can be written.
+           *
+           * One call, not two. It makes the key, records the PIN, and saves, so there is
+           * no window in which a database exists that no key can seal.
+           */
+          const res = await Bridge.db('create_vault', { new_pin: pin });
+          if (res.status !== 'success') {
+            chosenPin = '';
+            return res.message || 'That PIN was not accepted.';
+          }
+          app.settings.pin_is_set = '1';
+          next();
+          return true;
+        },
+      });
+
+      /*
+       * No way past this step.
+       *
+       * It used to offer "Set one up later", which is the right offer when a PIN only
+       * hides the screen. It is the wrong offer once the PIN is what the records are
+       * encrypted with: an install that skipped it would have nothing to lock them with,
+       * and turning encryption on afterwards would mean a database that was written in
+       * the clear and can never honestly be described as having been private.
+       */
+    },
+
+    /* -------------------------------------------------------- permissions */
+    3() {
+      const onDevice = Bridge.isAndroid();
+
+      const node = overlay(shell(3, hero('bolt', 'Let it do some of the typing',
+        'Both are optional, and the app works fully without them. You can change your mind '
+        + 'any time in More, Security.'), `
+        <button class="btn btn-filled btn-block" data-next>Continue</button>`));
+
+      node.querySelector('.setup-content').insertAdjacentHTML('beforeend', `
+        <div class="list" style="width:100%;text-align:left" data-permissions></div>
+        ${onDevice ? '' : `<p class="caption">Permissions can only be granted on a device.</p>`}`);
+
+      const PERMISSIONS = [
+        {
+          key: 'SMS',
+          glyph: 'sms',
+          title: 'Read bank SMS',
+          body: 'Turns "Rs 450 debited" into a transaction, without you typing it. '
+            + 'Messages are matched on this device and never stored in full.',
+        },
+        {
+          key: 'NOTIFICATIONS',
+          glyph: 'notifications',
+          title: 'Send reminders',
+          body: 'A nudge before a SIP, an EMI or a subscription is due.',
+        },
+      ];
+
+      const host = node.querySelector('[data-permissions]');
+
+      const paintPermissions = () => {
+        host.innerHTML = PERMISSIONS.map((permission) => {
+          const granted = Bridge.checkPermission(permission.key);
+          const blocked = !granted && Bridge.permissionIsBlocked(permission.key);
+
+          return `
+            <div class="list-row" style="align-items:flex-start">
+              <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface-variant)">
+                ${icon(permission.glyph)}
+              </span>
+              <span class="list-row-main">
+                <span class="list-row-title">${h(permission.title)}</span>
+                <span class="caption">${h(permission.body)}</span>
+              </span>
+              ${granted
+                ? `<span class="badge badge-income">${icon('check', 'icon-sm')}On</span>`
+                : `<button class="btn btn-sm btn-tonal" data-grant="${permission.key}"
+                           ${onDevice ? '' : 'disabled'}>${blocked ? 'Settings' : 'Allow'}</button>`}
+            </div>`;
+        }).join('');
+
+        host.querySelectorAll('[data-grant]').forEach((btn) => {
+          btn.addEventListener('click', async () => {
+            const key = btn.dataset.grant;
+            if (Bridge.permissionIsBlocked(key)) {
+              Bridge.openAppSettings();
+              return;
+            }
+            btn.disabled = true;
+            await Bridge.requestPermission(key);
+            paintPermissions();
+          });
+        });
+      };
+
+      paintPermissions();
+      // Coming back from system settings should show the new state.
+      window.onAppResumed = paintPermissions;
+
+      node.querySelector('[data-next]').addEventListener('click', () => {
+        window.onAppResumed = null;
+        next();
+      });
+    },
+
+    /* ---------------------------------------------------------- household */
+    4() {
+      const node = overlay(shell(4, hero('group', 'Just you, or the household?',
+        'Add profiles for the people whose money you track and see their totals separately '
+        + 'or together.'), `
+        <button class="btn btn-filled btn-block" data-next>Finish</button>`));
+
+      node.querySelector('.setup-content').insertAdjacentHTML('beforeend', `
+        <div class="card" style="width:100%">
+          <label class="switch-row" style="padding:0;text-align:left">
+            <span class="list-row-main">
+              <span class="list-row-title">Track more than one person</span>
+              <span class="list-row-sub">You can enable it later</span>
+            </span>
+            <input type="checkbox" class="switch" data-family>
+          </label>
+        </div>`);
+
+      node.querySelector('[data-next]').addEventListener('click', async () => {
+        const enabled = node.querySelector('[data-family]').checked ? '1' : '0';
+        await Bridge.db('update_setting', { key: 'family_features_enabled', value: enabled });
+        app.settings.family_features_enabled = enabled;
+        next();
+      });
+    },
+  };
+
+  const paint = () => {
+    STEPS[step]();
+    const backButton = document.querySelector('[data-back]');
+    // The button pops history rather than changing the step itself, so the gesture and
+    // the button go through the same path and cannot drift apart.
+    if (backButton) backButton.addEventListener('click', () => history.back());
+  };
+
+  paint();
+}

@@ -1,0 +1,332 @@
+/* Import a consolidated account statement, from any of the four issuers. */
+
+import { Bridge } from '../bridge.js';
+import { icon, h, toast, pickFile, emptyState, errorBlock } from '../ui.js';
+import { formatCurrency, formatDate, daysUntil } from '../formatters.js';
+
+export async function renderCas(container, app) {
+  const lastUpload = app.settings.last_cas_upload_date || '';
+  const age = lastUpload ? Math.abs(daysUntil(lastUpload)) : null;
+  const stale = age !== null && age > 30;
+
+  const [funds, demat, nps] = await Promise.all([
+    Bridge.db('list_folios', { member_id: app.memberFilter }),
+    Bridge.db('list_demat_holdings', { member_id: app.memberFilter }),
+    Bridge.db('list_nps_holdings', { member_id: app.memberFilter }),
+  ]);
+
+  const folios = funds.folios || [];
+  const money = (value) => formatCurrency(value, app.currency, app.locale);
+  const gain = (funds.total_value || 0) - (funds.total_invested || 0);
+  const held = (funds.total_value || 0) + (demat.total_value || 0) + (nps.total_value || 0);
+
+  container.innerHTML = `
+    ${stale ? `
+      <div class="banner banner-warning">
+        ${icon('schedule')}
+        <span class="banner-main">
+          <span class="banner-title">Statement is ${age} days old</span>
+          <span class="banner-body">Import a fresh statement to update prices.</span>
+        </span>
+      </div>` : ''}
+
+    ${held ? `
+      <div class="card-accent">
+        <span class="overline" style="color:inherit;opacity:0.7">Imported holdings</span>
+        <div class="balance-amount" style="font-size:30px">${h(money(held))}</div>
+        ${funds.total_invested ? `
+          <div class="caption" style="color:inherit;opacity:0.85;margin-top:4px">
+            Invested ${h(money(funds.total_invested))} · Gain ${gain >= 0 ? '+' : ''}${h(money(gain))}
+          </div>` : ''}
+      </div>` : ''}
+
+    <div class="card">
+      <div class="card-title">Import statement</div>
+      <p class="caption" style="margin-bottom:16px">
+        Supports CAMS, KFintech, NSDL and CDSL PDFs. Parsed locally on-device.
+      </p>
+
+      <div class="field">
+        <label class="field-label" for="casPassword">PDF password</label>
+        <input class="input" id="casPassword" type="password" autocomplete="off"
+               placeholder="Usually your PAN">
+      </div>
+
+      <button class="btn btn-filled btn-block" data-pick style="margin-top:16px">
+        ${icon('picture_as_pdf')}Choose a PDF
+      </button>
+      <button class="btn btn-outlined btn-block" data-gains style="margin-top:10px">
+        ${icon('receipt_long')}Capital gains report
+      </button>
+      <div class="caption" data-status style="margin-top:12px"></div>
+    </div>
+
+    ${lastUpload ? `<div class="caption" style="text-align:center">Last imported ${h(formatDate(lastUpload))}</div>` : ''}
+
+    ${holdingsSection('Funds', 'trending_up', folios.map((folio) => ({
+    title: folio.scheme_name,
+    subtitle: [folio.amc, folio.units ? `${Number(folio.units).toFixed(3)} units` : '']
+      .filter(Boolean).join(' · '),
+    value: folio.current_value,
+    footnote: folio.nav ? `NAV ${money(folio.nav)}` : '',
+  })), money)}
+
+    ${holdingsSection('Demat', 'show_chart', (demat.holdings || []).map((holding) => ({
+    title: holding.name || holding.isin,
+    subtitle: [holding.symbol || holding.isin, holding.quantity
+      ? `${Number(holding.quantity)} ${holding.kind === 'bond' ? 'units' : 'shares'}` : '']
+      .filter(Boolean).join(' · '),
+    value: holding.current_value,
+    footnote: holding.price ? money(holding.price) : '',
+  })), money)}
+
+    ${holdingsSection('Pension', 'savings', (nps.holdings || []).map((holding) => ({
+    title: holding.scheme,
+    subtitle: [holding.tier ? `Tier ${holding.tier}` : '', holding.asset_class,
+      holding.fund_manager].filter(Boolean).join(' · '),
+    value: holding.current_value,
+    footnote: holding.nav ? `NAV ${money(holding.nav)}` : '',
+  })), money)}
+
+    ${folios.length || (demat.holdings || []).length ? '' : `
+      <div class="card">${emptyState('picture_as_pdf', 'Nothing imported yet',
+    'Import a statement above, or add holdings by hand under Accounts.')}</div>`}`;
+
+  container.querySelector('[data-pick]')
+    .addEventListener('click', () => importStatement(container, app));
+  container.querySelector('[data-gains]')
+    .addEventListener('click', () => gainsReport(container, app));
+}
+
+/** One titled list of holdings, or nothing at all when there are none. */
+function holdingsSection(title, glyph, rows, money) {
+  if (!rows.length) return '';
+  return `
+    <div class="section">
+      <div class="section-header"><span class="title">${h(title)}</span></div>
+      <div class="list">
+        ${rows.map((row) => `
+          <div class="list-row">
+            <span class="avatar avatar-sm" style="background:var(--accent-container);color:var(--on-accent-container)">
+              ${icon(glyph)}
+            </span>
+            <span class="list-row-main">
+              <span class="list-row-title">${h(row.title)}</span>
+              <span class="list-row-sub">${h(row.subtitle)}</span>
+            </span>
+            <span class="list-row-trailing">
+              <span class="list-row-amount">${h(money(row.value))}</span>
+              ${row.footnote ? `<span class="list-row-sub">${h(row.footnote)}</span>` : ''}
+            </span>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+async function importStatement(container, app) {
+  const status = container.querySelector('[data-status]');
+  const password = document.getElementById('casPassword').value;
+
+  const picked = await pickFile('application/pdf,.pdf', { binary: true });
+  if (!picked) return;
+
+  status.textContent = `Reading ${picked.name}, this can take a moment.`;
+
+  const result = await Bridge.call('cas', {
+    action: 'parse_base64',
+    pdf_base64: picked.base64,
+    password,
+    member_id: app.memberFilter === 'all' ? 1 : Number(app.memberFilter),
+  });
+
+  if (result.status !== 'success') {
+    console.error('Statement import failed', result);
+    showFailure(status, result, picked, password);
+    return;
+  }
+
+  const imported = [
+    [result.scheme_count, 'fund'],
+    [result.equity_count, 'share'],
+    [result.bond_count, 'bond'],
+    [result.nps_count, 'pension scheme'],
+  ].filter(([count]) => count)
+    .map(([count, noun]) => `${count} ${noun}${count === 1 ? '' : 's'}`)
+    .join(', ');
+
+  // The holdings were refreshed whether or not this file had been read before. Saying so
+  // only matters in case a different file was meant.
+  const dated = result.as_of ? ` Statement dated ${result.as_of}.` : '';
+  toast(result.already_imported
+    ? `Imported ${imported}.${dated} This file had been read before.`
+    : `Imported ${imported}.${dated}`, 'success');
+
+  const fresh = await Bridge.db('get_settings');
+  if (fresh.status === 'success') app.settings = fresh.settings;
+  await app.refresh();
+
+  if (result.parse_warnings && result.parse_warnings.length) {
+    // The statement carries its own running balance, so a mismatch means a row was
+    // probably missed. Saying so is the whole value of the check.
+    const refreshed = container.querySelector('[data-status]');
+    if (refreshed) refreshed.innerHTML = warningsBlock(result.parse_warnings);
+  }
+}
+
+function warningsBlock(warnings) {
+  return `
+    <div class="card-flat" style="margin-top:12px">
+      <div class="card-title">Worth a second look</div>
+      ${warnings.map((warning) => `
+        <div class="caption" style="padding:3px 0">${h(warning)}</div>`).join('')}
+    </div>`;
+}
+
+/** The failure, with a way to find out what the file actually is. */
+function showFailure(status, result, picked, password) {
+  status.innerHTML = `
+    ${errorBlock(result)}
+    <button class="btn btn-outlined btn-block" data-diagnose style="margin-top:12px">
+      ${icon('science')}Check what this file is
+    </button>
+    <div data-diagnosis></div>`;
+
+  status.querySelector('[data-diagnose]').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = 'Checking';
+
+    const report = await Bridge.call('cas', {
+      action: 'diagnose', pdf_base64: picked.base64, password,
+    });
+
+    button.remove();
+    status.querySelector('[data-diagnosis]').innerHTML = diagnosisBlock(report);
+
+    const copy = status.querySelector('[data-copy]');
+    if (!copy) return;
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(
+          JSON.stringify({ failure: result.code, ...report }, null, 2),
+        );
+        toast('Copied.', 'success');
+      } catch {
+        toast('Could not reach the clipboard.', 'error');
+      }
+    });
+  });
+}
+
+async function gainsReport(container, app) {
+  const status = container.querySelector('[data-status]');
+  const password = document.getElementById('casPassword').value;
+
+  const picked = await pickFile('application/pdf,.pdf', { binary: true });
+  if (!picked) return;
+
+  status.textContent = 'Working out what was sold and what it cost.';
+  const report = await Bridge.call('cas', {
+    action: 'gains', pdf_base64: picked.base64, password,
+  });
+
+  if (report.status !== 'success') {
+    status.innerHTML = errorBlock(report);
+    return;
+  }
+  status.innerHTML = gainsBlock(report, app);
+
+  const download = status.querySelector('[data-112a]');
+  if (!download || !report.schedule_112a_csv) return;
+  download.addEventListener('click', () => {
+    Bridge.shareFile(
+      `schedule-112a-${report.financial_year}.csv`,
+      'text/csv',
+      btoa(unescape(encodeURIComponent(report.schedule_112a_csv))),
+    );
+  });
+}
+
+/** What the gains came to, by year and by fund. */
+function gainsBlock(report, app) {
+  const money = (value) => formatCurrency(value, app.currency, app.locale);
+  if (!report.summary.length) {
+    return `
+      <div class="card-flat" style="margin-top:12px">
+        <div class="card-title">Nothing was sold</div>
+        <div class="caption">This statement records no redemptions, so there is no
+        realised gain to report.</div>
+      </div>`;
+  }
+
+  const rows = report.summary.filter((row) => row.financial_year === report.financial_year);
+  const total = (key) => rows.reduce((sum, row) => sum + row[key], 0);
+
+  return `
+    <div class="card-flat" style="margin-top:12px">
+      <div class="card-title">Realised gains, ${h(report.financial_year)}</div>
+      ${rows.map((row) => `
+        <div class="row-between" style="padding:4px 0">
+          <span class="caption">${h(row.fund)}</span>
+          <span class="caption" style="color:var(--on-surface);font-weight:600">
+            ${h(money(row.ltcg + row.stcg))}
+          </span>
+        </div>`).join('')}
+      <div class="row-between" style="padding:8px 0 0">
+        <span class="caption">Long term, taxable</span>
+        <span class="caption" style="color:var(--on-surface);font-weight:600">${h(money(total('ltcg_taxable')))}</span>
+      </div>
+      <div class="row-between" style="padding:3px 0">
+        <span class="caption">Short term</span>
+        <span class="caption" style="color:var(--on-surface);font-weight:600">${h(money(total('stcg')))}</span>
+      </div>
+      ${report.errors.length ? `
+        <div class="caption" style="margin-top:10px">
+          ${report.errors.length} scheme${report.errors.length === 1 ? '' : 's'} could not be
+          computed, usually because the statement does not go back far enough.
+        </div>` : ''}
+      <button class="btn btn-tonal btn-block" data-112a style="margin-top:14px">
+        ${icon('download')}Save the Schedule 112A file
+      </button>
+      <div class="caption" style="margin-top:10px">
+        Worked out the way the registrars work it out. Check it against their own capital
+        gains statement before you file.
+      </div>
+    </div>`;
+}
+
+/**
+ * What the parser could tell about a file it could not import.
+ *
+ * The sample has digits, permanent account numbers and email addresses stripped before it
+ * gets here, so this can be copied into a bug report without carrying anything personal.
+ */
+function diagnosisBlock(report) {
+  if (report.status !== 'success') return errorBlock(report, { compact: true });
+
+  const rows = [
+    ['Looks like', report.issuer && report.issuer !== 'UNKNOWN' ? report.issuer : 'not recognised'],
+    ['Statement kind', report.cas_type || ''],
+    ['Pages', report.pages ? String(report.pages) : ''],
+    ['Readable text', `${report.text_chars || 0} characters`],
+    ['Size', `${report.size_kb} KB`],
+    ['Parser version', report.parser],
+  ].filter(([, value]) => value);
+
+  return `
+    <div class="card-flat" style="margin-top:12px">
+      <div class="card-title">What this file looks like</div>
+      ${rows.map(([label, value]) => `
+        <div class="row-between" style="padding:3px 0">
+          <span class="caption">${h(label)}</span>
+          <span class="caption" style="color:var(--on-surface);font-weight:600">${h(value)}</span>
+        </div>`).join('')}
+
+      ${report.sample ? `
+        <div class="error-detail" style="margin-top:10px">${h(report.sample)}</div>` : ''}
+
+      <button class="btn btn-tonal btn-block" data-copy style="margin-top:14px">
+        ${icon('content_copy')}Copy this report
+      </button>
+    </div>`;
+}

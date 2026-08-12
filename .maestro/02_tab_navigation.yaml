@@ -1,0 +1,20 @@
+appId: org.chikatistudio.vittavriksha
+---
+# Flow 02: Navigation Tabs (Home, Ledger, Budgets, Wealth, More)
+- launchApp:
+    clearState: false
+
+- tapOn: "Ledger"
+- assertVisible: "Transactions"
+
+- tapOn: "Budgets"
+- assertVisible: "Budgets"
+
+- tapOn: "Wealth"
+- assertVisible: "Wealth"
+
+- tapOn: "More"
+- assertVisible: "More"
+
+- tapOn: "Home"
+- assertVisible: "Home"

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The only path anything outside the app may reach, and only through a one-time grant on
+  a named file. An encrypted export is written here and handed to the share sheet; the
+  database itself is never in a shareable location.
+-->
+<paths>
+    <cache-path
+        name="shared"
+        path="shared/" />
+</paths>

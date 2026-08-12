@@ -1,0 +1,41 @@
+appId: org.chikatistudio.vittavriksha
+---
+# Flow 05: More Hub Sub-pages (Household, SMS Rules, Backup, Settings, Security, Guide, About)
+- launchApp:
+    clearState: false
+
+- tapOn: "More"
+
+# Household / Family
+- tapOn: "Household"
+- assertVisible: "Household"
+- tapOn: "Back"
+
+# SMS Rules
+- tapOn: "SMS rules"
+- assertVisible: "SMS rules"
+- tapOn: "Back"
+
+# Backup
+- tapOn: "Backup"
+- assertVisible: "Backup"
+- tapOn: "Back"
+
+# Settings
+- tapOn: "Settings"
+- assertVisible: "Settings"
+- tapOn: "Back"
+
+# Security
+- tapOn: "Security"
+- assertVisible: "Security"
+- tapOn: "Back"
+
+# Guide & About
+- tapOn: "Guide"
+- assertVisible: "Guide"
+- tapOn: "Back"
+
+- tapOn: "About"
+- assertVisible: "About"
+- tapOn: "Back"
