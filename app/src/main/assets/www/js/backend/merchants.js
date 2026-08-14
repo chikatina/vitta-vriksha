@@ -245,13 +245,23 @@ const VENDORS = {
     'hdfc securities', 'kotak securities', 'motilal oswal', 'sharekhan', '5paisa',
     'fyers', 'paytm money', 'kuvera', 'indmoney', 'etmoney', 'et money', 'scripbox',
     'smallcase', 'wealthdesk', 'vested', 'kfintech', 'camsonline', 'mfcentral',
+    'dhan', 'geojit', 'shoonya', 'finvasia', 'samco', 'alice blue', 'navi',
     'binance', 'coindcx', 'wazirx', 'coinswitch', 'zebpay',
     'mutual fund', 'mutual funds', 'funds management', 'asset management', 'nse', 'bse',
     'cdsl', 'nsdl', 'demat', 'depository', 'broking', 'brokerage', 'securities',
     'sip', 'systematic investment', 'lumpsum', 'nps', 'ppf', 'epf', 'epfo',
     'provident fund', 'sukanya', 'gold bond', 'sovereign gold', 'gold etf', 'etf',
     'bharat bond', 'irfc', 'bonds', 'debenture', 'ipo', 'asba', 'shares', 'elss', 'folio',
-    'amc', 'clearing corp', 'fixed deposit', 'term deposit', 'recurring deposit',
+    'amc', 'clearing corp', 'clearing corporation', 'iccl', 'indian clearing corporation',
+    'indian clearing corp', 'bse clearing', 'nse clearing', 'ncl', 'ccil', 'clearing corp of india',
+    'tata mutual fund', 'sbi mutual fund', 'hdfc mutual fund', 'nippon', 'uti mutual fund',
+    'axis mutual fund', 'mirae asset', 'parag parikh', 'ppfas', 'quant mutual fund',
+    'bandhan mutual fund', 'dsp mutual fund', 'franklin templeton', 'kotak mutual fund',
+    'icici prudential mutual fund', 'edelweiss',
+    'sip debit', 'sip instalment', 'sip installment', 'sip purchase', 'nach debit', 'ach debit',
+    'e-nach debit', 'nach-sip', 'ach-sip', 'mf sip', 'mutual fund sip', 'sip deduction',
+    'trading account', 'trading debit', 'demat debit', 'demat charges', 'stock broker',
+    'fixed deposit', 'term deposit', 'recurring deposit',
     'investment', 'investments', 'portfolio', 'crypto',
   ],
   'Insurance & Tax': [
@@ -534,8 +544,11 @@ const COMPLETED_MOVEMENT = new RegExp(
 // "Rs.500 was debited" from "Rs.500 will be debited".
 const HEDGED = new RegExp(
   '\\bwill be\\b|\\bis due\\b|\\bdue on\\b|\\bdue date\\b|\\brequest(?:ed|ing)?\\b'
-  + '|reminder|scheduled|will expire|\\bpre-?debit\\b|intimation|mandate|registered|created|set ?up|setup'
-  + '|presented|upcoming|payable by|pay before|kindly pay|please pay|to avoid',
+  + '|reminder|scheduled|will expire|\\bpre-?debit\\b|intimation'
+  + '|\\bmandate (?:pre-?debit|notification|intimation|alert|advice|reminder|registration|creation|setup|request)\\b'
+  + '|\\b(?:registered|created|set ?up|setup|activated) (?:ach|nach|e-?mandate|mandate)\\b'
+  + '|\\b(?:scheduled|presented) for (?:debit|deduction|clearing)\\b'
+  + '|upcoming|payable by|pay before|kindly pay|please pay|to avoid',
   'i',
 );
 
@@ -549,12 +562,13 @@ export function notATransaction(text) {
   for (const [pattern, reason] of SELF_TRANSFER) {
     if (pattern.test(text)) return reason;
   }
+  // Something that plainly already happened is a transaction, whatever else it mentions.
+  if (COMPLETED_MOVEMENT.test(text) && !HEDGED.test(text)) return '';
+
   // Setup notifications and reminders should never be recorded as completed transactions
   if (MANDATE_SETUP.test(text)) return 'mandate-setup';
   if (REMINDER.test(text)) return 'reminder';
 
-  // Something that plainly already happened is a transaction, whatever else it mentions.
-  if (COMPLETED_MOVEMENT.test(text) && !HEDGED.test(text)) return '';
   for (const [pattern, reason] of NOT_A_TRANSACTION) {
     if (pattern.test(text)) return reason;
   }
@@ -574,11 +588,12 @@ const MERCHANT_PATTERNS = [
   /\b(?:vpa|to vpa)\s+([^\s.,;]+)/i,
   /\bto\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s+on\s+\d/i,
   /\b(?:paid|transferred|sent)\s+to\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)(?:\s+(?:on|dt\.?|avl|bal|using|via|ref|txn|for|through)\b|[.,;]|$)/i,
-  /\btowards\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*(?:umrn|ref|[.,;]|$)/i,
-  /\binfo[:\s]*(?:ach\s*[dc]-|nach\s*-|upi\/)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*[.;-]/i,
+  /\btowards\s+(?:ach\s*[dc]\s*-?\s*|nach\s*-?\s*|cms\s*-?\s*|ecs\s*-?\s*|mandate\s*-?\s*|si\s*-?\s*)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*(?:umrn|ref|[.,;]|$)/i,
+  /\binfo[:\s]*(?:ach\s*[dc]\s*-?\s*|nach\s*-?\s*|cms\s*-?\s*|ecs\s*-?\s*|mandate\s*-?\s*|upi\/)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*[.;-]/i,
   /\bat\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*[.;]/i,
   /\b(?:biller|merchant|beneficiary|party)[:\s]+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*[.;\n\r]/i,
   /\bfrom\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s+(?:on|dt\.?|avl|bal|using|via)\b/i,
+  /\bfor\s+(?:ach\s*[dc]\s*-?\s*|nach\s*-?\s*|cms\s*-?\s*|ecs\s*-?\s*|mandate\s*-?\s*)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)(?:\s+(?:on|dt\.?|avl|bal|using|via|ref|txn)\b|[.,;]|$)/i,
 ];
 
 /*
@@ -594,8 +609,8 @@ const NOT_A_MERCHANT = new RegExp(
   '^(?:your|the|my)\\b'
   + '|^(?:your |the |a |my )?(?:a/c|ac|acct|account|card|credit card|debit card|bank|wallet'
   + '|upi|vpa|ref|txn|payment|amount|balance|limit'
-  + '|hdfc|icici|sbi|axis|kotak|au bank|au credit|dcb|idfc|indusind|yes bank|pnb|canara'
-  + '|federal|rbl|bob|boi|union|iob|uco)\\b',
+  + '|ach|nach|ecs|cms|mandate|standing instruction|si|neft|rtgs|imps|enach|e-nach)\\b'
+  + '|^(?:hdfc|icici|sbi|axis|kotak|au bank|au credit|dcb|idfc|indusind|yes bank|pnb|canara|federal|rbl|bob|boi|union|iob|uco)(?:\\s+bank)?(?:\\s+(?:a/c|ac|acct|account|card|credit card|debit card))?\\s*$',
   'i',
 );
 
@@ -605,7 +620,8 @@ export function extractMerchant(body) {
   for (const pattern of MERCHANT_PATTERNS) {
     const match = pattern.exec(text);
     if (!match) continue;
-    const found = match[1].trim().replace(/\s+/g, ' ').replace(/[.,;\-\s]+$/, '');
+    let found = match[1].trim().replace(/\s+/g, ' ').replace(/[.,;\-\s]+$/, '');
+    found = found.replace(/\s*\/.*$/, '').trim();
     // Keep looking: a later pattern may still find the real counterparty.
     if (!found || NOT_A_MERCHANT.test(found) || !/[a-z]/i.test(found)) continue;
     return found;

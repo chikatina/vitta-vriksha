@@ -235,6 +235,9 @@ a { color: var(--accent); }
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.15;
+  white-space: nowrap;
+  word-break: keep-all;
+  font-variant-numeric: tabular-nums;
 }
 
 .headline {
@@ -255,23 +258,30 @@ a { color: var(--accent); }
   color: var(--on-surface-variant);
 }
 
-.body { font-size: 14px; }
+.body {
+  font-size: 14px;
+  line-height: 1.45;
+}
 
 .caption {
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--on-surface-variant);
-  line-height: 1.4;
+  line-height: 1.35;
 }
 
 .overline {
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-weight: 650;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--on-surface-faint);
 }
 
-.numeric { font-variant-numeric: tabular-nums; }
+.numeric {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  word-break: keep-all;
+}
 .income { color: var(--income); }
 .expense { color: var(--expense); }
 .invested, .investment { color: var(--investment); }
@@ -328,6 +338,13 @@ a { color: var(--accent); }
   flex-direction: column;
   gap: var(--gap-4);
 }
+
+/* Every direct child of .view must not shrink below its content height.
+ * .view is a constrained flex container (flex:1 in a fixed-height body) *and*
+ * a scroll container (overflow-y:auto). Default flex-shrink:1 causes children
+ * to squash each other — chips collapse, cards disappear. With shrink:0 each
+ * child takes its natural size and the container scrolls the overflow. */
+.view > * { flex-shrink: 0; }
 
 .sticky-header {
   position: sticky;
@@ -442,11 +459,13 @@ a { color: var(--accent); }
 }
 
 .balance-amount {
-  font-size: 36px;
+  font-size: 32px;
   font-weight: 700;
   letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
-  line-height: 1.1;
+  line-height: 1.15;
+  white-space: nowrap;
+  word-break: keep-all;
 }
 
 .balance-split {
@@ -1029,10 +1048,7 @@ a { color: var(--accent); }
   gap: var(--gap-2);
   overflow-x: auto;
   scrollbar-width: none;
-  padding: 4px var(--gap-4);
-  margin: 0 calc(var(--gap-4) * -1);
-  box-sizing: border-box;
-  width: calc(100% + (var(--gap-4) * 2));
+  padding: 4px 2px;
 }
 
 .chip-scroller::-webkit-scrollbar { display: none; }
@@ -1794,6 +1810,76 @@ a { color: var(--accent); }
 
 .ledger-month-label-btn:hover {
   background: var(--surface-container-highest);
+}
+
+.period-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 4px 6px;
+  background: var(--surface-container-high);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--outline);
+  box-sizing: border-box;
+  margin-bottom: var(--gap-2);
+}
+
+.period-nav-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-width: 0;
+  padding: 2px 8px;
+}
+
+.period-nav-title {
+  font-weight: 700;
+  font-size: 14.5px;
+  color: var(--on-surface);
+  line-height: 1.2;
+}
+
+.period-nav .icon-button,
+.period-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--on-surface-variant);
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+
+.period-nav .icon-button:hover:not(:disabled),
+.period-nav-btn:hover:not(:disabled) {
+  background: var(--surface-container-highest);
+  color: var(--on-surface);
+}
+
+.period-nav .icon-button:active:not(:disabled),
+.period-nav-btn:active:not(:disabled) {
+  background: var(--outline-strong);
+  color: var(--on-surface);
+}
+
+.period-nav .icon-button:disabled,
+.period-nav-btn:disabled {
+  opacity: 0.25;
+  cursor: default;
+  pointer-events: none;
+}
+
+.ledger-month-label-btn:hover {
   border-color: var(--outline-strong);
 }
 
@@ -1842,3 +1928,202 @@ a { color: var(--accent); }
   color: var(--on-surface);
   box-shadow: var(--shadow-1);
 }
+
+/* -------------------------------------------------------- investments view */
+
+.holdings-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--gap-2);
+}
+
+.holdings-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.holdings-controls .field {
+  flex: 0 0 130px;
+}
+
+/* ── holding card ── */
+
+.holding-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  background: var(--surface-container);
+  border: 1px solid var(--outline);
+  border-radius: var(--radius);
+  padding: var(--gap-4);
+  margin-bottom: var(--gap-2);
+  text-align: left;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: background 0.15s var(--ease), box-shadow 0.15s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.holding-card:hover  { background: var(--surface-container-high); }
+.holding-card:active { background: var(--surface-container-highest); }
+
+.holding-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--gap-2);
+}
+
+.holding-name {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--on-surface);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.holding-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--on-surface);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.holding-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-2);
+}
+
+.holding-sub {
+  font-size: 12px;
+  color: var(--on-surface-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.holding-pnl {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── P&L colours (used in cards and in the totals header) ── */
+
+.holdings-gain    { color: var(--income);  }
+.holdings-loss    { color: var(--expense); }
+.holdings-unknown { color: var(--on-surface-variant); }
+
+/* ------------------------------------------------------------ heat calendar */
+.heat-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  width: 100%;
+  margin-top: var(--gap-2);
+  box-sizing: border-box;
+}
+
+.heat-head {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--on-surface-variant);
+  padding: 4px 0;
+  text-transform: uppercase;
+}
+
+.heat-blank {
+  aspect-ratio: 1;
+}
+
+.heat-cell {
+  aspect-ratio: 1;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--outline);
+  background: color-mix(in srgb, var(--accent) calc(var(--heat, 0) * 100%), var(--surface-container-high));
+  color: var(--on-surface);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 550;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.12s var(--ease), border-color 0.12s var(--ease), box-shadow 0.12s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.heat-cell.is-quiet {
+  background: var(--surface-container-low);
+  color: var(--on-surface-variant);
+  opacity: 0.6;
+}
+
+.heat-cell:hover:not(:disabled) {
+  transform: scale(1.08);
+  border-color: var(--accent);
+  z-index: 2;
+  box-shadow: var(--shadow-sm);
+}
+
+.heat-cell.is-selected {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  font-weight: 700;
+}
+
+.heat-day {
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* ── Interactive Wealth Widget Tabs ── */
+.wealth-tab-bar {
+  display: flex;
+  align-items: center;
+  background: var(--surface-container-highest);
+  border-radius: var(--radius-full);
+  padding: 2px;
+  margin-top: var(--gap-2);
+  gap: 2px;
+}
+
+.wealth-tab-btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--on-surface-variant);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+
+.wealth-tab-btn[aria-selected="true"] {
+  background: var(--surface);
+  color: var(--on-surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+
+/* ── Prevent action buttons from shrinking in scrolling sheets ── */
+.sheet-body .btn-block,
+.sheet-body [data-edit],
+.sheet-body [data-save],
+.sheet-body [data-calc] {
+  flex-shrink: 0 !important;
+  min-height: 44px;
+}
+

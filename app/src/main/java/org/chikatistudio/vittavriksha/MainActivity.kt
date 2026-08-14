@@ -1,12 +1,17 @@
 package org.chikatistudio.vittavriksha
 
 import android.annotation.SuppressLint
-import android.os.Build
-import android.os.Bundle
 import android.app.Activity
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import android.webkit.ConsoleMessage
@@ -30,6 +35,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var webAppInterface: WebAppInterface
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+
+    private val screenOffReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_SCREEN_OFF) {
+                if (::webView.isInitialized) {
+                    webView.evaluateJavascript("window.onDeviceLocked && window.onDeviceLocked();", null)
+                }
+            }
+        }
+    }
 
     /*
      * Set when the app itself sends the user to another screen: the file picker, the share
@@ -75,6 +90,9 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             setRecentsScreenshotEnabled(false)
         }
+
+        val filter = IntentFilter(Intent.ACTION_SCREEN_OFF)
+        registerReceiver(screenOffReceiver, filter)
 
         webView = WebView(this)
         setContentView(webView)
@@ -196,12 +214,21 @@ class MainActivity : AppCompatActivity() {
         // Loads via virtual domain
         webView.loadUrl("https://appassets.androidplatform.net/assets/www/index.html")
 
-        // Handles back press. The web layer pops its own sub-page first and only lets the
-        // press through once there is nothing left to go back to.
+        // Handles back press. The web layer handles closing sheets, dialogs, sub-pages,
+        // and tab history before letting the back press exit the app.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (webView.canGoBack()) {
-                    webView.goBack()
+                if (::webView.isInitialized) {
+                    webView.evaluateJavascript(
+                        "(window.onSystemBackPressed && window.onSystemBackPressed()) || false;"
+                    ) { result ->
+                        val handled = result?.trim()?.equals("true", ignoreCase = true) == true
+                        if (!handled) {
+                            isEnabled = false
+                            onBackPressedDispatcher.onBackPressed()
+                            isEnabled = true
+                        }
+                    }
                 } else {
                     isEnabled = false
                     onBackPressedDispatcher.onBackPressed()
@@ -308,7 +335,18 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
         if (leftForAnotherApp) return
         if (::webView.isInitialized) {
-            webView.evaluateJavascript("window.onAppBackgrounded && window.onAppBackgrounded();", null)
+            val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+            val isScreenOff = powerManager?.isInteractive == false || keyguardManager?.isKeyguardLocked == true
+            val isPhoneLocked = if (isScreenOff) "true" else "false"
+            webView.evaluateJavascript("window.onAppBackgrounded && window.onAppBackgrounded($isPhoneLocked);", null)
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            unregisterReceiver(screenOffReceiver)
+        } catch (_: Exception) {}
     }
 }

@@ -34,10 +34,11 @@ function daysAgo(days) {
 
 const thisMonth = () => monthsAgo(0).slice(0, 7);
 
-function spend(t, { date, amount, category = 'Groceries', merchant = 'A supermarket' }) {
+function spend(t, { date, amount, category = 'Groceries', merchant }) {
+  const shop = merchant !== undefined ? merchant : (category === 'Groceries' ? 'A supermarket' : `${category} Store`);
   return ok(t, 'save_transaction', {
     transaction: {
-      date, amount, category, type: 'Expense', merchant,
+      date, amount, category, type: 'Expense', merchant: shop,
     },
   });
 }
@@ -779,6 +780,33 @@ describe('exclude_investments_from_expenses toggle', () => {
     const txsOff = await ok(t, 'get_transactions', { flow: 'spend' });
     assert.equal(txsOff.transactions.length, 2, 'spend transactions should include investment outflows');
     assert.equal(txsOff.totals.expense, 7000);
+  });
+
+  it('detects category spending spikes and warning trends', async (t) => {
+    // Past 3 months: Dining ~ 2,000/mo, Groceries ~ 5,000/mo
+    for (let offset = 1; offset <= 3; offset += 1) {
+      await spend(t, { date: monthsAgo(offset), amount: 2000, category: 'Dining' });
+      await spend(t, { date: monthsAgo(offset), amount: 5000, category: 'Groceries' });
+    }
+
+    // Current month: Dining spikes to 6,000 (3x average!), Groceries normal at 5,200
+    await spend(t, { date: monthsAgo(0), amount: 6000, category: 'Dining' });
+    await spend(t, { date: monthsAgo(0), amount: 5200, category: 'Groceries' });
+
+    const res = await ok(t, 'get_spending_anomalies', {});
+    assert.equal(res.status, 'success');
+    assert.ok(res.anomalies.length > 0);
+
+    const diningAnomaly = res.anomalies.find((a) => a.category === 'Dining');
+    assert.ok(diningAnomaly, 'Dining should be flagged as an anomaly');
+    assert.equal(diningAnomaly.current, 6000);
+    assert.equal(diningAnomaly.average_3m, 2000);
+    assert.equal(diningAnomaly.ratio, 3.0);
+    assert.equal(diningAnomaly.excess_amount, 4000);
+    assert.equal(diningAnomaly.severity, 'spike');
+
+    const groceriesAnomaly = res.anomalies.find((a) => a.category === 'Groceries');
+    assert.ok(!groceriesAnomaly, 'Groceries should NOT be flagged as an anomaly (within normal range)');
   });
 });
 

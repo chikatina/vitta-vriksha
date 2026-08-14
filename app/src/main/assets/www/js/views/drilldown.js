@@ -511,7 +511,7 @@ export async function openCategoryTrend(app, category, { onEdit } = {}) {
   })), { selectable: true })}` : ''}
 
     ${onEdit ? `
-      <button class="btn btn-outlined btn-block" data-edit style="margin-top:16px">
+      <button class="btn btn-outlined btn-block" data-edit style="margin-top:16px;flex-shrink:0;min-height:44px">
         ${icon('edit')}Edit this category
       </button>` : ''}`;
 
@@ -555,3 +555,130 @@ export const GRANULARITY_OPTIONS = [
   { value: 'week', label: 'Weekly' },
   { value: 'month', label: 'Monthly' },
 ];
+
+/**
+ * Safe-to-Spend & Cashflow Runway cockpit sheet.
+ */
+export async function openCashflowSheet(app) {
+  const member = app.memberFilter;
+  const [safe, runway, checklist] = await Promise.all([
+    Bridge.db('get_safe_to_spend', { member_id: member }),
+    Bridge.db('get_cashflow_runway', { member_id: member }),
+    Bridge.db('get_salary_checklist', { member_id: member }),
+  ]);
+
+  if (safe.status !== 'success') {
+    await sheet('Cashflow Cockpit', errorBlock(safe));
+    return;
+  }
+
+  const isDeficit = safe.health_status === 'deficit';
+  const isTight = safe.health_status === 'tight';
+  const statusColor = isDeficit ? 'var(--expense)' : (isTight ? 'var(--warning, #F59E0B)' : 'var(--income)');
+
+  const body = `
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <!-- Safe to spend card -->
+      <div class="card-flat" style="background:var(--surface-container-high);border-radius:var(--radius);padding:14px;border-left:4px solid ${statusColor}">
+        <div class="row-between">
+          <span class="label" style="font-weight:700">Safe-to-Spend Allowance</span>
+          <span class="badge" style="background:${isDeficit ? 'var(--expense-container)' : 'var(--surface-container-highest)'};color:${statusColor}">
+            ${isDeficit ? 'Deficit Warning' : (isTight ? 'Tight Budget' : 'Safe to Spend')}
+          </span>
+        </div>
+        <div class="display" style="font-size:28px;color:${statusColor};margin:6px 0">
+          ${h(money(app, safe.safe_to_spend_daily))}<span style="font-size:14px;font-weight:500;color:var(--on-surface-variant)"> / day</span>
+        </div>
+        <div class="caption">
+          ${h(money(app, safe.safe_to_spend_weekly))} / week · <strong>${h(money(app, safe.safe_to_spend_total))}</strong> total safe for the next ${safe.days_remaining} days.
+        </div>
+      </div>
+
+      <!-- Commitments breakdown -->
+      <div class="card">
+        <div class="card-title">Locked Commitments Breakdown</div>
+        <div class="list" style="margin-top:8px">
+          <div class="list-row">
+            <span class="avatar avatar-sm" style="background:var(--surface-container-highest)">${icon('account_balance')}</span>
+            <span class="list-row-main">
+              <span class="list-row-title">Loan EMIs (${safe.counts.loans})</span>
+              <span class="list-row-sub">Active monthly debt instalments</span>
+            </span>
+            <span class="list-row-amount expense">-${h(money(app, safe.breakdown.loan_emis))}</span>
+          </div>
+          <div class="list-row">
+            <span class="avatar avatar-sm" style="background:var(--surface-container-highest)">${icon('trending_up')}</span>
+            <span class="list-row-main">
+              <span class="list-row-title">SIP Investments (${safe.counts.sips})</span>
+              <span class="list-row-sub">Monthly mutual fund SIPs</span>
+            </span>
+            <span class="list-row-amount expense">-${h(money(app, safe.breakdown.sips))}</span>
+          </div>
+          <div class="list-row">
+            <span class="avatar avatar-sm" style="background:var(--surface-container-highest)">${icon('credit_card')}</span>
+            <span class="list-row-main">
+              <span class="list-row-title">Credit Card Dues (${safe.counts.cards})</span>
+              <span class="list-row-sub">Outstanding statement balances</span>
+            </span>
+            <span class="list-row-amount expense">-${h(money(app, safe.breakdown.credit_cards))}</span>
+          </div>
+          <div class="list-row">
+            <span class="avatar avatar-sm" style="background:var(--surface-container-highest)">${icon('receipt')}</span>
+            <span class="list-row-main">
+              <span class="list-row-title">Fixed Bills & Rent (${safe.counts.recurring})</span>
+              <span class="list-row-sub">Recurring utilities & subscriptions</span>
+            </span>
+            <span class="list-row-amount expense">-${h(money(app, safe.breakdown.recurring_bills))}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 30-Day Cashflow Runway -->
+      <div class="card">
+        <div class="row-between">
+          <span class="card-title" style="margin-bottom:0">30-Day Runway Trajectory</span>
+          <span class="badge ${runway.is_runway_safe ? 'badge-income' : 'badge-expense'}">
+            ${runway.is_runway_safe ? 'Runway Safe' : 'Low Balance Risk'}
+          </span>
+        </div>
+        <p class="caption" style="margin:6px 0 10px">
+          Estimated burn: ${h(money(app, runway.estimated_daily_burn))}/day · Min projected balance: <strong>${h(money(app, runway.min_projected_balance))}</strong>
+        </p>
+        <div class="list" style="max-height:220px;overflow-y:auto;background:var(--surface-container-low);border-radius:var(--radius-sm);padding:4px 8px">
+          ${runway.timeline.slice(0, 15).map((t) => `
+            <div class="list-row" style="padding:6px 4px;font-size:12.5px">
+              <span style="font-weight:600;min-width:60px">${t.date.slice(5)}</span>
+              <span class="list-row-main">
+                <span class="list-row-sub">
+                  ${t.debits.map((d) => d.title).concat(t.credits.map((c) => c.title)).join(', ') || 'Normal daily spend'}
+                </span>
+              </span>
+              <span style="font-weight:700;color:${t.is_low ? 'var(--expense)' : 'var(--on-surface)'}">
+                ${h(money(app, t.projected_balance))}
+              </span>
+            </div>`).join('')}
+        </div>
+      </div>
+
+      <!-- Salary day checklist -->
+      <div class="card">
+        <div class="card-title">Salary Day Checklist</div>
+        <p class="caption" style="margin-bottom:10px">Follow this order when your salary hits your account.</p>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${checklist.steps.map((step, idx) => `
+            <div class="list-row" style="background:var(--surface-container-high);border-radius:var(--radius-sm);padding:8px 10px">
+              <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--accent)">
+                ${icon(step.icon)}
+              </span>
+              <span class="list-row-main">
+                <span class="list-row-title" style="font-weight:600">${idx + 1}. ${h(step.title)}</span>
+                <span class="list-row-sub">${h(step.desc)}</span>
+              </span>
+            </div>`).join('')}
+        </div>
+      </div>
+    </div>`;
+
+  await sheet('Cashflow Cockpit', body, { autofocus: false });
+}
+

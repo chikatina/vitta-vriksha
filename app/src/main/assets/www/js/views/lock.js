@@ -22,10 +22,11 @@ function overlay(html) {
  * answers yes or no, and what this screen needs is the key the records are encrypted with.
  * See `renderLock`.
  */
-function keypad() {
-  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'del'];
+function keypad(hasBiometrics = false) {
+  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', hasBiometrics ? 'bio' : '', '0', 'del'];
   return `<div class="keypad">${keys.map((key) => {
     if (!key) return '<span class="key key-blank"></span>';
+    if (key === 'bio') return `<button class="key key-bio" data-key="bio" aria-label="Fingerprint unlock">${icon('fingerprint')}</button>`;
     if (key === 'del') return `<button class="key" data-key="del" aria-label="Delete">${icon('backspace')}</button>`;
     return `<button class="key" data-key="${key}">${key}</button>`;
   }).join('')}</div>`;
@@ -40,7 +41,7 @@ function dots(filled) {
  * Drives a keypad. onComplete receives the entered PIN and returns true to accept it,
  * false to shake and clear, or a string to shake with that message.
  */
-function wireKeypad(node, { onComplete }) {
+function wireKeypad(node, { onComplete, onBioTap }) {
   let buffer = '';
   const dotHost = node.querySelector('.pin-dots');
   const errorHost = node.querySelector('[data-error]');
@@ -60,6 +61,11 @@ function wireKeypad(node, { onComplete }) {
   node.querySelectorAll('[data-key]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const key = btn.dataset.key;
+
+      if (key === 'bio') {
+        if (onBioTap) onBioTap();
+        return;
+      }
 
       if (key === 'del') {
         buffer = buffer.slice(0, -1);
@@ -85,51 +91,70 @@ function wireKeypad(node, { onComplete }) {
 
 /* ------------------------------------------------------------------- lock */
 
-/*
- * The lock screen, which is now the only way into the data.
- *
- * It asks the vault rather than comparing a hash, because there is no hash to compare
- * against while the app is locked: the settings table it used to live in is ciphertext
- * until the PIN opens it. A wrong PIN is rejected by the key wrapping's own tag, which
- * has the pleasant property of leaking nothing at all about how wrong it was.
- *
- * No fingerprint. A fingerprint is a yes or a no, and what is needed here is a key. Making
- * it work means keeping a second copy of the key in the Android Keystore behind a
- * biometric, which is a real design and not a checkbox, and until it exists a button that
- * seems to unlock and then leaves every screen empty is worse than no button.
- */
 export function renderLock(app) {
+  const bioAvailable = Bridge.isBiometricAvailable();
+  const bioEnabled = bioAvailable && (localStorage.getItem('biometric_enabled') === '1' || Boolean(localStorage.getItem('bio_vault_pin')));
+
   const node = overlay(`
     <div class="lock-body">
       <div class="lock-mark">${brandMark()}</div>
       <div class="lock-title">
         <div class="headline">Vitta Vriksha</div>
-        <div class="caption">Enter your PIN to continue</div>
+        <div class="caption">${bioEnabled ? 'Confirm fingerprint or enter PIN' : 'Enter your PIN to continue'}</div>
       </div>
       <div class="pin-dots">${dots(0)}</div>
       <div class="caption lock-error" data-error></div>
     </div>
-    ${keypad()}
+    ${keypad(bioEnabled)}
     <div class="lock-footer">
       <button class="btn btn-text" data-forgot>Forgot your PIN?</button>
     </div>`);
+
+  const triggerBiometrics = () => {
+    if (!bioEnabled) return;
+    window.onBiometricAuthResult = async (success, message) => {
+      if (success) {
+        const storedPin = localStorage.getItem('bio_vault_pin');
+        if (storedPin) {
+          const res = await Bridge.db('unlock_vault', { pin: storedPin });
+          if (res.status === 'success') {
+            await app.resume();
+            return;
+          }
+        }
+      }
+      if (message && typeof message === 'string') {
+        const errorHost = node.querySelector('[data-error]');
+        if (errorHost) errorHost.textContent = message;
+      }
+    };
+    Bridge.triggerBiometricAuth();
+  };
 
   wireKeypad(node, {
     async onComplete(pin) {
       const res = await Bridge.db('unlock_vault', { pin });
       if (res.status === 'success') {
+        if (localStorage.getItem('biometric_enabled') === '1') {
+          localStorage.setItem('bio_vault_pin', pin);
+        }
         await app.resume();
         return true;
       }
 
-      // The reply carries how many tries have been used and how long the wait is, so the
-      // screen can say what is happening rather than repeating "wrong PIN" nine times and
-      // then appearing to break.
       if (res.locked_for_ms) return `${res.message} ${res.hint || ''}`.trim();
       const left = res.failed_attempts ? ` (${res.failed_attempts} wrong so far)` : '';
       return `That is not your PIN.${left}`;
     },
+    onBioTap() {
+      triggerBiometrics();
+    },
   });
+
+  // Auto-prompt fingerprint on mount like Zerodha Kite
+  if (bioEnabled) {
+    setTimeout(() => triggerBiometrics(), 150);
+  }
 
   node.querySelector('[data-forgot]').addEventListener('click', () => forgetPin(app));
   return node;

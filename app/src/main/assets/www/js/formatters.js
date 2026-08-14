@@ -42,8 +42,8 @@ export function formatCurrency(amount, currency = 'INR', locale = 'en-IN') {
   if (currency === 'INR') {
     const abs = Math.abs(value);
     const sign = value < 0 ? '-' : '';
-    if (abs >= 1e7) return `${sign}₹${trimZeros(abs / 1e7)} Cr`;
-    if (abs >= 1e5) return `${sign}₹${trimZeros(abs / 1e5)} L`;
+    if (abs >= 1e7) return `${sign}₹${trimZeros(abs / 1e7)}\u00A0Cr`;
+    if (abs >= 1e5) return `${sign}₹${trimZeros(abs / 1e5)}\u00A0L`;
   }
 
   return new Intl.NumberFormat(locale, {

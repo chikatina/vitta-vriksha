@@ -180,18 +180,47 @@ export const RECORD_CONFIG = {
       { key: 'start_date', label: 'Started', type: 'date', default: todayISO },
       { key: 'notes', label: 'Note', type: 'textarea' },
     ],
-    row: (r) => ({
-      glyph: isLent(r) ? 'volunteer_activism' : 'account_balance',
-      title: r.name,
-      sub: [
-        isLent(r) ? 'Lent' : 'Borrowed',
-        r.loan_type,
-        `${r.interest_rate}%`,
-        `${Math.round(r.monthly_emi)} a month`,
-      ].filter(Boolean).join(' · '),
-      amount: r.current_outstanding,
-      positive: isLent(r),
-    }),
+    row: (r) => {
+      const bal = Number(r.current_outstanding) || 0;
+      const emi = Number(r.monthly_emi) || 0;
+      const rate = Number(r.interest_rate) || 0;
+      let emiLeftStr = '';
+      if (bal > 0 && emi > 0) {
+        let emisLeft = 0;
+        if (rate <= 0) {
+          emisLeft = Math.ceil(bal / emi);
+        } else {
+          const monthlyRate = rate / 12 / 100;
+          const monthlyInt = bal * monthlyRate;
+          if (emi > monthlyInt) {
+            const n = -Math.log(1 - (monthlyInt / emi)) / Math.log(1 + monthlyRate);
+            emisLeft = Math.max(1, Math.ceil(n));
+          } else {
+            emisLeft = Number(r.tenure_months) || 0;
+          }
+        }
+        if (emisLeft > 0) {
+          const yrs = Math.floor(emisLeft / 12);
+          const mos = emisLeft % 12;
+          const timeStr = yrs > 0 ? (mos > 0 ? `${yrs}y ${mos}m` : `${yrs} yrs`) : `${mos} mos`;
+          emiLeftStr = `${emisLeft} EMIs left (${timeStr})`;
+        }
+      }
+
+      return {
+        glyph: isLent(r) ? 'volunteer_activism' : 'account_balance',
+        title: r.name,
+        sub: [
+          isLent(r) ? 'Lent' : 'Borrowed',
+          r.loan_type,
+          `${r.interest_rate}%`,
+          `${Math.round(r.monthly_emi)}/mo`,
+          emiLeftStr,
+        ].filter(Boolean).join(' · '),
+        amount: r.current_outstanding,
+        positive: isLent(r),
+      };
+    },
     afterList: renderPrepaymentCalculator,
   },
 
@@ -632,16 +661,32 @@ function bindFinder(host, app) {
 
 /* --------------------------------------------------- loan prepayment extra */
 
-async function renderPrepaymentCalculator(container, app, loans) {
+async function renderPrepaymentCalculator(container, app, loans = []) {
   const first = loans[0];
   const money = (v) => formatCurrency(v, app.currency, app.locale);
 
+  const loanOptions = loans.map((l, i) => ({
+    value: String(i),
+    label: `${l.name} (${money(l.current_outstanding)})`,
+  }));
+
   container.innerHTML = `
     <div class="card">
-      <div class="card-title">What if you paid more</div>
-      <p class="caption" style="margin-bottom:16px">
-        Put in an extra monthly amount to see the interest it saves and the months it cuts.
+      <div class="card-title">Prepay Loan vs Stay Invested</div>
+      <p class="caption" style="margin-bottom:14px">
+        Should you aggressively prepay your loan or invest the surplus money? Compare interest saved against compounding market wealth.
       </p>
+
+      ${loans.length > 1 ? `
+        <div style="margin-bottom:14px">
+          ${selectField({
+    id: 'preLoanSelect',
+    name: 'selected_loan_index',
+    label: 'Select loan to evaluate',
+    value: '0',
+    options: loanOptions.map((opt) => ({ value: String(opt.value), label: opt.label })),
+  })}
+        </div>` : ''}
 
       <div class="row" style="gap:12px;align-items:flex-end">
         <div class="field" style="flex:1">
@@ -650,7 +695,7 @@ async function renderPrepaymentCalculator(container, app, loans) {
                  value="${first?.current_outstanding || 5000000}">
         </div>
         <div class="field" style="flex:1">
-          <label class="field-label" for="preRate">Rate %</label>
+          <label class="field-label" for="preRate">Loan Rate %</label>
           <input class="input numeric" id="preRate" type="number" step="0.1" value="${first?.interest_rate || 8.5}">
         </div>
       </div>
@@ -661,42 +706,148 @@ async function renderPrepaymentCalculator(container, app, loans) {
           <input class="input numeric" id="preTenure" type="number" value="${first?.tenure_months || 240}">
         </div>
         <div class="field" style="flex:1">
-          <label class="field-label" for="preExtra">Extra each month</label>
-          <input class="input numeric" id="preExtra" type="number" inputmode="decimal" value="5000">
+          <label class="field-label" for="preExtra">Extra cash / mo</label>
+          <input class="input numeric" id="preExtra" type="number" inputmode="decimal" value="10000">
         </div>
       </div>
 
-      <button class="btn btn-filled btn-block" data-calc style="margin-top:16px">Calculate</button>
+      <div class="field" style="margin-top:12px">
+        <div class="row-between" style="margin-bottom:4px">
+          <label class="field-label" for="preInvestReturn" style="padding-left:0">Expected investment return %</label>
+          <span class="caption" id="investPresetLabel">12% Balanced MF</span>
+        </div>
+        <div class="row" style="gap:8px;align-items:center">
+          <input class="input numeric" id="preInvestReturn" type="number" step="0.5" value="12" style="max-width:110px">
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <button type="button" class="chip btn-sm" data-rate="7.5">7.5% FD/Debt</button>
+            <button type="button" class="chip btn-sm" data-rate="12" aria-selected="true">12% MF/Index</button>
+            <button type="button" class="chip btn-sm" data-rate="15">15% Equity</button>
+          </div>
+        </div>
+      </div>
+
+      <button class="btn btn-filled btn-block" data-calc style="margin-top:16px">${icon('calculate')}Run comparison</button>
       <div data-result style="margin-top:16px"></div>
     </div>`;
 
-  container.querySelector('[data-calc]').addEventListener('click', async () => {
-    const read = (id) => Number(document.getElementById(id).value) || 0;
+  bindSelectFields(container, (field, value) => {
+    if (field.dataset.name === 'selected_loan_index') {
+      const selected = loans[Number(value)];
+      if (selected) {
+        container.querySelector('#prePrincipal').value = selected.current_outstanding || 0;
+        container.querySelector('#preRate').value = selected.interest_rate || 8.5;
+        container.querySelector('#preTenure').value = selected.tenure_months || 240;
+      }
+    }
+  });
+
+  container.querySelectorAll('[data-rate]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      container.querySelectorAll('[data-rate]').forEach((b) => b.removeAttribute('aria-selected'));
+      btn.setAttribute('aria-selected', 'true');
+      container.querySelector('#preInvestReturn').value = btn.dataset.rate;
+      const label = btn.dataset.rate === '7.5' ? '7.5% FD/Debt' : (btn.dataset.rate === '12' ? '12% MF/Index' : '15% Equity');
+      const labelNode = container.querySelector('#investPresetLabel');
+      if (labelNode) labelNode.textContent = label;
+    });
+  });
+
+  const runCalculation = async () => {
+    const read = (id) => Number(container.querySelector(`#${id}`)?.value) || 0;
 
     const res = await Bridge.call('loan', {
+      action: 'compare',
       principal: read('prePrincipal'),
       rate: read('preRate'),
       tenure_months: read('preTenure'),
       extra_monthly: read('preExtra'),
-      extra_annual: 0,
+      invest_return: read('preInvestReturn'),
     });
 
     const output = container.querySelector('[data-result]');
+    if (!output) return;
     if (res.status !== 'success') {
       output.innerHTML = errorBlock(res, { compact: true });
       return;
     }
 
+    const isInvestWinner = res.winner === 'invest';
+    const isPrepayWinner = res.winner === 'prepay';
+
     output.innerHTML = `
+      <div class="card-flat" style="border-left:4px solid ${isInvestWinner ? 'var(--income)' : (isPrepayWinner ? 'var(--accent)' : 'var(--outline)')};padding:14px;background:var(--surface-container-high);border-radius:var(--radius);margin-bottom:16px">
+        <div class="row" style="gap:10px;align-items:flex-start">
+          <span style="color:${isInvestWinner ? 'var(--income)' : (isPrepayWinner ? 'var(--accent)' : 'var(--on-surface)')};flex-shrink:0;margin-top:2px">
+            ${icon(isInvestWinner ? 'trending_up' : (isPrepayWinner ? 'verified' : 'balance'), 'icon-md')}
+          </span>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:700;font-size:15px;color:var(--on-surface);margin-bottom:4px;word-break:break-word">
+              ${isInvestWinner
+    ? `Staying Invested wins by ${h(money(res.wealth_difference))}`
+    : (isPrepayWinner
+      ? `Prepaying Loan wins by ${h(money(res.wealth_difference))}`
+      : 'Both strategies break even')}
+            </div>
+            <div class="caption" style="line-height:1.45;word-break:break-word">
+              ${isInvestWinner
+    ? `Your expected investment return (${res.invest_return_rate}%) beats the loan interest (${read('preRate')}%). Investing ${h(money(read('preExtra')))}/mo builds a <strong>${h(money(res.invest_final_wealth))}</strong> corpus vs ${h(money(res.prepay_final_wealth))} from prepayment.`
+    : (isPrepayWinner
+      ? `Guaranteed interest savings of ${h(money(res.interest_saved))} at ${read('preRate')}% beat the ${res.invest_return_rate}% market return, clearing debt ${res.years_saved} years early.`
+      : `The ${res.invest_return_rate}% return matches your borrowing cost.`)}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="gap:10px;margin-bottom:14px;flex-direction:column">
+        <div class="card" style="padding:14px;background:${isInvestWinner ? 'var(--surface-container-highest)' : 'var(--surface-container)'};border:${isInvestWinner ? '1.5px solid var(--income)' : '1px solid var(--outline)'}">
+          <div class="row-between" style="align-items:center">
+            <span class="row" style="gap:6px;align-items:center;font-weight:700">
+              ${icon('trending_up', 'icon-sm')}Stay Invested
+            </span>
+            ${isInvestWinner ? `<span class="badge" style="background:var(--income-container);color:var(--income)">Recommended</span>` : ''}
+          </div>
+          <div class="display" style="font-size:22px;margin-top:6px;color:var(--income)">${h(money(res.invest_final_wealth))}</div>
+          <div class="caption" style="margin-top:2px">Final wealth after full term</div>
+          <div class="caption" style="margin-top:6px;font-size:11.5px;color:var(--on-surface-variant);line-height:1.4">
+            Pay regular EMI · Invest ${h(money(read('preExtra')))}/mo at ${res.invest_return_rate}%
+          </div>
+        </div>
+
+        <div class="card" style="padding:14px;background:${isPrepayWinner ? 'var(--surface-container-highest)' : 'var(--surface-container)'};border:${isPrepayWinner ? '1.5px solid var(--accent)' : '1px solid var(--outline)'}">
+          <div class="row-between" style="align-items:center">
+            <span class="row" style="gap:6px;align-items:center;font-weight:700">
+              ${icon('shield', 'icon-sm')}Prepay Loan
+            </span>
+            ${isPrepayWinner ? `<span class="badge" style="background:var(--accent-container);color:var(--on-accent-container)">Recommended</span>` : ''}
+          </div>
+          <div class="display" style="font-size:22px;margin-top:6px;color:var(--on-surface)">${h(money(res.prepay_final_wealth))}</div>
+          <div class="caption" style="margin-top:2px">Final wealth after full term</div>
+          <div class="caption" style="margin-top:6px;font-size:11.5px;color:var(--on-surface-variant);line-height:1.4">
+            Debt-free ${res.years_saved} yrs early · Saves ${h(money(res.interest_saved))} interest
+          </div>
+        </div>
+      </div>
+
       <div class="grid-2">
-        <div class="stat"><span class="caption">Current EMI</span>
-          <span class="stat-value">${h(money(res.base_emi))}</span></div>
-        <div class="stat"><span class="caption">Interest as is</span>
-          <span class="stat-value">${h(money(res.total_base_interest))}</span></div>
-        <div class="stat"><span class="caption">Interest saved</span>
-          <span class="stat-value income">${h(money(res.interest_saved))}</span></div>
-        <div class="stat"><span class="caption">Finished sooner</span>
-          <span class="stat-value income">${res.months_saved} months</span></div>
+        <div class="stat">
+          <span class="caption">Current Base EMI</span>
+          <span class="stat-value">${h(money(res.base_emi))}</span>
+        </div>
+        <div class="stat">
+          <span class="caption">Interest as-is</span>
+          <span class="stat-value expense">${h(money(res.total_base_interest))}</span>
+        </div>
+        <div class="stat">
+          <span class="caption">Interest saved</span>
+          <span class="stat-value income">${h(money(res.interest_saved))}</span>
+        </div>
+        <div class="stat">
+          <span class="caption">Tenure reduced by</span>
+          <span class="stat-value income">${res.months_saved} mos (${res.years_saved} yrs)</span>
+        </div>
       </div>`;
-  });
+  };
+
+  container.querySelector('[data-calc]').addEventListener('click', runCalculation);
 }

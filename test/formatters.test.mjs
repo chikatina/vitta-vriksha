@@ -14,12 +14,12 @@ describe('formatters.js utilities', () => {
     assert.equal(formatCurrency(500), '₹500');
     assert.equal(formatCurrency(1500.50), '₹1,501');
     assert.equal(formatCurrency(50.25), '₹50.25');
-    assert.equal(formatCurrency(150000), '₹1.5 L');
-    assert.equal(formatCurrency(100000), '₹1 L');
-    assert.equal(formatCurrency(-250000), '-₹2.5 L');
-    assert.equal(formatCurrency(15000000), '₹1.5 Cr');
-    assert.equal(formatCurrency(10000000), '₹1 Cr');
-    assert.equal(formatCurrency(-35000000), '-₹3.5 Cr');
+    assert.equal(formatCurrency(150000), '₹1.5\u00A0L');
+    assert.equal(formatCurrency(100000), '₹1\u00A0L');
+    assert.equal(formatCurrency(-250000), '-₹2.5\u00A0L');
+    assert.equal(formatCurrency(15000000), '₹1.5\u00A0Cr');
+    assert.equal(formatCurrency(10000000), '₹1\u00A0Cr');
+    assert.equal(formatCurrency(-35000000), '-₹3.5\u00A0Cr');
     assert.equal(formatCurrency(NaN), '₹0');
   });
 

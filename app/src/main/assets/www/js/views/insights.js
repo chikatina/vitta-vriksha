@@ -280,7 +280,7 @@ async function paintBody(host, app) {
   const selected = buckets[selectedIndex];
   insightsView.selectedBucket = selected;
 
-  const [summary, breakdown, calendar] = await Promise.all([
+  const [summary, breakdown, calendar, weekendAnalysis] = await Promise.all([
     Bridge.db('get_period_summary', {
       granularity: insightsView.granularity, bucket: selected, member_id: app.memberFilter,
     }),
@@ -299,6 +299,9 @@ async function paintBody(host, app) {
         flow: insightsView.flow,
         member_id: app.memberFilter,
       })
+      : Promise.resolve(null),
+    insightsView.flow === 'spend'
+      ? Bridge.db('get_weekend_spend_analysis', { member_id: app.memberFilter })
       : Promise.resolve(null),
   ]);
 
@@ -354,8 +357,15 @@ async function paintBody(host, app) {
           <span class="fact-value">${h(summary.busiest_day ? formatRelativeDate(summary.busiest_day.date) : '-')}</span>
         </div>
       </div>
-      <button class="btn btn-tonal btn-block" data-detail style="margin-top:14px">
-        ${icon('query_stats')}Period breakdown
+      <button class="btn btn-tonal btn-block row-between" data-detail style="margin-top:16px;padding:12px 14px;border-radius:var(--radius-sm);justify-content:space-between;width:100%;text-align:left">
+        <span class="row" style="gap:10px;align-items:center">
+          ${icon('pie_chart', 'icon-md')}
+          <span>
+            <span style="display:block;font-weight:650;font-size:13.5px">Explore Period Breakdown</span>
+            <span class="caption" style="display:block;font-size:11.5px">Category splits, top merchants and entries</span>
+          </span>
+        </span>
+        ${icon('chevron_right')}
       </button>
     </div>
 
@@ -403,6 +413,44 @@ async function paintBody(host, app) {
     format: (value) => money(app, value),
   })}
         </div>
+      </div>` : ''}
+
+    ${weekendAnalysis && weekendAnalysis.status === 'success' && (weekendAnalysis.weekend.total > 0 || weekendAnalysis.weekday.total > 0) ? `
+      <div class="card">
+        <div class="row-between" style="flex-wrap:wrap;gap:8px;align-items:center">
+          <span class="card-title" style="margin-bottom:0">Weekend vs Weekday</span>
+          <span class="badge ${weekendAnalysis.intensity_ratio >= 1.5 ? 'badge-expense' : 'badge-investment'}" style="white-space:nowrap;flex-shrink:0">
+            ${weekendAnalysis.intensity_ratio}× Intensity
+          </span>
+        </div>
+        <p class="caption" style="margin:4px 0 12px">${h(weekendAnalysis.verdict)}</p>
+
+        <div class="grid-2" style="gap:10px;margin-bottom:12px">
+          <div class="card-flat" style="background:var(--surface-container-high);padding:10px;border-radius:var(--radius-sm)">
+            <span class="caption" style="font-size:11px">Weekend (Fri–Sun)</span>
+            <div style="font-weight:700;font-size:15px;color:var(--expense);margin:2px 0">
+              ${h(money(app, weekendAnalysis.weekend.daily_average))}<span style="font-size:11px;font-weight:400;color:var(--on-surface-variant)">/day</span>
+            </div>
+            <span class="caption">${weekendAnalysis.weekend.share_percent}% of total spend</span>
+          </div>
+
+          <div class="card-flat" style="background:var(--surface-container-high);padding:10px;border-radius:var(--radius-sm)">
+            <span class="caption" style="font-size:11px">Weekday (Mon–Thu)</span>
+            <div style="font-weight:700;font-size:15px;color:var(--on-surface);margin:2px 0">
+              ${h(money(app, weekendAnalysis.weekday.daily_average))}<span style="font-size:11px;font-weight:400;color:var(--on-surface-variant)">/day</span>
+            </div>
+            <span class="caption">${weekendAnalysis.weekday.share_percent}% of total spend</span>
+          </div>
+        </div>
+
+        ${weekendAnalysis.weekend.top_categories.length ? `
+          <div style="font-size:12px;font-weight:600;color:var(--on-surface-variant);margin-bottom:6px">Top Weekend Spends:</div>
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            ${weekendAnalysis.weekend.top_categories.map((c) => `
+              <span class="chip" style="font-size:11.5px;padding:4px 8px;background:var(--surface-container-highest)">
+                ${h(c.category)}: ${h(money(app, c.total))} (${c.share}%)
+              </span>`).join('')}
+          </div>` : ''}
       </div>` : ''}
 
     <div class="card">

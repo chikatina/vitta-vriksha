@@ -7,6 +7,7 @@ import {
 import {
   parseSmsText, handleSmsAction,
 } from '../app/src/main/assets/www/js/backend/sms.js';
+import { handleDbAction } from '../app/src/main/assets/www/js/backend/database.js';
 
 let db;
 
@@ -82,8 +83,20 @@ describe('sms.js SMS classifier and dispatcher', () => {
 
     const achDebit = await parseSmsText('A/c xx1234 debited by Rs 5,000 on 15-Aug-2026. Info: ACH D- HDFC MUTUAL FUND.');
     assert.equal(achDebit.amount, 5000);
-    assert.equal(achDebit.type, 'Expense');
+    assert.equal(achDebit.type, 'Investment');
+    assert.equal(achDebit.category, 'Investment Outflow');
     assert.equal(achDebit.merchant, 'HDFC MUTUAL FUND');
+
+    const icclDebit = await parseSmsText('Rs. 15,000.00 debited from A/c xx5678 on 12-Aug-2026. Info: ACH D- ICCL / 948271.');
+    assert.equal(icclDebit.amount, 15000);
+    assert.equal(icclDebit.type, 'Investment');
+    assert.equal(icclDebit.category, 'Investment Outflow');
+    assert.equal(icclDebit.merchant, 'ICCL');
+
+    const sipDebit = await parseSmsText('Dear Customer, Rs 2,500.00 debited from a/c xx9012 for SIP towards NIPPON INDIA MF.');
+    assert.equal(sipDebit.amount, 2500);
+    assert.equal(sipDebit.type, 'Investment');
+    assert.equal(sipDebit.category, 'Investment Outflow');
 
     const credit = await parseSmsText('INR 50,000.00 credited to A/c xx1234 as Salary for August on 01-Aug-2026.');
     assert.equal(credit.type, 'Income');

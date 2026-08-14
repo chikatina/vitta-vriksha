@@ -147,6 +147,7 @@ export async function openTransactionSheet(app, existing = null) {
 
   const result = await sheet(existing ? 'Edit transaction' : 'New transaction', body, {
     actions,
+    autofocus: false,
     onMount(node, close) {
       bindSelectFields(node);
       const $ = (sel) => node.querySelector(sel);

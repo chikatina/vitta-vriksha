@@ -839,3 +839,97 @@ export function getPeriodSummary(db, args) {
     },
   };
 }
+
+/* -------------------------------------------------------- spending anomalies */
+
+/**
+ * Identifies categories and overall spending that are unusually elevated or spiking
+ * compared to the rolling 3-month average.
+ */
+export function getSpendingAnomalies(db, args = {}) {
+  const memberId = args.member_id;
+  const [currentFrom, currentTo] = monthBounds(0);
+
+  // Current month spending by category
+  const currentRows = transactionRows(db, {
+    from: currentFrom, to: currentTo, memberId, flow: 'spend',
+  });
+  const currentCategoryTotals = new Map();
+  let currentTotalSpend = 0;
+  for (const row of currentRows) {
+    const val = number(row.total);
+    currentTotalSpend += val;
+    currentCategoryTotals.set(row.category, (currentCategoryTotals.get(row.category) || 0) + val);
+  }
+
+  // Prior 3 months spending by category
+  const pastCategoryTotals = new Map();
+  const pastMonthTotals = [];
+
+  for (let offset = 1; offset <= 3; offset += 1) {
+    const [from, to] = monthBounds(offset);
+    const rows = transactionRows(db, { from, to, memberId, flow: 'spend' });
+    let monthTotal = 0;
+    for (const row of rows) {
+      const val = number(row.total);
+      monthTotal += val;
+      if (!pastCategoryTotals.has(row.category)) pastCategoryTotals.set(row.category, []);
+      pastCategoryTotals.get(row.category).push(val);
+    }
+    pastMonthTotals.push(monthTotal);
+  }
+
+  const anomalies = [];
+
+  for (const [cat, currentVal] of currentCategoryTotals.entries()) {
+    if (currentVal <= 0) continue;
+    const history = pastCategoryTotals.get(cat) || [];
+    const pastSum = history.reduce((sum, v) => sum + v, 0);
+    const avgCount = Math.max(1, history.length || 3);
+    const avg3m = pastSum / avgCount;
+
+    let isAnomaly = false;
+    let ratio = 1;
+    const excess = currentVal - avg3m;
+
+    if (avg3m > 0) {
+      ratio = currentVal / avg3m;
+      if (ratio >= 1.4 && excess >= 500) {
+        isAnomaly = true;
+      }
+    } else if (currentVal >= 3000) {
+      isAnomaly = true;
+      ratio = 3.0;
+    }
+
+    if (isAnomaly) {
+      anomalies.push({
+        category: cat,
+        current: Math.round(currentVal),
+        average_3m: Math.round(avg3m),
+        excess_amount: Math.round(excess > 0 ? excess : currentVal),
+        ratio: Math.round(ratio * 10) / 10,
+        severity: (ratio >= 2.0 || excess >= 5000) ? 'spike' : 'elevated',
+      });
+    }
+  }
+
+  anomalies.sort((a, b) => b.excess_amount - a.excess_amount);
+
+  const pastTotalSum = pastMonthTotals.reduce((sum, v) => sum + v, 0);
+  const avgTotal3m = pastTotalSum / Math.max(1, pastMonthTotals.length);
+  const totalRatio = avgTotal3m > 0 ? currentTotalSpend / avgTotal3m : 1;
+  const totalExcess = currentTotalSpend - avgTotal3m;
+
+  return {
+    status: 'success',
+    current_month: currentFrom.slice(0, 7),
+    current_total_spend: Math.round(currentTotalSpend),
+    average_3m_total_spend: Math.round(avgTotal3m),
+    total_ratio: Math.round(totalRatio * 10) / 10,
+    total_excess: Math.round(totalExcess > 0 ? totalExcess : 0),
+    is_total_elevated: totalRatio >= 1.25 && totalExcess >= 2000,
+    anomalies,
+  };
+}
+

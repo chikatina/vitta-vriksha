@@ -121,37 +121,38 @@ export async function renderInvestments(container, app) {
     <div data-flows></div>
 
     ${all.length ? `
-      <div class="section-header"><span class="title">Holdings</span></div>
-      <div class="holdings-controls">
-        <div class="field holdings-search">
-          <label class="field-label" for="holdingSearch">Search</label>
-          <input class="input" id="holdingSearch" data-search type="search" autocomplete="off"
-                 placeholder="Name, class, portfolio or ISIN" value="${h(view.query)}">
-        </div>
-        ${selectField({
+      <div class="section">
+        <div class="section-header"><span class="title">Holdings</span></div>
+        <div class="holdings-controls">
+          <div class="field holdings-search">
+            <label class="field-label" for="holdingSearch">Search</label>
+            <input class="input" id="holdingSearch" data-search type="search" autocomplete="off"
+                   placeholder="Name, class, portfolio or ISIN" value="${h(view.query)}">
+          </div>
+          ${selectField({
     key: 'sort',
     label: 'Sort by',
     id: 'holdingSort',
     value: view.sort,
     options: SORTS.map((s) => ({ value: s.value, label: s.label })),
   })}
-        <button class="icon-button" data-direction
-                aria-label="${view.ascending ? 'Sort descending' : 'Sort ascending'}">
-          ${icon(view.ascending ? 'expand_less' : 'expand_more')}
-        </button>
-      </div>
+          <button class="icon-button" data-direction
+                  aria-label="${view.ascending ? 'Sort descending' : 'Sort ascending'}">
+            ${icon(view.ascending ? 'expand_less' : 'expand_more')}
+          </button>
+        </div>
 
-      <div class="chip-scroller review-filters" data-classes>
-        <button type="button" class="chip" data-class="all"
-                aria-selected="${view.assetClass === 'all'}">All ${all.length}</button>
-        ${classes.map((name) => `
-          <button type="button" class="chip" data-class="${h(name)}"
-                  aria-selected="${view.assetClass === name}">${h(name)} ${byClass[name].count}</button>`).join('')}
-      </div>
+        <div class="chip-scroller review-filters" data-classes>
+          <button type="button" class="chip" data-class="all"
+                  aria-selected="${view.assetClass === 'all'}">All ${all.length}</button>
+          ${classes.map((name) => `
+            <button type="button" class="chip" data-class="${h(name)}"
+                    aria-selected="${view.assetClass === name}">${h(name)} ${byClass[name].count}</button>`).join('')}
+        </div>
 
-      ${portfolios.length > 1 ? `
-        <div class="card">
-          ${selectField({
+        ${portfolios.length > 1 ? `
+          <div class="card">
+            ${selectField({
     key: 'portfolio',
     label: 'Portfolio',
     id: 'portfolioFilter',
@@ -159,9 +160,10 @@ export async function renderInvestments(container, app) {
     options: [{ value: 'all', label: 'Every portfolio' },
       ...portfolios.map((name) => ({ value: name, label: name }))],
   })}
-        </div>` : ''}
+          </div>` : ''}
 
-      <div data-list></div>`
+        <div data-list></div>
+      </div>`
     : `<div class="card">
          ${emptyState('savings', 'Nothing here yet',
     'Import a statement under CAS to populate holdings.')}
@@ -625,6 +627,54 @@ function fact(label, value, className = '') {
     </div>`;
 }
 
+function holdingHistoryChart(lines, money) {
+  const sorted = [...lines].reverse();
+  let running = 0;
+  const points = sorted.map((l) => {
+    running += Number(l.amount) || 0;
+    return { date: l.date, value: running, nav: l.nav, units: l.units };
+  });
+
+  const values = points.map((p) => p.value);
+  const max = Math.max(...values, 1);
+  const min = Math.min(...values, 0);
+  const span = max - min || 1;
+  const width = 320;
+  const height = 130;
+  const padding = 14;
+  const chartW = width - padding * 2;
+  const chartH = height - padding * 2;
+
+  const x = (i) => padding + (i / Math.max(points.length - 1, 1)) * chartW;
+  const y = (val) => height - padding - ((val - min) / span) * chartH;
+
+  const polyPoints = points.map((p, i) => `${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ');
+  const areaPath = `M ${x(0).toFixed(1)},${height - padding} `
+    + `L ${polyPoints.split(' ').join(' L ')} `
+    + `L ${x(points.length - 1).toFixed(1)},${height - padding} Z`;
+
+  return `
+    <div style="background:var(--surface-container-high);border-radius:var(--radius);padding:12px;margin-top:8px">
+      <div class="row-between" style="font-size:11px;color:var(--on-surface-variant);margin-bottom:6px">
+        <span>${h(points[0].date)} · ${money(points[0].value)}</span>
+        <span>${h(points[points.length - 1].date)} · ${money(points[points.length - 1].value)}</span>
+      </div>
+      <svg width="100%" height="${height}" viewBox="0 0 ${width} ${height}" style="overflow:visible;display:block">
+        <defs>
+          <linearGradient id="holdingGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.3" />
+            <stop offset="100%" stop-color="var(--accent)" stop-opacity="0.0" />
+          </linearGradient>
+        </defs>
+        <path d="${areaPath}" fill="url(#holdingGrad)" />
+        <polyline points="${polyPoints}" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        ${points.map((p, i) => `
+          <circle cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="3" fill="var(--accent)" />
+        `).join('')}
+      </svg>
+    </div>`;
+}
+
 async function editCost(container, app, holding) {
   if (!holding) return;
 
@@ -634,23 +684,42 @@ async function editCost(container, app, holding) {
     isin: holding.isin, folio_number: holding.account, member_id: app.memberFilter,
   });
   const lines = history.transactions || [];
+  const chartHtml = lines.length >= 2 ? holdingHistoryChart(lines, money) : '';
 
   const saved = await sheet(holding.name, `
-    <div class="card-flat">
+    <!-- Top Summary Card with Editable Cost -->
+    <div class="card-flat" style="background:var(--surface-container-high);padding:14px;border-radius:var(--radius);margin-bottom:12px">
       <div class="row-between">
-        <span class="caption">Value today</span>
-        <span class="title">${money(holding.value)}</span>
-      </div>
-      <div class="row-between" style="margin-top:6px">
-        <span class="caption">Unrealised profit</span>
-        <span class="${holding.has_cost ? (gained ? 'holdings-gain' : 'holdings-loss') : 'holdings-unknown'}">
-          ${holding.has_cost
+        <div>
+          <span class="caption" style="font-size:11px">Current Value</span>
+          <div class="title numeric" style="font-size:18px;font-weight:700">${money(holding.value)}</div>
+        </div>
+        <div style="text-align:right">
+          <span class="caption" style="font-size:11px">Unrealised Profit</span>
+          <div class="title numeric ${holding.has_cost ? (gained ? 'holdings-gain' : 'holdings-loss') : 'holdings-unknown'}" style="font-size:15px;font-weight:700">
+            ${holding.has_cost
     ? `${gained ? '+' : ''}${money(holding.pnl)} (${gained ? '+' : ''}${holding.pnl_percent.toFixed(2)}%)`
-    : 'Cost not known yet'}
-        </span>
+    : 'Cost unknown'}
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--outline)">
+        <div class="row-between" style="align-items:center">
+          <label class="field-label" for="holdingCost" style="padding-left:0;margin-bottom:0;font-size:12px;font-weight:600">Total Invested Amount</label>
+          <span class="caption" style="font-size:11px">
+            ${history.invested_from_history > 0 ? `From history: ${money(history.invested_from_history)}` : 'Editable'}
+          </span>
+        </div>
+        <div class="row" style="gap:8px;margin-top:6px;align-items:center">
+          <input class="input numeric" id="holdingCost" data-cost type="number" step="0.01" inputmode="decimal"
+                 value="${holding.has_cost ? holding.invested : (history.invested_from_history || '')}" placeholder="0.00" style="flex:1">
+          <button class="btn btn-filled btn-sm" data-quick-save style="padding:6px 14px;flex-shrink:0">Save</button>
+        </div>
       </div>
     </div>
 
+    <!-- Details Fact Grid -->
     <div class="fact-grid">
       ${fact('Units', units(holding.units))}
       ${fact('NAV', money(holding.nav))}
@@ -659,78 +728,99 @@ async function editCost(container, app, holding) {
       ${fact('Class', h(holding.asset_class))}
       ${fact('Portfolio', h(holding.portfolio))}
       ${holding.amc ? fact('Fund house', h(holding.amc)) : ''}
-      ${holding.account ? fact('Folio or account', h(holding.account)) : ''}
+      ${holding.account ? fact('Folio / Account', h(holding.account)) : ''}
       ${holding.isin ? fact('ISIN', h(holding.isin)) : ''}
       ${holding.symbol ? fact('Symbol', h(holding.symbol)) : ''}
       ${fact('Valued as of', h(holding.last_updated || '-'))}
     </div>
 
-    ${lines.length >= 3 ? `
-      <div class="card-flat">
-        <div class="row-between">
-          <span class="caption">Put in, adding up</span>
-          ${sparkline(cumulative(lines), { width: 150, height: 34 })}
-        </div>
+    <!-- History Header with Interactive Cards/Chart Toggle -->
+    <div class="row-between" style="margin-top:16px;align-items:center">
+      <div class="section-header" style="margin:0"><span class="title">History (${lines.length})</span></div>
+      ${lines.length >= 2 ? `
+        <div class="row" style="background:var(--surface-container-high);border-radius:var(--radius-full);padding:2px;gap:2px">
+          <button type="button" class="btn btn-sm btn-text" data-tab-history="cards" style="padding:3px 10px;border-radius:var(--radius-full);font-size:11.5px;background:var(--surface)">Cards</button>
+          <button type="button" class="btn btn-sm btn-text" data-tab-history="chart" style="padding:3px 10px;border-radius:var(--radius-full);font-size:11.5px">Chart</button>
+        </div>` : ''}
+    </div>
+
+    <!-- History Chart View -->
+    ${lines.length >= 2 ? `
+      <div data-view-history="chart" style="display:none">
+        ${chartHtml}
       </div>` : ''}
 
-    <div class="section-header" style="margin-top:6px">
-      <span class="title">History</span>
-      ${lines.length ? `<span class="caption">${lines.length} entries</span>` : ''}
-    </div>
-    ${lines.length ? `
-      <div class="list">
-        ${lines.slice(0, 60).map((line) => `
-          <div class="list-row">
-            <span class="list-row-main">
-              <span class="list-row-title">${h(line.description || line.kind || 'Movement')}</span>
-              <span class="list-row-sub">${h(line.date)}${line.nav ? ` · NAV ${money(line.nav)}` : ''}</span>
-            </span>
-            <span class="list-row-main" style="text-align:right;flex:0 0 auto">
-              <span class="list-row-title ${Number(line.amount) < 0 ? 'holdings-loss' : ''}">
-                ${money(Math.abs(Number(line.amount)))}
+    <!-- History Cards View -->
+    <div data-view-history="cards">
+      ${lines.length ? `
+        <div class="list" style="margin-top:8px">
+          ${lines.slice(0, 60).map((line) => `
+            <div class="list-row" style="padding:10px 0">
+              <span class="list-row-main">
+                <span class="list-row-title">${h(line.description || line.kind || 'Movement')}</span>
+                <span class="list-row-sub">${h(line.date)}${line.nav ? ` · NAV ${money(line.nav)}` : ''}</span>
               </span>
-              <span class="list-row-sub">${units(line.units)} units</span>
-            </span>
-          </div>`).join('')}
-      </div>`
-    : `<div class="card-flat">
-         <div class="caption">
-           No history recorded. A summary statement says what you hold today and nothing
-           about how it got there. Ask CAMS or KFintech for the detailed statement and the
-           purchases, redemptions and dividends land here. See the guide for how.
-         </div>
-       </div>`}
-
-    <div class="field" style="margin-top:14px">
-      <label class="field-label" for="holdingCost">Total amount invested</label>
-      <input class="input" id="holdingCost" data-cost type="number" step="0.01" inputmode="decimal"
-             value="${holding.has_cost ? holding.invested : ''}" placeholder="0.00">
-      <span class="caption">
-        ${history.invested_from_history > 0
-    ? `The history adds up to ${money(history.invested_from_history)}.`
-    : 'What this holding cost in total, so the profit can be worked out.'}
-      </span>
+              <span class="list-row-main" style="text-align:right;flex:0 0 auto">
+                <span class="list-row-title ${Number(line.amount) < 0 ? 'holdings-loss' : 'holdings-gain'}">
+                  ${money(Math.abs(Number(line.amount)))}
+                </span>
+                <span class="list-row-sub">${units(line.units)} units</span>
+              </span>
+            </div>`).join('')}
+        </div>`
+    : `<div class="card-flat" style="margin-top:8px">
+           <div class="caption">
+             No history recorded. A summary statement says what you hold today and nothing
+             about how it got there. Detailed statement from CAMS or KFintech will show all purchases and redemptions.
+           </div>
+         </div>`}
     </div>`, {
-    // Opened to be read. The keyboard would cover most of what it came to show.
     autofocus: false,
     actions: `
-      <button class="btn btn-outlined" data-cancel>Close</button>
-      <button class="btn btn-filled" data-save>Save cost</button>`,
+      <button class="btn btn-outlined btn-block" data-cancel>Done</button>`,
     onMount(node, close) {
       node.querySelector('[data-cancel]').addEventListener('click', () => close(null));
-      node.querySelector('[data-save]').addEventListener('click', async () => {
+
+      const doSave = async () => {
+        const costInput = node.querySelector('[data-cost]');
+        const costVal = Number(costInput?.value);
+        if (Number.isNaN(costVal)) return;
         const res = await Bridge.db('save_holding_cost', {
           source: holding.source,
           holding_id: holding.id,
-          invested_value: Number(node.querySelector('[data-cost]').value),
+          invested_value: costVal,
         });
         if (res.status !== 'success') {
           toast(res.message || 'Could not save that.', 'error');
           return;
         }
-        toast('Saved.', 'success');
+        toast('Cost updated successfully.', 'success');
         close(true);
-      });
+      };
+
+      const quickSaveBtn = node.querySelector('[data-quick-save]');
+      if (quickSaveBtn) quickSaveBtn.addEventListener('click', doSave);
+
+      // History view toggle (Cards vs Chart)
+      const tabCards = node.querySelector('[data-tab-history="cards"]');
+      const tabChart = node.querySelector('[data-tab-history="chart"]');
+      const viewCards = node.querySelector('[data-view-history="cards"]');
+      const viewChart = node.querySelector('[data-view-history="chart"]');
+
+      if (tabCards && tabChart) {
+        tabCards.addEventListener('click', () => {
+          tabCards.style.background = 'var(--surface)';
+          tabChart.style.background = 'transparent';
+          if (viewCards) viewCards.style.display = 'block';
+          if (viewChart) viewChart.style.display = 'none';
+        });
+        tabChart.addEventListener('click', () => {
+          tabChart.style.background = 'var(--surface)';
+          tabCards.style.background = 'transparent';
+          if (viewCards) viewCards.style.display = 'none';
+          if (viewChart) viewChart.style.display = 'block';
+        });
+      }
     },
   });
 
