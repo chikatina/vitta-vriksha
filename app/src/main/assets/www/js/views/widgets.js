@@ -29,7 +29,7 @@ import {
   bindChartSelect,
 } from '../charts.js';
 import { categoryIndex, transactionRow, bindTransactionRows } from './shared.js';
-import { openPeriodSheet, openSliceSheet, openTransactionsSheet } from './drilldown.js';
+import { openCashflowSheet, openPeriodSheet, openSliceSheet, openTransactionsSheet } from './drilldown.js';
 import { focusInsights } from './insights.js';
 
 const UPCOMING_ICONS = {
@@ -251,75 +251,19 @@ export const WIDGETS = {
     pinned: true,
     render(data, app, options) {
       const { summary } = data;
-      const breakdown = options.breakdown || 'assets_liabilities';
       const showDelta = options.show_delta === 'yes';
       const showTrend = options.show_trend === 'yes';
 
-      // Delta: this month's income minus expenses, as a rough net worth change proxy.
       const thisMonth = summary.this_month || {};
       const delta = (thisMonth.income || 0) - (thisMonth.expense || 0) - (thisMonth.invested || 0);
       const deltaSign = delta >= 0 ? '+' : '';
 
-      let breakdownHtml = '';
-      if (breakdown === 'compact') {
-        // Compact: just the headline number, no split.
-        breakdownHtml = '';
-      } else if (breakdown === 'detailed_grid') {
-        // 4-box: Bank, Investments, Debts, Net Saved this month.
-        const bank = Number(summary.asset_totals?.Bank || 0);
-        const investments = Number(summary.asset_totals?.['Mutual Funds'] || 0)
-          + Number(summary.asset_totals?.Demat || 0)
-          + Number(summary.asset_totals?.NPS || 0);
-        const debts = Number(summary.total_liabilities || 0);
-        breakdownHtml = `
-          <div class="balance-grid-4">
-            <div class="balance-grid-item">
-              <div class="caption" style="color:inherit;opacity:0.75">Cash</div>
-              <div class="title numeric income">${h(money(app, bank))}</div>
-            </div>
-            <div class="balance-grid-item">
-              <div class="caption" style="color:inherit;opacity:0.75">Invested</div>
-              <div class="title numeric invested">${h(money(app, investments))}</div>
-            </div>
-            <div class="balance-grid-item">
-              <div class="caption" style="color:inherit;opacity:0.75">Debts</div>
-              <div class="title numeric expense">${h(money(app, debts))}</div>
-            </div>
-            <div class="balance-grid-item">
-              <div class="caption" style="color:inherit;opacity:0.75">Net this month</div>
-              <div class="title numeric ${delta >= 0 ? 'income' : 'expense'}">${h(money(app, Math.abs(delta)))}</div>
-            </div>
-          </div>`;
-      } else if (breakdown === 'asset_classes') {
-        const totals = summary.asset_totals || {};
-        const classes = Object.entries(totals)
-          .filter(([, v]) => Number(v) > 0)
-          .sort(([, a], [, b]) => Number(b) - Number(a))
-          .slice(0, 5);
-        breakdownHtml = classes.length ? `
-          <div class="balance-split" style="flex-wrap:wrap;gap:var(--gap-2) var(--gap-5)">
-            ${classes.map(([name, value]) => `
-              <div>
-                <div class="caption" style="color:inherit;opacity:0.75">${h(name)}</div>
-                <div class="title numeric">${h(money(app, Number(value)))}</div>
-              </div>`).join('')}
-          </div>` : '';
-      } else {
-        // Default: assets_liabilities
-        breakdownHtml = `
-          <div class="balance-split">
-            <div>
-              <div class="caption" style="color:inherit;opacity:0.75">Assets</div>
-              <div class="title numeric">${h(money(app, summary.total_assets || 0))}</div>
-            </div>
-            <div>
-              <div class="caption" style="color:inherit;opacity:0.75">Owed</div>
-              <div class="title numeric">${h(money(app, summary.total_liabilities || 0))}</div>
-            </div>
-          </div>`;
-      }
+      // Total Assets & Liabilities
+      const totalAssets = Number(summary.total_assets || 0);
+      const totalDebts = Number(summary.total_liabilities || 0);
+      const assetTotals = summary.asset_totals || {};
 
-      // Sparkline from series data.
+      // Sparkline
       let trendHtml = '';
       if (showTrend) {
         const series = data[seriesNeed('net_worth_trend', { span: 'month:6' })];
@@ -328,16 +272,104 @@ export const WIDGETS = {
         }
       }
 
+      // 1. Allocation data
+      const cash = Number(assetTotals.Bank || 0);
+      const equity = Number(assetTotals['Mutual Funds'] || 0) + Number(assetTotals.Demat || 0);
+      const gold = Number(assetTotals.Gold || 0);
+      const debtOrOthers = Math.max(0, totalAssets - cash - equity - gold);
+
+      const allocItems = [
+        { label: 'Equity', value: equity, color: 'var(--income)' },
+        { label: 'Cash / Bank', value: cash, color: 'var(--accent)' },
+        { label: 'Gold / SGB', value: gold, color: '#F59E0B' },
+        { label: 'Fixed / Debt', value: debtOrOthers, color: '#8B5CF6' },
+      ].filter((item) => item.value > 0);
+
+      const totalAlloc = Math.max(totalAssets, 1);
+
+      // 2. Assets list
+      const assetClasses = Object.entries(assetTotals)
+        .filter(([, v]) => Number(v) > 0)
+        .sort(([, a], [, b]) => Number(b) - Number(a));
+
+      const breakdown = options.breakdown || 'assets_liabilities';
+
+      let breakdownHtml = '';
+      if (breakdown === 'detailed_grid') {
+        breakdownHtml = `
+          <div class="balance-grid-4" style="margin-top:12px">
+            <div>
+              <div class="caption" style="color:inherit;opacity:0.75;font-size:11px">Cash</div>
+              <div class="title numeric" style="font-size:13.5px">${h(money(app, cash))}</div>
+            </div>
+            <div>
+              <div class="caption" style="color:inherit;opacity:0.75;font-size:11px">Invested</div>
+              <div class="title numeric" style="font-size:13.5px">${h(money(app, equity + gold + debtOrOthers))}</div>
+            </div>
+            <div>
+              <div class="caption" style="color:inherit;opacity:0.75;font-size:11px">Debts</div>
+              <div class="title numeric" style="font-size:13.5px">${h(money(app, totalDebts))}</div>
+            </div>
+            <div>
+              <div class="caption" style="color:inherit;opacity:0.75;font-size:11px">Net this month</div>
+              <div class="title numeric" style="font-size:13.5px">${h(deltaSign)}${h(money(app, Math.abs(delta)))}</div>
+            </div>
+          </div>`;
+      } else if (breakdown === 'asset_classes') {
+        breakdownHtml = `
+          <div class="balance-split" style="flex-wrap:wrap;gap:var(--gap-2) var(--gap-4);margin-top:12px">
+            ${assetClasses.map(([name, val]) => `
+              <div>
+                <div class="caption" style="color:inherit;opacity:0.75;font-size:11px">${h(name)}</div>
+                <div class="title numeric" style="font-size:13.5px">${h(money(app, Number(val)))}</div>
+              </div>
+            `).join('')}
+          </div>`;
+      } else if (breakdown === 'assets_liabilities') {
+        breakdownHtml = `
+          <div class="balance-split" style="margin-top:12px">
+            <div>
+              <div class="caption" style="color:inherit;opacity:0.75;font-size:11px">Assets</div>
+              <div class="title numeric" style="font-size:14px">${h(money(app, totalAssets))}</div>
+            </div>
+            <div>
+              <div class="caption" style="color:inherit;opacity:0.75;font-size:11px">Owed</div>
+              <div class="title numeric" style="font-size:14px">${h(money(app, totalDebts))}</div>
+            </div>
+          </div>`;
+      }
+
       return `
         <div class="balance-card">
           <div class="balance-card-header">
-            <span class="overline" style="color:inherit;opacity:0.7">Net worth</span>
+            <span class="overline" style="color:inherit;opacity:0.7">Wealth & Net Worth</span>
             ${showDelta ? `<span class="balance-delta">${h(deltaSign)}${h(money(app, Math.abs(delta)))}</span>` : ''}
           </div>
-          <span class="balance-amount">${h(money(app, summary.net_worth || 0))}</span>
+          <div class="balance-amount">${h(money(app, summary.net_worth || 0))}</div>
           ${trendHtml}
           ${breakdownHtml}
         </div>`;
+    },
+    bind(node, data, app) {
+      const tabBtns = node.querySelectorAll('.wealth-tab-btn');
+      const contents = node.querySelectorAll('.wealth-tab-content');
+
+      tabBtns.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          tabBtns.forEach((b) => b.setAttribute('aria-selected', 'false'));
+          btn.setAttribute('aria-selected', 'true');
+
+          const target = btn.dataset.target;
+          contents.forEach((c) => {
+            c.style.display = c.dataset.tabContent === target ? 'block' : 'none';
+          });
+        });
+      });
+
+      const manageBtn = node.querySelector('[data-open-wealth]');
+      if (manageBtn) {
+        manageBtn.addEventListener('click', () => app.open('records_loans'));
+      }
     },
   },
 
@@ -593,18 +625,26 @@ export const WIDGETS = {
     needs: (options) => {
       const category = options.category || 'Groceries';
       const { granularity, periods } = readSpan(options);
-      return [`series:spend_total:${granularity}:${periods}:${category}`, periodNeed({ window: 'month' })];
+      return [`series:spend_total:${granularity}:${periods}:${category}`, 'summary'];
     },
-    render(data, app, options) {
+    render(data, app, options = {}) {
       const category = options.category || 'Groceries';
       const { granularity, periods } = readSpan(options);
       const seriesKey = `series:spend_total:${granularity}:${periods}:${category}`;
       const series = data[seriesKey];
+      const summary = data.summary?.summary || data.summary;
 
-      let values = [];
-      if (series && series.status === 'success' && series.series?.[0]) {
-        values = series.series[0].values || [];
+      // On a brand new empty install with default Groceries category, return empty string
+      const totalActivity = (summary?.months || []).reduce((s, m) => s + (m.expense || 0) + (m.income || 0) + (m.invested || 0), 0) + Number(summary?.net_worth || 0) + Number(summary?.total_assets || 0);
+      if (!totalActivity && category === 'Groceries') {
+        return '';
       }
+
+      if (!series || series.status !== 'success' || !series.series?.[0]?.values) {
+        return '';
+      }
+
+      const values = series.series[0].values || [];
 
       if (!values.length || !values.some((v) => v > 0)) {
         return card(category, `
@@ -632,7 +672,7 @@ export const WIDGETS = {
         </div>
         <div class="caption">${h(money(app, avg))} avg over ${values.length} ${granularity}s</div>`, { action: drillAction('View') });
     },
-    bind(node, data, app, options) {
+    bind(node, data, app, options = {}) {
       const drill = node.querySelector('[data-drill]');
       if (drill) {
         drill.addEventListener('click', () => {
@@ -641,6 +681,133 @@ export const WIDGETS = {
           app.go('ledger');
         });
       }
+    },
+  },
+
+  safe_to_spend: {
+    label: 'Safe-to-Spend Allowance',
+    description: 'Daily and monthly guilt-free cash allowance after locked EMIs & SIPs',
+    icon: 'account_balance_wallet',
+    needs: () => ['safe_to_spend'],
+    render({ safe_to_spend: safe }, app) {
+      if (!safe || safe.status !== 'success') return '';
+      if (!safe.liquid_balance && !safe.locked_commitments && !safe.safe_to_spend_total) return '';
+
+      const isDeficit = safe.health_status === 'deficit';
+      const isTight = safe.health_status === 'tight';
+      const statusColor = isDeficit ? 'var(--expense)' : (isTight ? 'var(--warning, #F59E0B)' : 'var(--income)');
+
+      return card('Safe-to-Spend Allowance', `
+        <div class="row-between" style="align-items:flex-start;margin-bottom:12px">
+          <div>
+            <div class="display" style="font-size:24px;color:${statusColor}">
+              ${h(money(app, safe.safe_to_spend_daily))}<span style="font-size:13px;font-weight:500;color:var(--on-surface-variant)"> / day</span>
+            </div>
+            <div class="caption" style="margin-top:2px">
+              ${h(money(app, safe.safe_to_spend_weekly))} / week · ${h(money(app, safe.safe_to_spend_total))} left this month
+            </div>
+          </div>
+          <span class="badge" style="background:${isDeficit ? 'var(--expense-container)' : (isTight ? 'var(--surface-container-highest)' : 'var(--income-container)')};color:${statusColor}">
+            ${isDeficit ? 'Deficit Warning' : (isTight ? 'Tight Budget' : 'Safe to Spend')}
+          </span>
+        </div>
+
+        <div class="grid-2" style="gap:8px;background:var(--surface-container-high);padding:10px;border-radius:var(--radius-sm)">
+          <div>
+            <span class="caption" style="font-size:11px">Liquid Bank Cash</span>
+            <div style="font-weight:700;font-size:13.5px;color:var(--on-surface)">${h(money(app, safe.liquid_balance))}</div>
+          </div>
+          <div>
+            <span class="caption" style="font-size:11px">Locked Commitments</span>
+            <div style="font-weight:700;font-size:13.5px;color:var(--expense)">-${h(money(app, safe.locked_commitments))}</div>
+          </div>
+        </div>
+
+        <div class="row-between" style="margin-top:8px;font-size:11.5px;color:var(--on-surface-variant)">
+          <span>EMIs: ${h(money(app, safe.breakdown.loan_emis))}</span>
+          <span>SIPs: ${h(money(app, safe.breakdown.sips))}</span>
+          <span>Cards: ${h(money(app, safe.breakdown.credit_cards))}</span>
+        </div>`, { action: drillAction('Runway') });
+    },
+    bind(node, data, app) {
+      const drill = node.querySelector('[data-drill]');
+      if (drill) {
+        drill.addEventListener('click', () => {
+          openCashflowSheet(app);
+        });
+      }
+    },
+  },
+
+  spending_trends: {
+    label: 'Spending Alerts & Trends',
+    description: 'Anomalies and spike warnings compared to 3-month average',
+    icon: 'warning',
+    needs: () => ['anomalies', 'categories'],
+    render({ anomalies: res, categories }, app) {
+      if (!res || res.status !== 'success') return '';
+      const list = res.anomalies || [];
+      const isTotalSpike = res.is_total_elevated;
+
+      if (!list.length && !isTotalSpike) {
+        if (!res.current_total_spend && !res.average_3m_total_spend) return '';
+        return card('Spending Trends', `
+          <div class="row" style="gap:10px;align-items:center;padding:4px 0">
+            <span class="icon" style="color:var(--income)">check_circle</span>
+            <div>
+              <div style="font-weight:600;font-size:14px;color:var(--on-surface)">Spending is on track</div>
+              <div class="caption">No abnormal category spikes detected compared to your 3-month average.</div>
+            </div>
+          </div>`, { action: drillAction('Insights') });
+      }
+
+      const catList = categories || [];
+      const iconFor = (name) => catList.find((c) => c.name === name)?.icon || 'sell';
+
+      return card('⚠️ Spending Alerts & Trends', `
+        ${isTotalSpike ? `
+          <div class="card-flat" style="background:var(--expense-container);color:var(--expense);padding:10px 12px;border-radius:var(--radius);margin-bottom:10px;display:flex;align-items:center;gap:8px">
+            <span class="icon">trending_up</span>
+            <div style="font-size:13px;font-weight:600">
+              Total monthly spend is <strong>${res.total_ratio}×</strong> higher than 3-month avg (+${h(money(app, res.total_excess))})
+            </div>
+          </div>` : ''}
+
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${list.map((a) => `
+            <button class="list-row" data-category-alert="${h(a.category)}" style="background:var(--surface-container-high);border-radius:var(--radius-sm);padding:8px 12px;text-align:left;width:100%;cursor:pointer">
+              <span class="avatar avatar-sm" style="background:${a.severity === 'spike' ? 'var(--expense-container)' : 'var(--surface-container-highest)'};color:${a.severity === 'spike' ? 'var(--expense)' : 'var(--investment)'}">
+                ${icon(iconFor(a.category))}
+              </span>
+              <span class="list-row-main" style="flex:1">
+                <span class="row-between">
+                  <span class="list-row-title" style="font-weight:650">${h(a.category)}</span>
+                  <span class="badge ${a.severity === 'spike' ? 'badge-expense' : 'badge-investment'}">
+                    ↑ ${a.ratio}× spike
+                  </span>
+                </span>
+                <span class="list-row-sub" style="font-size:12px;margin-top:2px">
+                  Spent ${h(money(app, a.current))} · 3-mo avg ${h(money(app, a.average_3m))} (+${h(money(app, a.excess_amount))})
+                </span>
+              </span>
+              ${icon('chevron_right', 'icon-sm')}
+            </button>`).join('')}
+        </div>`, { action: drillAction('Insights') });
+    },
+    bind(node, data, app) {
+      const drill = node.querySelector('[data-drill]');
+      if (drill) {
+        drill.addEventListener('click', () => {
+          app.go('home', 'insights');
+        });
+      }
+      node.querySelectorAll('[data-category-alert]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const cat = btn.dataset.categoryAlert;
+          app.ledgerSearch = cat;
+          app.go('ledger');
+        });
+      });
     },
   },
 
@@ -1196,7 +1363,7 @@ function comparison(percent) {
 
 /** What a brand new install sees. */
 export const DEFAULT_LAYOUT = [
-  'net_worth', 'month_summary', 'monthly_breakdown', 'budget', 'income_expense',
+  'net_worth', 'safe_to_spend', 'spending_trends', 'month_summary', 'monthly_breakdown', 'budget', 'income_expense',
   'top_categories', 'upcoming', 'recurring_found', 'recent',
 ];
 
@@ -1283,6 +1450,8 @@ export async function loadWidgetData(app, layout) {
     const [kind, ...rest] = need.split(':');
 
     if (kind === 'summary') return [need, await Bridge.db('get_summary', { member_id: member })];
+    if (kind === 'safe_to_spend') return [need, await Bridge.db('get_safe_to_spend', { member_id: member })];
+    if (kind === 'anomalies') return [need, await Bridge.db('get_spending_anomalies', { member_id: member })];
     if (kind === 'categories') {
       const res = await Bridge.db('get_categories');
       return [need, res.categories || []];

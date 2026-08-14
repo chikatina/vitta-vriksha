@@ -86,6 +86,8 @@ class App {
   constructor() {
     this.tab = 'home';
     this.page = null;
+    this.tabStack = [];
+    this._lastBackPressTime = 0;
     this.settings = {};
     this.currency = 'INR';
     this.locale = 'en-IN';
@@ -101,6 +103,7 @@ class App {
     this.navBar = document.getElementById('navBar');
 
     window.app = this;
+    window.onSystemBackPressed = () => this.handleSystemBack();
     this.init();
   }
 
@@ -268,29 +271,59 @@ class App {
       this.appBar.classList.toggle('scrolled', this.view.scrollTop > 4);
     }, { passive: true });
 
-    // Android's back gesture pops the sub-page before leaving the app.
+    // Android's back gesture / popstate handling
     window.addEventListener('popstate', () => {
-      if (this.page) this.back();
+      this.handleSystemBack();
     });
 
     // Permissions can be changed from system settings while the app is in the background.
     // Setup installs its own handler, so only take over once the app proper is running.
-    window.onAppResumed = () => {
+    window.onAppResumed = async () => {
+      const lockTimeoutStr = localStorage.getItem('app_lock_timeout_ms') || this.settings?.app_lock_timeout_ms || '120000';
+      const lockTimeoutMs = Number(lockTimeoutStr);
+
+      if (lockTimeoutMs > 0 && this.backgroundedAt) {
+        const elapsed = Date.now() - this.backgroundedAt;
+        if (elapsed > lockTimeoutMs) {
+          await this.lock();
+        }
+      }
+      this.backgroundedAt = null;
+
       if (!this.locked && PERMISSION_SENSITIVE_PAGES.has(this.page)) this.render();
     };
 
     /*
-     * Out of sight, locked.
-     *
-     * The shell decides when this fires and deliberately does not fire it for trips the app
-     * sent the user on, like the file picker. See `onStop` in MainActivity.
+     * When the phone screen is turned off or device is locked, lock immediately ignoring grace period.
      */
-    window.onAppBackgrounded = () => this.lock();
+    window.onDeviceLocked = () => {
+      this.lock();
+    };
+
+    /*
+     * When backgrounded, if the phone itself was locked (screen off), lock immediately.
+     * Otherwise (app switch with phone still awake), apply the graceful timeout.
+     */
+    window.onAppBackgrounded = (isPhoneLocked = false) => {
+      if (isPhoneLocked) {
+        this.lock();
+        return;
+      }
+      this.backgroundedAt = Date.now();
+      const lockTimeoutStr = localStorage.getItem('app_lock_timeout_ms') || this.settings?.app_lock_timeout_ms || '120000';
+      if (Number(lockTimeoutStr) === 0) {
+        this.lock();
+      }
+    };
   }
 
   /* ------------------------------------------------------------------ routing */
 
-  go(tab, page = null) {
+  go(tab, page = null, { fromBack = false } = {}) {
+    if (!fromBack && this.tab && tab !== this.tab) {
+      this.tabStack.push(this.tab);
+      if (this.tabStack.length > 20) this.tabStack.shift();
+    }
     this.tab = tab;
     this.page = page;
     if (page) history.pushState({ page }, '');
@@ -306,6 +339,63 @@ class App {
     if (!this.page) return;
     this.page = null;
     this.render();
+  }
+
+  handleSystemBack() {
+    // 1. Close any open dropdown menus
+    const menu = document.querySelector('.menu, .menu-scrim');
+    if (menu) {
+      document.querySelectorAll('.menu, .menu-scrim').forEach((node) => node.remove());
+      return true;
+    }
+
+    // 2. Close any open dialog or prompt
+    const dialog = document.querySelector('.dialog-scrim');
+    if (dialog) {
+      const cancel = dialog.querySelector('[data-cancel], [data-close], button');
+      if (cancel) cancel.click();
+      else dialog.remove();
+      return true;
+    }
+
+    // 3. Close any open bottom sheet
+    const sheet = document.querySelector('.sheet-scrim');
+    if (sheet) {
+      const cancel = sheet.querySelector('[data-cancel], [data-close]');
+      if (cancel) cancel.click();
+      else sheet.remove();
+      return true;
+    }
+
+    // 4. Close subpage/panel if currently inside one
+    if (this.page) {
+      this.back();
+      return true;
+    }
+
+    // 5. Navigate to previous tab in tab stack, or go to Home tab if on another tab
+    while (this.tabStack.length > 0) {
+      const prevTab = this.tabStack.pop();
+      if (prevTab && prevTab !== this.tab) {
+        this.go(prevTab, null, { fromBack: true });
+        return true;
+      }
+    }
+
+    if (this.tab !== 'home') {
+      this.go('home', null, { fromBack: true });
+      return true;
+    }
+
+    // 6. On Home root with nothing open: double back to exit
+    const now = Date.now();
+    if (!this._lastBackPressTime || now - this._lastBackPressTime > 2000) {
+      this._lastBackPressTime = now;
+      toast('Press back again to exit');
+      return true;
+    }
+
+    return false; // Allow app exit
   }
 
   async render({ preserveScroll = false } = {}) {

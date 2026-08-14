@@ -453,14 +453,13 @@ describe('category_card (Category spotlight) widget', () => {
       ledgerSearch: '',
       go(page) { this.page = page; },
     };
+    const drillElement = {
+      addEventListener(evt, fn) { this.handler = fn; },
+      click() { if (this.handler) this.handler(); },
+    };
     const node = {
       querySelector(sel) {
-        if (sel === '[data-drill]') {
-          return {
-            addEventListener: (evt, fn) => { this.handler = fn; },
-            click: function() { if (this.handler) this.handler(); },
-          };
-        }
+        if (sel === '[data-drill]') return drillElement;
         return null;
       },
     };

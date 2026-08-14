@@ -29,12 +29,26 @@ import {
   memberClause, monthBounds, monthKeys, number, pad, today,
 } from './periods.js';
 import {
-  breakdownDimensions, getBreakdown, getPeriodSummary, getSeries, seriesMetrics,
+  breakdownDimensions, getBreakdown, getPeriodSummary, getSeries, getSpendingAnomalies, seriesMetrics,
 } from './analytics.js';
 import {
   applyPriceChange, dismissRecurring, findRecurring, getPriceHistory, projectCommitments,
   steppedAmount, trackRecurring,
 } from './recurring.js';
+import {
+  calculateSafeToSpend, getCashflowRunway, getSalaryChecklist, getWeekendVsWeekdayAnalysis,
+} from './cashflow.js';
+import {
+  calculateDirectVsRegularDrag, calculateFdLadder, calculatePortfolioRebalance,
+  calculatePassiveYield, calculateRealReturn, calculateSgbSchedule, calculateTaxHarvesting,
+} from './wealth_intel.js';
+import {
+  calculateDebtPayoffRoadmap, calculateDtiRatio, calculateHomeLoanPartPayment, getCreditCardOptimizer,
+} from './debt_planner.js';
+import {
+  calculateLifeGoals, calculateNoSpendDays, evaluateChallenge, generateLocalSyncPayload,
+  getMonthlyFinanceWrapped,
+} from './goals_habits.js';
 
 /** Settings that must never be handed to the UI. */
 const PRIVATE_SETTINGS = new Set(['pin_hash', 'pin_code']);
@@ -229,6 +243,34 @@ const RECORD_TYPES = {
   event: ['custom_events',
     ['member_id', 'title', 'event_date', 'event_type', 'notes', 'reminder_days_before'],
     'event_date'],
+  mf_folio: ['mf_folios',
+    ['member_id', 'folio_number', 'amc', 'scheme_name', 'isin', 'units', 'nav',
+      'current_value', 'invested_value', 'last_updated', 'source', 'scope'],
+    'scheme_name'],
+};
+
+const RECORD_TYPE_ALIASES = {
+  asset_accounts: 'account',
+  accounts: 'account',
+  account: 'account',
+  loans: 'loan',
+  loan: 'loan',
+  credit_cards: 'card',
+  cards: 'card',
+  card: 'card',
+  subscriptions: 'subscription',
+  recurring_items: 'subscription',
+  subscription: 'subscription',
+  sips: 'sip',
+  sip: 'sip',
+  goals: 'goal',
+  goal: 'goal',
+  custom_events: 'event',
+  events: 'event',
+  event: 'event',
+  mf_folios: 'mf_folio',
+  folios: 'mf_folio',
+  mf_folio: 'mf_folio',
 };
 
 let database = null;
@@ -1236,8 +1278,14 @@ function getTopMerchants(db, args) {
   return { merchants, months };
 }
 
+function resolveRecordType(args) {
+  const typeOrTable = args.record_type || args.table;
+  const canonical = RECORD_TYPE_ALIASES[typeOrTable] || typeOrTable;
+  return canonical ? RECORD_TYPES[canonical] : null;
+}
+
 function listRecords(db, args) {
-  const spec = RECORD_TYPES[args.record_type];
+  const spec = resolveRecordType(args);
   if (!spec) return fail('RECORD_TYPE_UNKNOWN', 'That kind of record does not exist.');
   const [table, , order] = spec;
   const [clause, params] = memberClause(args.member_id);
@@ -1245,10 +1293,65 @@ function listRecords(db, args) {
 }
 
 function saveRecord(db, args) {
-  const spec = RECORD_TYPES[args.record_type];
+  const spec = resolveRecordType(args);
   if (!spec) return fail('RECORD_TYPE_UNKNOWN', 'That kind of record does not exist.');
   const [table, columns] = spec;
-  const record = args.record || {};
+  const record = { ...(args.record || {}) };
+
+  // Field aliases for compatibility
+  if (record.principal !== undefined && record.principal_amount === undefined) {
+    record.principal_amount = record.principal;
+  }
+  if (record.credit_limit !== undefined && record.total_limit === undefined) {
+    record.total_limit = record.credit_limit;
+  }
+  if (record.due_day !== undefined && record.due_date === undefined) {
+    record.due_date = record.due_day;
+  }
+  if (record.fund_name !== undefined && record.scheme_name === undefined) {
+    record.scheme_name = record.fund_name;
+  }
+  if (record.purchase_cost !== undefined && record.invested_value === undefined) {
+    record.invested_value = record.purchase_cost;
+  }
+  if (record.cost_value !== undefined && record.invested_value === undefined) {
+    record.invested_value = record.cost_value;
+  }
+  if (record.amount !== undefined && record.cost === undefined && table === 'subscriptions') {
+    record.cost = record.amount;
+  }
+  if (record.amount !== undefined && record.monthly_amount === undefined && table === 'sips') {
+    record.monthly_amount = record.amount;
+  }
+  if (table === 'loans') {
+    if (record.principal_amount === undefined) {
+      record.principal_amount = record.principal ?? record.current_outstanding ?? 0;
+    }
+    if (record.current_outstanding === undefined) {
+      record.current_outstanding = record.principal_amount ?? 0;
+    }
+    if (record.interest_rate === undefined) {
+      record.interest_rate = 0;
+    }
+    if (record.monthly_emi === undefined) {
+      record.monthly_emi = 0;
+    }
+    if (!record.loan_type) {
+      record.loan_type = 'Personal';
+    }
+    if (!record.start_date) {
+      record.start_date = today();
+    }
+    if (!record.tenure_months) {
+      record.tenure_months = 12;
+    }
+  }
+  if (table === 'credit_cards' && !record.bank) {
+    record.bank = record.card_name || 'Bank';
+  }
+  if (table === 'subscriptions' && !record.next_billing_date) {
+    record.next_billing_date = today();
+  }
 
   const fields = columns.filter((column) => column in record);
   if (!fields.length) return fail('RECORD_EMPTY', 'Nothing in that record could be saved.');
@@ -1287,15 +1390,16 @@ function saveRecord(db, args) {
 }
 
 function deleteRecord(db, args) {
-  const spec = RECORD_TYPES[args.record_type];
+  const spec = resolveRecordType(args);
   if (!spec) return fail('RECORD_TYPE_UNKNOWN', 'That kind of record does not exist.');
   db.run(`DELETE FROM ${spec[0]} WHERE id = ?`, [args.record_id]);
 
   // The price history describes a plan. With the plan gone it describes nothing, and the
   // ids are AUTOINCREMENT so nothing will ever adopt it either.
-  if (args.record_type === 'sip' || args.record_type === 'subscription') {
+  const canonicalType = RECORD_TYPE_ALIASES[args.record_type || args.table] || args.record_type;
+  if (canonicalType === 'sip' || canonicalType === 'subscription') {
     db.run('DELETE FROM price_changes WHERE kind = ? AND record_id = ?',
-      [args.record_type, args.record_id]);
+      [canonicalType, args.record_id]);
   }
   return {};
 }
@@ -1625,7 +1729,7 @@ function getFamilyMembers(db) {
 }
 
 function addFamilyMember(db, args) {
-  const member = args.member || {};
+  const member = args.member || (args.name ? args : {});
   if (!String(member.name ?? '').trim()) {
     return fail('NAME_REQUIRED', 'Give the member a name.');
   }
@@ -1824,7 +1928,7 @@ function getTransactions(db, args) {
  *
  * Returns how many rows moved, which is the only interesting thing to tell the user.
  */
-export function learnMerchant(db, merchant, category, transactionType = '') {
+export function learnMerchant(db, merchant, category, transactionType = '', isInvestOutflow = false) {
   const key = merchantKey(merchant);
   if (!key || !category) return { merchant_key: '', applied: 0 };
 
@@ -1851,7 +1955,8 @@ export function learnMerchant(db, merchant, category, transactionType = '') {
   const applied = db.all('SELECT id FROM transactions WHERE merchant_key = ?', [key]).length;
   db.run('UPDATE transactions SET category = ? WHERE merchant_key = ?', [category, key]);
   if (transactionType) {
-    db.run('UPDATE transactions SET type = ? WHERE merchant_key = ?', [transactionType, key]);
+    const isInvest = isInvestOutflow || transactionType === 'Investment' || category === 'Investment Outflow' ? 1 : 0;
+    db.run('UPDATE transactions SET type = ?, is_investment_outflow = ? WHERE merchant_key = ?', [transactionType, isInvest, key]);
   }
   db.run('UPDATE merchant_rules SET hits = ? WHERE merchant_key = ?', [applied, key]);
   return { merchant_key: key, applied };
@@ -1863,6 +1968,7 @@ function saveTransaction(db, args) {
   if (!(amount > 0)) return fail('AMOUNT_INVALID', 'Enter an amount greater than zero.');
 
   const merchant = String(transaction.merchant ?? '').trim();
+  const isInvest = transaction.is_investment_outflow || transaction.type === 'Investment' || transaction.category === 'Investment Outflow' ? 1 : 0;
   const values = [
     resolveMemberId(db, transaction.member_id),
     transaction.account_id ?? null,
@@ -1872,9 +1978,8 @@ function saveTransaction(db, args) {
     transaction.type ?? 'Expense',
     transaction.category ?? 'Groceries',
     merchant,
-    merchantKey(merchant),
     transaction.description ?? '',
-    transaction.is_investment_outflow ? 1 : 0,
+    isInvest,
     transaction.raw_sms ?? '',
   ];
 
@@ -1882,7 +1987,7 @@ function saveTransaction(db, args) {
   if (transactionId) {
     db.run(
       'UPDATE transactions SET member_id = ?, account_id = ?, date = ?, amount = ?,'
-      + ' currency = ?, type = ?, category = ?, merchant = ?, merchant_key = ?,'
+      + ' currency = ?, type = ?, category = ?, merchant = ?,'
       + ' description = ?, is_investment_outflow = ?, raw_sms = ? WHERE id = ?',
       [...values, transactionId],
     );
@@ -1891,8 +1996,8 @@ function saveTransaction(db, args) {
   } else {
     const result = db.run(
       'INSERT INTO transactions (member_id, account_id, date, amount, currency, type,'
-      + ' category, merchant, merchant_key, description, is_investment_outflow, raw_sms,'
-      + ' created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      + ' category, merchant, description, is_investment_outflow, raw_sms,'
+      + ' created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [...values, new Date().toISOString()],
     );
     transactionId = result.lastInsertRowid;
@@ -1902,7 +2007,7 @@ function saveTransaction(db, args) {
   // the caller actually said one, so the 'Groceries' default above never becomes a rule.
   let learned = { merchant_key: merchantKey(merchant), applied: 0 };
   if (merchant && transaction.category) {
-    learned = learnMerchant(db, merchant, transaction.category, transaction.type ?? '');
+    learned = learnMerchant(db, merchant, transaction.category, transaction.type ?? '', isInvest);
   }
 
   for (const split of transaction.splits || []) {
@@ -2128,6 +2233,27 @@ const ACTIONS = {
   get_series: getSeries,
   get_breakdown: getBreakdown,
   get_period_summary: getPeriodSummary,
+  get_spending_anomalies: getSpendingAnomalies,
+  get_safe_to_spend: calculateSafeToSpend,
+  get_cashflow_runway: getCashflowRunway,
+  get_salary_checklist: getSalaryChecklist,
+  get_weekend_spend_analysis: getWeekendVsWeekdayAnalysis,
+  get_tax_harvesting: calculateTaxHarvesting,
+  get_portfolio_rebalance: calculatePortfolioRebalance,
+  get_passive_yield: calculatePassiveYield,
+  get_direct_vs_regular_drag: (db, args) => calculateDirectVsRegularDrag(args.monthly_sip, args.lumpsum, args.expected_cagr, args.years),
+  get_fd_ladder: calculateFdLadder,
+  get_sgb_schedule: calculateSgbSchedule,
+  get_real_return: (db, args) => calculateRealReturn(args.nominal_return, args.inflation_rate),
+  get_debt_roadmap: calculateDebtPayoffRoadmap,
+  get_home_loan_part_payment: (db, args) => calculateHomeLoanPartPayment(args.principal, args.annual_rate, args.tenure_years, args.extra_emis_per_year, args.annual_step_up_pct),
+  get_credit_card_optimizer: getCreditCardOptimizer,
+  get_dti_ratio: calculateDtiRatio,
+  get_no_spend_days: calculateNoSpendDays,
+  get_monthly_wrapped: getMonthlyFinanceWrapped,
+  get_life_goals: (db, args) => calculateLifeGoals(args.goals, args.expected_cagr),
+  evaluate_challenge: (db, args) => evaluateChallenge(db, args.challenge),
+  get_local_sync_payload: generateLocalSyncPayload,
   // The two catalogues, so a screen that offers the user a choice of chart offers exactly
   // the charts the backend can draw rather than a list somebody has to keep in step.
   get_chart_catalogue: () => ({

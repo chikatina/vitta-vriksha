@@ -114,6 +114,7 @@ function triggerMatches(trigger, text) {
  * many vendors it holds. Neither tier walks a list of rules per message.
  */
 const INCOME_CATEGORIES = new Set(['Salary', 'Freelance', 'Interest & Dividends', 'Refunds & Cashback']);
+const INVESTMENT_CATEGORIES = new Set(['Investment Outflow', 'Investment', 'Investments']);
 
 /*
  * Does this category belong on a row of this kind.
@@ -125,7 +126,9 @@ const INCOME_CATEGORIES = new Set(['Salary', 'Freelance', 'Interest & Dividends'
  */
 function categoryFits(category, type) {
   if (!category) return false;
-  return type === 'Income' ? INCOME_CATEGORIES.has(category) : !INCOME_CATEGORIES.has(category);
+  if (type === 'Income') return INCOME_CATEGORIES.has(category);
+  if (type === 'Investment') return INVESTMENT_CATEGORIES.has(category);
+  return !INCOME_CATEGORIES.has(category) && !INVESTMENT_CATEGORIES.has(category);
 }
 
 /** Whether what is known about the vendor may stand as this row's category. */
@@ -144,7 +147,10 @@ function knownCategory(db, key, merchant, text) {
     }
   }
   const found = categoryForMerchant(merchant, text);
-  return { category: found, type: '', source: found ? 'dictionary' : '' };
+  let type = '';
+  if (found === 'Investment Outflow') type = 'Investment';
+  else if (INCOME_CATEGORIES.has(found)) type = 'Income';
+  return { category: found, type, source: found ? 'dictionary' : '' };
 }
 
 /** Extracts note or remark or reference info from SMS text. */
@@ -172,6 +178,32 @@ export async function parseSmsText(text, sender = '') {
   const senderText = String(sender).toLowerCase();
   const dateFromSms = extractDate(text) || today();
   const descriptionFromSms = extractDescription(text);
+
+  // User-defined Ignore rules take top priority over built-in classifier
+  for (const rule of rules) {
+    if (rule.transaction_type !== 'Ignore') continue;
+    const trigger = String(rule.body_trigger || '').toLowerCase();
+    if (!trigger || !triggerMatches(trigger, lower)) continue;
+    const wants = String(rule.sender_keyword || '').toLowerCase();
+    if (wants && senderText && !senderText.includes(wants)) continue;
+
+    return {
+      status: 'classified',
+      matched_rule: rule.rule_name,
+      not_a_transaction: 'ignored-rule',
+      amount: 0,
+      type: 'Ignore',
+      category: 'Ignore',
+      category_source: 'rule',
+      merchant: merchant || '',
+      merchant_key: key,
+      account_last4: accountMatch ? accountMatch[1] : '',
+      sender,
+      description: descriptionFromSms,
+      raw_sms: text,
+      date: dateFromSms,
+    };
+  }
 
   const notMoney = notATransaction(text);
 
@@ -223,6 +255,7 @@ export async function parseSmsText(text, sender = '') {
   }
 
   for (const rule of rules) {
+    if (rule.transaction_type === 'Ignore') continue;
     const trigger = String(rule.body_trigger || '').toLowerCase();
     if (!trigger || !triggerMatches(trigger, lower)) continue;
     // A rule that names a bank belongs to that bank. An empty keyword means the wording
@@ -253,13 +286,15 @@ export async function parseSmsText(text, sender = '') {
 
     // A rule names the bank's wording. What was actually bought is the vendor's business,
     // so anything known about the vendor outranks the rule's standing guess.
+    const resolvedType = known.type || (known.category === 'Investment Outflow' ? 'Investment' : rule.transaction_type);
+    const resolvedCategory = usable(known, resolvedType) ? known.category : rule.category_name;
     return {
       status: 'classified',
       matched_rule: rule.rule_name,
       amount: match ? toAmount(match[1]) : 0,
-      type: known.type || rule.transaction_type,
-      category: usable(known, known.type || rule.transaction_type) ? known.category : rule.category_name,
-      category_source: usable(known, known.type || rule.transaction_type) ? known.source : 'rule',
+      type: resolvedType,
+      category: resolvedCategory,
+      category_source: usable(known, resolvedType) ? known.source : 'rule',
       merchant,
       merchant_key: key,
       account_last4: accountMatch ? accountMatch[1] : '',
@@ -273,13 +308,14 @@ export async function parseSmsText(text, sender = '') {
   const fallback = FALLBACK_AMOUNT_RE.exec(text);
   const isCredit = lower.includes('credited') || lower.includes('received') || lower.includes('deposited');
   const guess = isCredit ? 'Salary' : 'Shopping';
+  const defaultType = known.type || (known.category === 'Investment Outflow' ? 'Investment' : (isCredit ? 'Income' : 'Expense'));
 
   return {
     status: 'classified',
     matched_rule: 'Default Classifier',
     amount: fallback ? toAmount(fallback[1]) : 0,
-    type: known.type || (isCredit ? 'Income' : 'Expense'),
-    category: usable(known, known.type || (isCredit ? 'Income' : 'Expense')) ? known.category : guess,
+    type: defaultType,
+    category: usable(known, defaultType) ? known.category : guess,
     category_source: known.source || 'guess',
     merchant,
     merchant_key: key,
@@ -429,10 +465,11 @@ async function reimportInbox(db, args) {
 
   db.transaction(() => {
     for (const { body, classified, receivedAt } of rows) {
+      const isInvest = classified.type === 'Investment' || classified.category === 'Investment Outflow' ? 1 : 0;
       db.run(
         'INSERT INTO transactions (member_id, date, amount, currency, type, category,'
         + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, created_at)'
-        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)',
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           memberId,
           isoFromMillis(receivedAt) || classified.date,
@@ -443,6 +480,7 @@ async function reimportInbox(db, args) {
           classified.merchant,
           classified.merchant_key ?? '',
           classified.description || '',
+          isInvest,
           body,
           new Date().toISOString(),
         ],
@@ -681,13 +719,14 @@ async function classifyAlert(db, args) {
   const twin = duplicateOf(db, { date: args.date || today(), amount, body });
   let learned = { merchant_key: '', applied: 0 };
 
+  const isInvest = type === 'Investment' || category === 'Investment Outflow' ? 1 : 0;
   db.transaction(() => {
     db.run(
       'INSERT INTO transactions (member_id, date, amount, currency, type, category,'
       + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, created_at)'
-      + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)',
+      + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [memberId, args.date || today(), amount, currency, type, category, merchant,
-        merchantKey(merchant), description, body, new Date().toISOString()],
+        merchantKey(merchant), description, isInvest, body, new Date().toISOString()],
     );
     if (merchant) learned = learnMerchant(db, merchant, category, type);
   });
