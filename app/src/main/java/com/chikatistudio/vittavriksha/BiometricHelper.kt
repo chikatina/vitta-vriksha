@@ -1,4 +1,4 @@
-package org.chikatistudio.vittavriksha
+package com.chikatistudio.vittavriksha
 
 import androidx.appcompat.app.AppCompatActivity
 import androidx.biometric.BiometricManager

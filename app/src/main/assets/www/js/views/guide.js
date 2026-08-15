@@ -7,6 +7,7 @@
  */
 
 import { icon, h } from '../ui.js';
+import { Bridge } from '../bridge.js';
 
 const SECTIONS = [
   {
@@ -265,15 +266,34 @@ export async function renderGuide(container, app) {
     <div class="card">
       <div class="card-title">Still have questions?</div>
       <p class="caption" style="margin-bottom:var(--gap-3)">
-        If you have questions that aren't answered here or run into any problems, we're here to help.
+        If you have questions that aren't answered here or run into any problems, our team is ready to assist you.
       </p>
-      <button type="button" class="btn btn-filled btn-block" data-open-support>
-        ${icon('support_agent')}Contact Support (help@chikatistudio.com)
-      </button>
+      <div class="row" style="gap:8px;flex-wrap:wrap">
+        <button type="button" class="btn btn-filled" data-open-email style="flex:1;min-width:180px">
+          ${icon('mail')}Email Support
+        </button>
+        <button type="button" class="btn btn-tonal" data-open-support-hub style="flex:1;min-width:140px">
+          ${icon('support_agent')}Help Hub
+        </button>
+      </div>
     </div>`;
 
-  const supportBtn = container.querySelector('[data-open-support]');
-  if (supportBtn && app?.openPage) {
-    supportBtn.addEventListener('click', () => app.openPage('support'));
+  const emailBtn = container.querySelector('[data-open-email]');
+  if (emailBtn) {
+    emailBtn.addEventListener('click', () => {
+      Bridge.openEmail(
+        'help@chikatistudio.com',
+        '[Vitta Vriksha] Support Request',
+        'Hi Vitta Vriksha Support Team,\n\nI have a question regarding:\n\n---\nApp: Vitta Vriksha\n',
+      );
+    });
+  }
+
+  const supportHubBtn = container.querySelector('[data-open-support-hub]');
+  if (supportHubBtn) {
+    supportHubBtn.addEventListener('click', () => {
+      if (app?.open) app.open('support');
+      else if (app?.openPage) app.openPage('support');
+    });
   }
 }

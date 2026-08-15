@@ -20,7 +20,7 @@ export async function renderAbout(container, app) {
     <div class="card" style="text-align:center">
       <div class="lock-mark" style="margin:0 auto 16px">${brandMark()}</div>
       <div class="headline">Vitta Vriksha</div>
-      <div class="caption">Version 1.0.0</div>
+      <div class="caption">Version 1.0.3</div>
       <p class="caption" style="margin-top:12px">
         A personal finance tracker for Indian households that keeps everything on the device
         it runs on.

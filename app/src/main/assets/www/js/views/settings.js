@@ -157,6 +157,16 @@ export async function renderSettings(container, app) {
           ${icon('chevron_right', 'icon-sm')}
         </button>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Sample Data</div>
+      <p class="caption" style="margin-bottom:var(--gap-3)">
+        Populate realistic sample accounts, mutual funds, budgets and transactions for demonstration.
+      </p>
+      <button type="button" class="btn btn-tonal btn-block" data-seed-demo>
+        ${icon('auto_fix_high')}Load Sample Data
+      </button>
     </div>`;
 
   bindSelectFields(container);
@@ -164,6 +174,18 @@ export async function renderSettings(container, app) {
   bindMoney(container, app);
   bindToggles(container, app);
   bindReimport(container, app);
+
+  const seedBtn = container.querySelector('[data-seed-demo]');
+  if (seedBtn) {
+    seedBtn.addEventListener('click', async () => {
+      seedBtn.disabled = true;
+      if (window.seedDemoData) {
+        await window.seedDemoData();
+      }
+      seedBtn.disabled = false;
+      if (app?.refresh) await app.refresh();
+    });
+  }
 
   container.querySelectorAll('[data-open]').forEach((row) => {
     row.addEventListener('click', () => app.open(row.dataset.open));

@@ -3,7 +3,7 @@ import {
   icon, h, toast, sheet, confirmDialog, promptDialog, selectField, bindSelectFields,
 } from '../ui.js';
 
-function permissionRow(key, glyph, title, body, granted) {
+function permissionRow(key, glyph, title, body, granted, extraAction = null) {
   const blocked = !granted && Bridge.permissionIsBlocked(key);
 
   return `
@@ -16,9 +16,9 @@ function permissionRow(key, glyph, title, body, granted) {
         <span class="caption">${h(body)}</span>
         ${blocked ? '<span class="caption" style="color:var(--warning)">Blocked, change it in system settings</span>' : ''}
       </span>
-      ${granted
+      ${extraAction || (granted
     ? `<span class="badge badge-income">${icon('check', 'icon-sm')}On</span>`
-    : `<button class="btn btn-sm btn-tonal" data-permission="${key}">${blocked ? 'Settings' : 'Allow'}</button>`}
+    : `<button class="btn btn-sm btn-tonal" data-permission="${key}">${blocked ? 'Settings' : 'Allow'}</button>`)}
     </div>`;
 }
 
@@ -38,7 +38,12 @@ export async function renderSecurity(container, app) {
   const bioEnabled = localStorage.getItem('biometric_enabled') === '1' && Boolean(localStorage.getItem('bio_vault_pin'));
   const currentTimeout = localStorage.getItem('app_lock_timeout_ms') || app.settings?.app_lock_timeout_ms || '120000';
   const smsGranted = Bridge.checkPermission('SMS');
+  const smsTrackingActive = smsGranted && Bridge.isSmsTrackingEnabled();
   const notificationsGranted = Bridge.checkPermission('NOTIFICATIONS');
+
+  const smsActionHtml = smsGranted
+    ? `<button class="btn btn-sm ${smsTrackingActive ? 'btn-filled' : 'btn-outlined'}" data-toggle-sms-sec>${smsTrackingActive ? `${icon('check', 'icon-sm')}Active` : 'Paused'}</button>`
+    : null;
 
   container.innerHTML = `
     <div class="card">
@@ -85,16 +90,17 @@ export async function renderSecurity(container, app) {
     </div>
 
     <div class="card">
-      <div class="card-title">Permissions</div>
+      <div class="card-title">Permissions & Privacy</div>
 
-      ${permissionRow('SMS', 'sms', 'Bank SMS',
-    'Auto-parse transactions from bank alerts', smsGranted)}
+      ${permissionRow('SMS', 'sms', 'Bank SMS Tracking',
+    smsTrackingActive ? 'Auto-parsing transactions from bank alerts' : (smsGranted ? 'Tracking is paused (messages ignored)' : 'Auto-parse transactions from bank alerts'),
+    smsGranted, smsActionHtml)}
       ${permissionRow('NOTIFICATIONS', 'notifications', 'Notifications',
     'Reminders for SIPs, EMIs and renewals', notificationsGranted)}
 
       ${smsGranted ? `
         <button class="btn btn-tonal btn-block" data-rules style="margin-top:12px">
-          ${icon('rule')}SMS rules
+          ${icon('rule')}SMS rules & history
         </button>` : ''}
     </div>
 
@@ -173,6 +179,16 @@ export async function renderSecurity(container, app) {
       app.refresh();
     });
   });
+
+  const toggleSmsSec = container.querySelector('[data-toggle-sms-sec]');
+  if (toggleSmsSec) {
+    toggleSmsSec.addEventListener('click', () => {
+      const newState = !smsTrackingActive;
+      Bridge.setSmsTrackingEnabled(newState);
+      toast(newState ? 'Bank SMS tracking enabled' : 'Bank SMS tracking paused');
+      app.refresh();
+    });
+  }
 
   const rulesButton = container.querySelector('[data-rules]');
   if (rulesButton) rulesButton.addEventListener('click', () => app.open('rules'));

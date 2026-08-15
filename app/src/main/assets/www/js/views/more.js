@@ -5,7 +5,9 @@ import { icon } from '../ui.js';
 import { navRow, bindNavRows } from './shared.js';
 
 export async function renderMore(container, app) {
-  const smsOn = Bridge.checkPermission('SMS');
+  const smsGranted = Bridge.checkPermission('SMS');
+  const smsOn = smsGranted && Bridge.isSmsTrackingEnabled();
+  const smsSub = smsOn ? 'Active' : (smsGranted ? 'Paused' : 'Off');
 
   container.innerHTML = `
     <div class="card-accent">
@@ -36,8 +38,8 @@ export async function renderMore(container, app) {
         ${navRow('backup', 'backup', 'Backup & Restore', 'Encrypted database backup')}
         ${app.familyEnabled ? navRow('family', 'group', 'Household', 'Family member profiles') : ''}
         ${navRow('rules', 'sms', 'Bank SMS tracking',
-          smsOn ? 'Active' : 'Off',
-          smsOn ? '' : 'Set up')}
+          smsSub,
+          smsGranted ? '' : 'Set up')}
         ${navRow('delete-data', 'delete_forever', 'Delete data', 'Erase specific records or reset app')}
       </div>
     </div>

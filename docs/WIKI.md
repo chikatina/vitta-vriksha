@@ -30,7 +30,7 @@ app/src/main/
       brand-mark.js            generated, do not edit
       views/                   one module per screen
       views/widgets.js         dashboard widget catalogue
-  java/org/chikatistudio/vittavriksha/
+  java/com/chikatistudio/vittavriksha/
     MainActivity.kt            WebView setup, asset loader, insets
     WebAppInterface.kt         the @JavascriptInterface surface
     BiometricHelper.kt

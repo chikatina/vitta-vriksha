@@ -1,4 +1,4 @@
-appId: org.chikatistudio.vittavriksha
+appId: com.chikatistudio.vittavriksha.debug
 ---
 # Master Flow: Complete E2E Suite Executing All Flows
 - runFlow: 01_app_launch_and_home.yaml
@@ -7,4 +7,5 @@ appId: org.chikatistudio.vittavriksha
 - runFlow: 04_wealth_pages.yaml
 - runFlow: 05_more_pages.yaml
 - runFlow: 06_sticky_headers.yaml
+- runFlow: 07_store_screenshots.yaml
 

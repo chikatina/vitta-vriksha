@@ -1,4 +1,4 @@
-package org.chikatistudio.vittavriksha
+package com.chikatistudio.vittavriksha
 
 import android.Manifest
 import android.app.AlarmManager
@@ -293,22 +293,33 @@ class WebAppInterface(private val mContext: Context, private val webView: WebVie
 
     // ------------------------------------------------------------- bank alerts
 
+    @JavascriptInterface
+    fun isSmsTrackingEnabled(): Boolean = AlertQueue(mContext).isSmsTrackingEnabled()
+
+    @JavascriptInterface
+    fun setSmsTrackingEnabled(enabled: Boolean) {
+        AlertQueue(mContext).setSmsTrackingEnabled(enabled)
+    }
+
     /**
-     * Bank alerts caught while the app was closed.
+     * Bank alerts caught by the broadcast receiver while the app was closed.
      *
-     * A broadcast receiver has no WebView to classify a message in, so it queues the text
+     * The receiver cannot reach the database or the JS engine, so it writes to a queue
      * and the app drains the queue on the way in. Returns a JSON array and empties the
      * queue, so nothing is classified twice.
      */
     @JavascriptInterface
-    fun takePendingAlerts(): String = AlertQueue(mContext).drain()
+    fun takePendingAlerts(): String {
+        if (!AlertQueue(mContext).isSmsTrackingEnabled()) return "[]"
+        return AlertQueue(mContext).drain()
+    }
 
     /**
      * The bank alerts already in the inbox. Pass days > 0 for a specific window, or 0 / -1 to scan all history.
      */
     @JavascriptInterface
     fun readSmsInbox(days: Int): String {
-        if (!checkPermission("SMS")) return "[]"
+        if (!checkPermission("SMS") || !AlertQueue(mContext).isSmsTrackingEnabled()) return "[]"
 
         val hasLimit = days in 1..36500
         val selection = if (hasLimit) "${Telephony.Sms.DATE} >= ?" else null

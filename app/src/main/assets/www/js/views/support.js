@@ -138,12 +138,18 @@ export async function renderSupport(container, app) {
 
     const openFaqBtn = container.querySelector('[data-open-faq]');
     if (openFaqBtn) {
-      openFaqBtn.addEventListener('click', () => app.openPage('guide'));
+      openFaqBtn.addEventListener('click', () => {
+        if (app?.open) app.open('guide');
+        else if (app?.openPage) app.openPage('guide');
+      });
     }
 
     const openSecBtn = container.querySelector('[data-open-security]');
     if (openSecBtn) {
-      openSecBtn.addEventListener('click', () => app.openPage('security'));
+      openSecBtn.addEventListener('click', () => {
+        if (app?.open) app.open('security');
+        else if (app?.openPage) app.openPage('security');
+      });
     }
   };
 

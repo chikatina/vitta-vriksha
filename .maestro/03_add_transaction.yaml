@@ -1,4 +1,4 @@
-appId: org.chikatistudio.vittavriksha
+appId: com.chikatistudio.vittavriksha.debug
 ---
 # Flow 03: Add Transaction (Expense & Income) & Edit/Delete
 - launchApp:

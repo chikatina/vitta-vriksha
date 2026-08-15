@@ -1,4 +1,4 @@
-package org.chikatistudio.vittavriksha
+package com.chikatistudio.vittavriksha
 
 import android.app.NotificationChannel
 import android.app.NotificationManager

@@ -1,4 +1,4 @@
-package org.chikatistudio.vittavriksha
+package com.chikatistudio.vittavriksha
 
 import android.annotation.SuppressLint
 import android.app.Activity
@@ -98,24 +98,34 @@ class MainActivity : AppCompatActivity() {
         setContentView(webView)
 
         // The web layer paints edge to edge and does its own insetting, so hand it the
-        // system bar sizes as CSS custom properties instead of padding the WebView.
+        // system bar sizes and software keyboard (IME) insets as CSS custom properties.
         ViewCompat.setOnApplyWindowInsetsListener(webView) { view, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val sysBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             val density = resources.displayMetrics.density
-            val top = (bars.top / density).toInt()
-            val bottom = (bars.bottom / density).toInt()
+            val top = (sysBars.top / density).toInt()
+            val sysBottom = (sysBars.bottom / density).toInt()
+            val imeBottom = (ime.bottom / density).toInt()
+            val isImeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
 
-            // The first insets arrive before the page has parsed, when there is no
-            // document element to set a property on. Guarding here rather than waiting
-            // for load: insets change again on rotation and on the keyboard opening, and
-            // those are the ones that matter.
+            // Update CSS custom properties for system bars, software keyboard, and keyboard-open state.
             view.post {
                 webView.evaluateJavascript(
                     """
-                    if (document.documentElement) {
-                      document.documentElement.style.setProperty('--inset-top', '${top}px');
-                      document.documentElement.style.setProperty('--inset-bottom', '${bottom}px');
-                    }
+                    (function() {
+                      var doc = document.documentElement;
+                      if (!doc) return;
+                      doc.style.setProperty('--inset-top', '${top}px');
+                      doc.style.setProperty('--inset-bottom', '${sysBottom}px');
+                      doc.style.setProperty('--keyboard-inset', '${imeBottom}px');
+                      if (${isImeVisible || imeBottom > 0}) {
+                        doc.classList.add('keyboard-open');
+                        window.dispatchEvent(new CustomEvent('keyboardshow', { detail: { height: $imeBottom } }));
+                      } else {
+                        doc.classList.remove('keyboard-open');
+                        window.dispatchEvent(new CustomEvent('keyboardhide'));
+                      }
+                    })();
                     """.trimIndent(),
                     null,
                 )

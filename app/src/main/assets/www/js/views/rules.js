@@ -30,6 +30,7 @@ let activeTab = 'messages';
 
 export async function renderRules(container, app) {
   const granted = Bridge.checkPermission('SMS');
+  const smsTrackingActive = granted && Bridge.isSmsTrackingEnabled();
 
   const [ruleRes, categoryRes, reviewRes] = await Promise.all([
     Bridge.call('sms', { action: 'get_rules' }),
@@ -57,7 +58,22 @@ export async function renderRules(container, app) {
 
     <!-- MESSAGES TAB CONTENT -->
     <div data-tab-content="messages" style="display: ${activeTab === 'messages' ? 'block' : 'none'}">
-      ${granted ? '' : `
+      ${granted ? `
+        <div class="card">
+          <div class="row-between">
+            <div style="flex:1;padding-right:12px">
+              <div class="card-title" style="margin-bottom:2px">Bank SMS Tracking</div>
+              <p class="caption" style="margin-bottom:0">
+                ${smsTrackingActive
+    ? 'Active · Automatically parsing incoming bank transaction alerts locally.'
+    : 'Paused · SMS parsing is turned off and incoming messages are ignored.'}
+              </p>
+            </div>
+            <button class="btn btn-sm ${smsTrackingActive ? 'btn-filled' : 'btn-outlined'}" data-toggle-sms>
+              ${smsTrackingActive ? `${icon('check', 'icon-sm')}Active` : 'Paused'}
+            </button>
+          </div>
+        </div>` : `
         <div class="card">
           <div class="row" style="gap:12px;align-items:flex-start;margin-bottom:14px">
             <span class="avatar" style="background:var(--warning-container);color:var(--warning)">
@@ -75,7 +91,7 @@ export async function renderRules(container, app) {
           </button>
         </div>`}
 
-      ${granted ? `
+      ${granted && smsTrackingActive ? `
         <div class="card">
           <div class="card-title">Sync SMS</div>
           <p class="caption" style="margin-bottom:14px">
@@ -204,6 +220,16 @@ export async function renderRules(container, app) {
     });
   });
 
+  const toggleSmsButton = container.querySelector('[data-toggle-sms]');
+  if (toggleSmsButton) {
+    toggleSmsButton.addEventListener('click', () => {
+      const newState = !smsTrackingActive;
+      Bridge.setSmsTrackingEnabled(newState);
+      toast(newState ? 'Bank SMS tracking is active.' : 'Bank SMS tracking is paused.', 'info');
+      app.refresh();
+    });
+  }
+
   const allowButton = container.querySelector('[data-allow]');
   if (allowButton) {
     allowButton.addEventListener('click', async () => {
@@ -213,7 +239,10 @@ export async function renderRules(container, app) {
       }
       allowButton.disabled = true;
       const okay = await Bridge.requestPermission('SMS');
-      if (okay) toast('Bank SMS tracking is on.', 'success');
+      if (okay) {
+        Bridge.setSmsTrackingEnabled(true);
+        toast('Bank SMS tracking is on.', 'success');
+      }
       app.refresh();
     });
   }

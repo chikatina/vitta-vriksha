@@ -1,4 +1,4 @@
-appId: org.chikatistudio.vittavriksha
+appId: com.chikatistudio.vittavriksha.debug
 ---
 # Flow 02: Navigation Tabs (Home, Ledger, Budgets, Wealth, More)
 - launchApp:

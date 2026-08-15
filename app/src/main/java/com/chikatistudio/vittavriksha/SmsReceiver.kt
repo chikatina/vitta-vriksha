@@ -1,4 +1,4 @@
-package org.chikatistudio.vittavriksha
+package com.chikatistudio.vittavriksha
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -20,6 +20,7 @@ class SmsReceiver : BroadcastReceiver() {
         if (context == null || intent?.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
 
         val queue = AlertQueue(context)
+        if (!queue.isSmsTrackingEnabled()) return
         var queued = 0
 
         for (message in Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return) {

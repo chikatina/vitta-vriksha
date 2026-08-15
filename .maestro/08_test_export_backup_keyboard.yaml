@@ -1,0 +1,82 @@
+appId: com.chikatistudio.vittavriksha.debug
+---
+# Flow 08: Test Export Backup Sheet & Keyboard Input Panel Visibility
+- launchApp:
+    clearState: false
+
+- extendedWaitUntil:
+    visible: "Vitta Vriksha"
+    timeout: 10000
+
+# Handle Lock Screen (if locked with PIN 1234)
+- runFlow:
+    when:
+      visible: "Enter your PIN to continue"
+    commands:
+      - tapOn: "1"
+      - tapOn: "2"
+      - tapOn: "3"
+      - tapOn: "4"
+
+- runFlow:
+    when:
+      visible: "Confirm fingerprint or enter PIN"
+    commands:
+      - tapOn: "1"
+      - tapOn: "2"
+      - tapOn: "3"
+      - tapOn: "4"
+
+# Wait for Main Dashboard
+- extendedWaitUntil:
+    visible: "WEALTH & NET WORTH"
+    timeout: 10000
+
+# Navigate to More -> Backup & Restore
+- tapOn: "More"
+- extendedWaitUntil:
+    visible: ".*Backup & Restore.*"
+    timeout: 5000
+- tapOn: ".*Backup & Restore.*"
+
+# Verify Backup page loaded
+- extendedWaitUntil:
+    visible: ".*Encrypted Backup.*"
+    timeout: 5000
+
+# Tap on Export backup to trigger the sheet
+- tapOn: "Export backup"
+
+# Verify the password input panel & action buttons are completely visible
+- extendedWaitUntil:
+    visible: "Encrypt this backup"
+    timeout: 5000
+
+- extendedWaitUntil:
+    visible: "Password"
+    timeout: 5000
+
+- extendedWaitUntil:
+    visible: "Export"
+    timeout: 5000
+
+- extendedWaitUntil:
+    visible: "Cancel"
+    timeout: 5000
+
+# Tap inside the password input to open soft keyboard
+- tapOn:
+    id: "backupPassword"
+
+# Type test password
+- inputText: "SecretPass123"
+
+# Take screenshot to verify input and buttons are fully visible above keyboard
+- takeScreenshot: screenshots/09_export_backup_keyboard_visible
+
+# Dismiss sheet via Cancel button to ensure it is clickable even with keyboard up
+- tapOn: "Cancel"
+
+- extendedWaitUntil:
+    visible: ".*Encrypted Backup.*"
+    timeout: 5000

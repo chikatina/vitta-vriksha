@@ -247,6 +247,11 @@ const RECORD_TYPES = {
     ['member_id', 'folio_number', 'amc', 'scheme_name', 'isin', 'units', 'nav',
       'current_value', 'invested_value', 'last_updated', 'source', 'scope'],
     'scheme_name'],
+  demat_holding: ['demat_holdings',
+    ['member_id', 'account_type', 'broker', 'dp_id', 'client_id', 'kind', 'isin',
+      'name', 'symbol', 'exchange', 'quantity', 'price', 'current_value',
+      'invested_value', 'last_updated'],
+    'symbol'],
 };
 
 const RECORD_TYPE_ALIASES = {
@@ -271,6 +276,11 @@ const RECORD_TYPE_ALIASES = {
   mf_folios: 'mf_folio',
   folios: 'mf_folio',
   mf_folio: 'mf_folio',
+  demat_holdings: 'demat_holding',
+  demat_holding: 'demat_holding',
+  demat: 'demat_holding',
+  holding: 'demat_holding',
+  holdings: 'demat_holding',
 };
 
 let database = null;
@@ -1279,7 +1289,7 @@ function getTopMerchants(db, args) {
 }
 
 function resolveRecordType(args) {
-  const typeOrTable = args.record_type || args.table;
+  const typeOrTable = args.record_type || args.type || args.table;
   const canonical = RECORD_TYPE_ALIASES[typeOrTable] || typeOrTable;
   return canonical ? RECORD_TYPES[canonical] : null;
 }
