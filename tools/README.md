@@ -82,3 +82,26 @@ python tools/generate-legacy-launcher-icons.py
 ```
 
 Needs a Chrome or Edge binary, which any machine set up for Android development has.
+
+## bump-version.ps1
+
+Bumps `versionCode` and `versionName` across `app/build.gradle` and `about.js`, with optional release compilation.
+
+```powershell
+# Auto-bump patch version (e.g. 1.0.3 -> 1.0.4, code 3 -> 4)
+.\tools\bump-version.ps1
+
+# Minor version bump and build signed release (.aab & .apk)
+.\tools\bump-version.ps1 -Type minor -Build
+
+# Explicit version code & name with build
+.\tools\bump-version.ps1 -VersionCode 5 -VersionName "1.1.0" -Build
+```
+
+## build-release.ps1
+
+Validates Node test suite, runs Gradle `bundleRelease` and `assembleRelease`, and copies versioned `.aab` & `.apk` to the `release/` directory.
+
+```powershell
+.\tools\build-release.ps1
+```

@@ -217,6 +217,25 @@ export function canScheduleExactAlarms() {
 
 /* ---------------------------------------------------------------- bank alerts */
 
+const SMS_OPT_OUT_KEY = 'vv.sms.tracking_enabled';
+
+/** Whether the user has opted in or opted out of SMS tracking. */
+export function isSmsTrackingEnabled() {
+  if (isAndroid() && bridge().isSmsTrackingEnabled) {
+    return bridge().isSmsTrackingEnabled();
+  }
+  return localStorage.getItem(SMS_OPT_OUT_KEY) !== '0';
+}
+
+export function setSmsTrackingEnabled(enabled) {
+  const boolVal = Boolean(enabled);
+  if (isAndroid() && bridge().setSmsTrackingEnabled) {
+    bridge().setSmsTrackingEnabled(boolVal);
+  }
+  localStorage.setItem(SMS_OPT_OUT_KEY, boolVal ? '1' : '0');
+  return boolVal;
+}
+
 /**
  * Bank alerts the shell caught while the app was closed.
  *
@@ -225,6 +244,7 @@ export function canScheduleExactAlarms() {
  * classified twice.
  */
 export function takePendingAlerts() {
+  if (!isSmsTrackingEnabled()) return [];
   if (!isAndroid() || !bridge().takePendingAlerts) return [];
   try {
     return JSON.parse(bridge().takePendingAlerts() || '[]');

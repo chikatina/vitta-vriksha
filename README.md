@@ -99,63 +99,75 @@ reachable and should not be.
 | `app/src/main/assets/www/js/ui.js` | Toasts, dialogs, sheets, menus |
 | `app/src/main/assets/www/css/style.css` | Design tokens and every component |
 | `app/src/main/assets/www/vendor/` | The four bundled dependencies, generated |
-| `test/` | Backend tests |
-| `tools/` | Generators: font subset, icon map, brand mark, launcher icons, vendored libraries, reference database |
+| `tests/` | Node unit and backend test suites |
+| `.maestro/` | Automated UI and store screenshot Maestro test flows |
+| `tools/` | Automation tools: version bumper, release builder, tablet screenshot orchestrator, font/icon subsetters |
+| `release/` | Production-ready signed `.aab` and `.apk` bundles |
 
-## Building
+## Building & Development
 
-You need a JDK 17 or newer and the Android SDK. Nothing else: no Python, no NDK, no
-native toolchain. Android Studio is not required, and its JDK is picked up automatically
-if you happen to have it.
+You need a JDK 17 or newer and the Android SDK. No Python, no NDK, and no native toolchains are required during build.
 
-Node 20 or newer runs the tests. Python runs the generators under `tools/`, which are
-only needed when the fonts, icons or reference data change.
+- **Node 20+**: Runs the 58+ unit tests and smoke tests.
+- **PowerShell / Bash**: Runs the build, versioning, and test runners.
 
-`scripts/dev` finds the toolchain, builds, installs over adb, launches the app and tails
-its logs. On Windows use `scripts\dev.cmd`, which runs the same script through the bash
-that ships with Git.
+### Quick Start Commands
 
+```powershell
+# Run backend and integration unit tests
+node --test tests/run-all.mjs
+
+# Bump version code and name (e.g., patch / minor / major)
+.\tools\bump-version.ps1 -Type patch
+
+# Build signed release App Bundle (.aab) and APK (.apk)
+.\tools\build-release.ps1
+
+# Or bump & build in a single step
+.\tools\bump-version.ps1 -Type minor -Build
 ```
-./scripts/dev doctor      check the toolchain and list attached devices
-./scripts/dev run         build, install, launch, follow the logs
-./scripts/dev install     build and install, nothing else
-./scripts/dev logs        follow this app's logs only
-./scripts/dev test        run the backend tests
-./scripts/dev web         serve the app in a browser, backend and all
+
+### Automation & Dev Scripts (`scripts/dev`)
+
+`scripts/dev` (or `scripts\dev.cmd` on Windows) finds the toolchain, builds, installs over adb, launches the app, and tails logs:
+
+```bash
+./scripts/dev doctor      # Check the toolchain and list attached devices
+./scripts/dev run         # Build, install, launch, and follow logs
+./scripts/dev install     # Build and install debug APK
+./scripts/dev logs        # Stream this app's logs only
+./scripts/dev test        # Run the backend test suite
+./scripts/dev web         # Serve the app in a desktop browser (with full local backend)
 ```
 
-`./scripts/dev` on its own lists everything. Arguments after a command go to Gradle, so
-`./scripts/dev build --offline` works. With more than one device attached, set
-`ANDROID_SERIAL`.
+### Automated UI & Store Screenshot Testing (Maestro)
 
-The underlying Gradle tasks are ordinary, if you would rather call them directly:
+Store screenshots and end-to-end user flows are automated using [Maestro](https://maestro.mobile.dev/):
 
-```
-./gradlew assembleDebug
-./gradlew installDebug
+```powershell
+# Run full tablet (7" & 10") screenshot capture pipeline
+.\tools\capture-tablet-screenshots.ps1
+
+# Run phone store showcase flow
+.\tools\run-pixel8-and-maestro.ps1 -Flow .maestro/07_store_screenshots.yaml
 ```
 
 ### Releases
 
-```
-./scripts/dev keystore    create a signing key, once
-./scripts/dev release     signed release APK
-./scripts/dev bundle      signed AAB for Play
+```powershell
+.\tools\bump-version.ps1 -Type patch -Build
 ```
 
-The key and its passwords live in `keystore.properties` and a `.jks` file, both
-gitignored. Without them a release build still assembles, it is just unsigned and will not
-install. Back the key up: losing it means you can never update the app on Play again.
+The output signed artifacts are automatically placed into the `release/` folder:
+- **`release/vittavriksha-v<version>-release.aab`**: Signed App Bundle for Google Play Console.
+- **`release/vittavriksha-v<version>-release.apk`**: Universal standalone release APK.
 
-### Working on the UI
+The signing key is configured via `keystore.properties` pointing to `release.jks`.
 
-The web layer needs no build step. `./scripts/dev web` serves
-`app/src/main/assets/www` and you get the real thing: the same backend, the same database
-engine, the same statement parser, with the database in `localStorage` instead of a file.
-There is no mock any more, because there is nothing left to mock. Biometrics, permissions,
-alarms and bank messages are the only parts that genuinely need a device.
+### Working on the Web UI
+
+The web layer needs no compilation step. `./scripts/dev web` serves `app/src/main/assets/www` with the complete database engine and statement parser running directly in the browser via `localStorage`.
 
 ## Licence
 
-MIT. See [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) for the projects this depends on and
-their licences.
+MIT. See [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) for third-party libraries and licences.

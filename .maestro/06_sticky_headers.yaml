@@ -1,4 +1,4 @@
-appId: org.chikatistudio.vittavriksha
+appId: com.chikatistudio.vittavriksha.debug
 ---
 # Flow 06: Verify Sticky Headers on Home, Ledger, and Wealth tabs
 - launchApp:

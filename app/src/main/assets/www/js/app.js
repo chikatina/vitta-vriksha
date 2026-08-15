@@ -32,6 +32,7 @@ import { renderSecurity } from './views/security.js';
 import { renderAbout } from './views/about.js';
 import { renderGuide } from './views/guide.js';
 import { renderSupport } from './views/support.js';
+import { seedDemoData } from './demo-seed.js';
 
 const TABS = [
   { id: 'home', label: 'Home', icon: 'dashboard', title: 'Home' },
@@ -103,6 +104,7 @@ class App {
     this.navBar = document.getElementById('navBar');
 
     window.app = this;
+    window.seedDemoData = () => seedDemoData(this);
     window.onSystemBackPressed = () => this.handleSystemBack();
     this.init();
   }
@@ -333,6 +335,10 @@ class App {
   open(page) {
     const config = PAGES[page];
     if (config) this.go(config.parent, page);
+  }
+
+  openPage(page) {
+    return this.open(page);
   }
 
   back() {

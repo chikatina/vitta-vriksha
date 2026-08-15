@@ -1,0 +1,67 @@
+appId: com.chikatistudio.vittavriksha.debug
+---
+# Robust unlock & onboarding handler for Vitta Vriksha E2E tests
+
+# 1. Step 1: Welcome / Get Started
+- runFlow:
+    when:
+      visible: "Get started"
+    commands:
+      - tapOn: "Get started"
+
+# 2. Step 2: Choose a PIN
+- runFlow:
+    when:
+      visible: "Choose a PIN"
+    commands:
+      - tapOn: "1"
+      - tapOn: "2"
+      - tapOn: "3"
+      - tapOn: "4"
+      - tapOn: "1"
+      - tapOn: "2"
+      - tapOn: "3"
+      - tapOn: "4"
+
+# 3. Step 2 (Repeat): Enter it once more
+- runFlow:
+    when:
+      visible: "Enter it once more"
+    commands:
+      - tapOn: "1"
+      - tapOn: "2"
+      - tapOn: "3"
+      - tapOn: "4"
+
+# 4. Step 3: Permissions
+- runFlow:
+    when:
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"
+
+# 5. Step 4: Household
+- runFlow:
+    when:
+      visible: "Finish"
+    commands:
+      - tapOn: "Finish"
+
+# 6. Lock screen
+- runFlow:
+    when:
+      visible: "Enter your PIN to continue"
+    commands:
+      - tapOn: "1"
+      - tapOn: "2"
+      - tapOn: "3"
+      - tapOn: "4"
+
+- runFlow:
+    when:
+      visible: "Confirm fingerprint or enter PIN"
+    commands:
+      - tapOn: "1"
+      - tapOn: "2"
+      - tapOn: "3"
+      - tapOn: "4"

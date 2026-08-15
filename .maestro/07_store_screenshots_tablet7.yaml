@@ -1,0 +1,147 @@
+appId: com.chikatistudio.vittavriksha.debug
+---
+# Flow 07 Tablet 7-inch: Play Store 7-inch Tablet Screenshots (16:9)
+- launchApp:
+    clearState: false
+
+- extendedWaitUntil:
+    visible: "Vitta Vriksha"
+    timeout: 10000
+
+# 1. Step 1: Welcome / Get Started (if fresh install)
+- runFlow:
+    when:
+      visible: "Get started"
+    commands:
+      - tapOn: "Get started"
+      - extendedWaitUntil:
+          visible: "Choose a PIN"
+          timeout: 5000
+
+# 2. Step 2: Choose a PIN (if onboarding)
+- runFlow:
+    when:
+      visible: "Choose a PIN"
+    commands:
+      - tapOn: "1"
+      - tapOn: "2"
+      - tapOn: "3"
+      - tapOn: "4"
+      - extendedWaitUntil:
+          visible: "Enter it once more"
+          timeout: 5000
+      - tapOn: "1"
+      - tapOn: "2"
+      - tapOn: "3"
+      - tapOn: "4"
+      - extendedWaitUntil:
+          visible: "Continue"
+          timeout: 5000
+      - tapOn: "Continue"
+      - extendedWaitUntil:
+          visible: "Finish"
+          timeout: 5000
+      - tapOn: "Finish"
+
+# 3. Handle Lock Screen (if locked with PIN 1234)
+- runFlow:
+    when:
+      visible: "Enter your PIN to continue"
+    commands:
+      - tapOn: "1"
+      - tapOn: "2"
+      - tapOn: "3"
+      - tapOn: "4"
+
+- runFlow:
+    when:
+      visible: "Confirm fingerprint or enter PIN"
+    commands:
+      - tapOn: "1"
+      - tapOn: "2"
+      - tapOn: "3"
+      - tapOn: "4"
+
+# 4. Wait for Main Dashboard
+- extendedWaitUntil:
+    visible: "WEALTH & NET WORTH"
+    timeout: 10000
+
+# 5. Seed Realistic Demonstration Data via Settings
+- tapOn: "More"
+- extendedWaitUntil:
+    visible: ".*Settings Theme.*"
+    timeout: 5000
+- tapOn: ".*Settings Theme.*"
+- scrollUntilVisible:
+    element: "Load Sample Data"
+    direction: DOWN
+- tapOn: "Load Sample Data"
+
+# 6. Capture Home Dashboard
+- tapOn: "Home"
+- extendedWaitUntil:
+    visible: "WEALTH & NET WORTH"
+    timeout: 5000
+- takeScreenshot: screenshots/tablet_7inch/01_home_networth
+
+# 7. Capture Ledger View
+- tapOn: "Ledger"
+- extendedWaitUntil:
+    visible: "Transactions"
+    timeout: 5000
+- takeScreenshot: screenshots/tablet_7inch/02_ledger_expenses
+
+# 8. Capture Budgets View
+- tapOn: "Budgets"
+- extendedWaitUntil:
+    visible: "Budgets"
+    timeout: 5000
+- takeScreenshot: screenshots/tablet_7inch/03_budgets_spending
+
+# 9. Capture Wealth Hub
+- tapOn: "Wealth"
+- extendedWaitUntil:
+    visible: "Wealth"
+    timeout: 5000
+- takeScreenshot: screenshots/tablet_7inch/04_wealth_portfolio
+
+# 10. Capture Investments Screen
+- tapOn: ".*Investments Portfolio.*"
+- extendedWaitUntil:
+    visible: ".*Total value.*"
+    timeout: 5000
+- takeScreenshot: screenshots/tablet_7inch/05_investments_portfolio
+
+# 11. Capture Loan Comparison Screen
+- tapOn: "Wealth"
+- extendedWaitUntil:
+    visible: ".*Loans Outstanding.*"
+    timeout: 5000
+- tapOn: ".*Loans Outstanding.*"
+- scrollUntilVisible:
+    element: "Run comparison"
+    direction: DOWN
+- tapOn: "Run comparison"
+- extendedWaitUntil:
+    visible: ".*Stay Invested.*"
+    timeout: 5000
+- takeScreenshot: screenshots/tablet_7inch/06_loan_comparison
+
+# 12. Capture Settings Theming Screen
+- tapOn: "More"
+- extendedWaitUntil:
+    visible: ".*Settings Theme.*"
+    timeout: 5000
+- tapOn: ".*Settings Theme.*"
+- extendedWaitUntil:
+    visible: "Theme"
+    timeout: 5000
+- takeScreenshot: screenshots/tablet_7inch/07_settings_theming
+
+# 13. Capture More Hub
+- tapOn: "More"
+- extendedWaitUntil:
+    visible: "Analytics"
+    timeout: 5000
+- takeScreenshot: screenshots/tablet_7inch/08_more_settings

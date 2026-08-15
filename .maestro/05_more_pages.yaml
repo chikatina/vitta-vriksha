@@ -1,4 +1,4 @@
-appId: org.chikatistudio.vittavriksha
+appId: com.chikatistudio.vittavriksha.debug
 ---
 # Flow 05: More Hub Sub-pages (Household, SMS Rules, Backup, Settings, Security, Guide, About)
 - launchApp:

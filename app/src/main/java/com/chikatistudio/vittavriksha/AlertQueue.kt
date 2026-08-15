@@ -1,4 +1,4 @@
-package org.chikatistudio.vittavriksha
+package com.chikatistudio.vittavriksha
 
 import android.content.Context
 import org.json.JSONArray
@@ -23,7 +23,19 @@ class AlertQueue(context: Context) {
 
     companion object {
         private const val KEY = "pending"
+        private const val KEY_ENABLED = "sms_tracking_enabled"
         private const val LIMIT = 200
+    }
+
+    fun isSmsTrackingEnabled(): Boolean {
+        return preferences.getBoolean(KEY_ENABLED, true)
+    }
+
+    fun setSmsTrackingEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_ENABLED, enabled).apply()
+        if (!enabled) {
+            preferences.edit().remove(KEY).apply()
+        }
     }
 
     /** Adds one message. */

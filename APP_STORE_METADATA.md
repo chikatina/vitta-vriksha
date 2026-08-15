@@ -2,6 +2,7 @@
 
 > 100% Offline-First, Private Personal Wealth, Portfolio & SMS Expense Tracker  
 > Official Website: [chikatistudio.com/vitta-vriksha](https://chikatistudio.com/vitta-vriksha/)  
+> Privacy Policy: [chikatistudio.com/vitta-vriksha/privacy.html](https://chikatistudio.com/vitta-vriksha/privacy.html)  
 > Interactive Web Assets & Mockups: [chikatistudio.com/vitta-vriksha/store-assets.html](https://chikatistudio.com/vitta-vriksha/store-assets.html)  
 > GitHub Repository: [github.com/chikatina/vitta-vriksha](https://github.com/chikatina/vitta-vriksha)
 

@@ -1,4 +1,4 @@
-appId: org.chikatistudio.vittavriksha
+appId: com.chikatistudio.vittavriksha.debug
 ---
 # Flow 01: Initial Setup / Unlock Flow & Home Navigation
 - launchApp:

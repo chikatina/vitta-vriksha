@@ -102,11 +102,94 @@ function openOverlay(buildNode) {
        */
       if (!node.hasAttribute('data-no-autofocus')) {
         const focusable = node.querySelector('input, textarea, select');
-        if (focusable) setTimeout(() => focusable.focus(), OVERLAY_MS);
+        if (focusable) {
+          setTimeout(() => {
+            focusable.focus();
+            setTimeout(() => {
+              try {
+                focusable.scrollIntoView({ block: 'center', behavior: 'smooth' });
+              } catch (_) {
+                focusable.scrollIntoView(false);
+              }
+            }, 100);
+          }, OVERLAY_MS);
+        }
       }
     });
   });
 }
+
+/**
+ * Keeps interactive input panels and focused form controls visible when the software keyboard appears.
+ * Integrates native Android IME callbacks with universal VisualViewport fallback.
+ */
+function setupKeyboardHandling() {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  if (typeof document.addEventListener !== 'function' || typeof window.addEventListener !== 'function') return;
+
+  // 1. Visual Viewport Listener (Universal Web fallback)
+  if (window.visualViewport) {
+    const handleViewportResize = () => {
+      const vv = window.visualViewport;
+      const diff = Math.max(0, window.innerHeight - Math.round(vv.height));
+      const doc = document.documentElement;
+      if (diff > 120) {
+        doc.style.setProperty('--keyboard-inset', `${diff}px`);
+        doc.classList.add('keyboard-open');
+      } else if (!doc.hasAttribute('data-native-keyboard')) {
+        doc.style.setProperty('--keyboard-inset', '0px');
+        doc.classList.remove('keyboard-open');
+      }
+    };
+
+    window.visualViewport.addEventListener('resize', handleViewportResize);
+    window.visualViewport.addEventListener('scroll', handleViewportResize);
+  }
+
+  // 2. Custom native events dispatched from MainActivity.kt
+  window.addEventListener('keyboardshow', (e) => {
+    const height = e.detail?.height || 0;
+    const doc = document.documentElement;
+    doc.setAttribute('data-native-keyboard', 'true');
+    doc.style.setProperty('--keyboard-inset', `${height}px`);
+    doc.classList.add('keyboard-open');
+
+    // Scroll active element into center of visible space above keyboard
+    const active = document.activeElement;
+    if (active && active.matches && active.matches('input, textarea, select')) {
+      setTimeout(() => {
+        try {
+          active.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        } catch (_) {
+          active.scrollIntoView(false);
+        }
+      }, 80);
+    }
+  });
+
+  window.addEventListener('keyboardhide', () => {
+    const doc = document.documentElement;
+    doc.removeAttribute('data-native-keyboard');
+    doc.style.setProperty('--keyboard-inset', '0px');
+    doc.classList.remove('keyboard-open');
+  });
+
+  // 3. Global focusin handler: ensure focused field is visible above keyboard
+  document.addEventListener('focusin', (e) => {
+    const target = e.target;
+    if (!target || !target.matches || !target.matches('input, textarea, select')) return;
+
+    setTimeout(() => {
+      try {
+        target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch (_) {
+        target.scrollIntoView(false);
+      }
+    }, 250);
+  });
+}
+
+setupKeyboardHandling();
 
 /**
  * A message with a single dismiss button. Resolves when it closes.
