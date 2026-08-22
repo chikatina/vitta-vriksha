@@ -1,10 +1,11 @@
-/* Wealth hub: allocation at a glance, then a way into each kind of holding. */
+/* Wealth hub: allocation, milestones (₹1L to ₹10Cr), upcoming timeline, and holding gateways. */
 
 import { Bridge } from '../bridge.js';
-import { h } from '../ui.js';
-import { formatCurrency } from '../formatters.js';
+import { icon, h } from '../ui.js';
+import { formatCurrency, formatRelativeDate } from '../formatters.js';
 import { donutChart } from '../charts.js';
 import { navRow, bindNavRows, memberChips, bindMemberChips } from './shared.js';
+import { getNetWorthMilestones } from '../backend/wealth_intel.js';
 
 const ALLOCATION_GROUPS = [
   { label: 'Cash and bank', keys: ['Cash', 'Bank'], color: '#3B82F6' },
@@ -16,8 +17,9 @@ const ALLOCATION_GROUPS = [
 ];
 
 export async function renderWealth(container, app) {
-  const [summaryRes, counts] = await Promise.all([
+  const [summaryRes, commitmentsRes, counts] = await Promise.all([
     Bridge.db('get_summary', { member_id: app.memberFilter }),
+    Bridge.db('project_commitments', { days: 30, member_id: app.memberFilter }),
     countRecords(app),
   ]);
 
@@ -34,6 +36,11 @@ export async function renderWealth(container, app) {
 
   const assets = Number(summaryRes.total_assets || 0);
   const liabilities = Number(summaryRes.total_liabilities || 0);
+  const netWorth = assets - liabilities;
+
+  const milestoneData = getNetWorthMilestones(netWorth);
+  const nextTarget = milestoneData.next_milestone;
+  const upcomingEvents = (commitmentsRes.timeline || []).slice(0, 5);
 
   const memberHtml = memberChips(app, summaryRes.family_members || []);
 
@@ -42,7 +49,7 @@ export async function renderWealth(container, app) {
 
     <div class="grid-2">
       <div class="stat">
-        <span class="caption">Assets</span>
+        <span class="caption">Total Assets</span>
         <span class="stat-value">${h(money(assets))}</span>
       </div>
       <div class="stat">
@@ -51,9 +58,56 @@ export async function renderWealth(container, app) {
       </div>
     </div>
 
+    <!-- Net Worth Growth Milestones (₹1L to ₹10Cr) -->
+    <div class="card" style="background:linear-gradient(180deg, var(--surface-container-low), var(--surface-container));border:1px solid var(--outline-variant)">
+      <div class="row-between" style="margin-bottom:8px">
+        <span class="overline" style="margin-bottom:0">Net Worth Milestones</span>
+        <span class="badge badge-income">${milestoneData.progress_to_next}% to ${nextTarget.label}</span>
+      </div>
+
+      <div class="row-between" style="align-items:baseline;margin-bottom:10px">
+        <div class="display" style="font-size:24px">${h(money(netWorth))}</div>
+        <span class="caption">${milestoneData.distance_to_next > 0 ? `${h(money(milestoneData.distance_to_next))} to ${nextTarget.label}` : 'Top tier achieved!'}</span>
+      </div>
+
+      <div class="progress" style="height:8px;margin-bottom:14px">
+        <div class="progress-bar" style="width:${milestoneData.progress_to_next}%"></div>
+      </div>
+
+      <div class="milestone-track">
+        ${milestoneData.milestones.map((m) => `
+          <div class="milestone-chip ${m.achieved ? 'achieved' : (m.isNext ? 'next' : '')}">
+            <span style="font-weight:700">${h(m.label)}</span>
+            <span style="font-size:10px">${m.achieved ? icon('check', 'icon-sm') : `${m.pct}%`}</span>
+          </div>`).join('')}
+      </div>
+    </div>
+
+    <!-- Upcoming 30-Day Commitments Timeline -->
+    ${upcomingEvents.length ? `
+      <div class="card">
+        <div class="row-between" style="margin-bottom:10px">
+          <span class="title">Upcoming Commitments</span>
+          <span class="caption">Next 30 days</span>
+        </div>
+        <div class="list">
+          ${upcomingEvents.map((event) => `
+            <div class="list-row">
+              <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface)">
+                ${icon(event.kind === 'sip' ? 'trending_up' : (event.kind === 'emi' ? 'account_balance' : 'credit_card'), 'icon-sm')}
+              </span>
+              <span class="list-row-main">
+                <span class="list-row-title">${h(event.name)}</span>
+                <span class="list-row-sub">${h(formatRelativeDate(event.date))} · ${h(event.kind.toUpperCase())}</span>
+              </span>
+              <span class="list-row-amount expense">-${h(money(event.amount))}</span>
+            </div>`).join('')}
+        </div>
+      </div>` : ''}
+
     ${slices.length ? `
       <div class="card">
-        <div class="card-title">Allocation</div>
+        <div class="card-title">Asset Allocation</div>
         ${donutChart(slices, { centerLabel: 'Assets', centerValue: money(assets) })}
       </div>` : ''}
 
@@ -73,8 +127,7 @@ export async function renderWealth(container, app) {
         ${navRow('loans', 'account_balance_wallet', 'Loans', 'Outstanding & EMIs', counts.loan)}
         ${navRow('cards', 'credit_card', 'Credit cards', 'Limits & balances', counts.card)}
         ${navRow('subscriptions', 'subscriptions', 'Subscriptions', 'Recurring services', counts.subscription)}
-        ${navRow('recurring', 'autorenew', 'Recurring payments',
-          'Tracked recurring payments')}
+        ${navRow('recurring', 'autorenew', 'Recurring payments', 'Tracked recurring payments')}
       </div>
     </div>
 

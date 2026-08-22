@@ -83,7 +83,8 @@ const VENDORS = {
     'uber', 'ola', 'olacabs', 'ola cabs', 'rapido', 'meru', 'indrive', 'blablacar',
     'quick ride', 'quickride', 'zoomcar', 'revv', 'yulu', 'chalo', 'shell', 'hpcl',
     'hp petrol', 'iocl', 'indian oil', 'indianoil', 'bharat petroleum', 'bpcl', 'nayara',
-    'essar oil', 'jio bp', 'fastag', 'parkplus', 'park plus', 'ather', 'chargepoint',
+    'essar oil', 'jio bp', 'fastag', 'fastag recharge', 'fastag toll', 'fastag payment',
+    'toll recharge', 'parkplus', 'park plus', 'ather', 'chargepoint',
     'statiq',
     // Generic words. A pump and a garage almost never trade under a national name.
     'toll', 'toll plaza', 'parking', 'parking lot', 'parking fee', 'valet', 'petrol',
@@ -325,10 +326,29 @@ const VENDORS = {
   'Loans & EMI': [
     'emi', 'loan', 'loan emi', 'loan account', 'loan repayment', 'personal loan',
     'car loan', 'auto loan', 'two wheeler loan', 'education loan', 'gold loan',
-    'instalment', 'installment', 'overdraft', 'foreclosure',
+    'home loan emi', 'housing loan emi', 'lap loan', 'mortgage',
+    'instalment', 'installment', 'instalments', 'installments', 'instl',
+    'equated monthly instalment', 'equated monthly installment',
+    'loan instalment', 'loan installment', 'emi payment', 'emi debit',
+    'installment debit', 'instalment debit', 'monthly emi',
+    'nach mandate', 'ecs mandate', 'ach mandate', 'nach debit', 'ach debit', 'ecs debit',
+    'nach emi', 'ach emi', 'mandate debit', 'overdraft', 'foreclosure',
+    'towards ecs', 'towards nach', 'towards ach', 'towards emi', 'towards loan', 'ecs',
     'bajaj finserv', 'bajaj finance', 'hdb financial', 'tata capital', 'muthoot',
     'manappuram', 'iifl finance', 'shriram finance', 'moneyview', 'kreditbee',
     'paysense', 'cashe', 'lazypay', 'simpl', 'zestmoney', 'dmi finance',
+    'cholamandalam', 'hero fincorp', 'piramal finance', 'smfg', 'kotak prime',
+    'mahindra finance', 'axis finance', 'credila', 'avanse', 'incred',
+    'chits', 'chit fund',
+  ],
+  'Credit Card': [
+    'cred', 'cheq', 'sbi card', 'sbicard', 'hdfc card', 'icici card', 'axis card',
+    'kotak card', 'rbl card', 'indusind card', 'idfc card', 'onecard', 'one card',
+    'au small finance card', 'amex', 'american express', 'bob card', 'bobcard',
+    'sc card', 'standard chartered card', 'stanchart card', 'scb card', 'citi card', 'citibank card',
+    'credit card payment', 'credit card bill', 'card bill payment', 'cc payment',
+    'cc bill payment', 'card payment', 'autopay cc bill', 'cc bill', 'credit card outstanding',
+    'credit card dues', 'card dues', 'pay credit card', 'credit card settlement',
   ],
 };
 
@@ -498,14 +518,27 @@ const REMINDER = new RegExp(
   'i',
 );
 
+const SPAM_AND_PROMO = new RegExp(
+  '\\b(?:pre-?approved|instant|quick) (?:personal|business|gold|car|home|two[- ]wheeler)?\\s*loan(?:s)?\\b|\\bloan offer\\b|\\bloan approved\\b|\\bavail (?:instant )?loan\\b|\\bcheck loan eligibility\\b|\\bdisbursed in \\d+\\s*(?:min|minute|sec)\\b|\\bget instant cash\\b|\\bget up to rs\\.?\\s*[\\d,]+\\b|\\bloan up to\\b|\\bpre-?qualified\\b|\\bapply for (?:instant |personal )?loan\\b'
+  + '|\\b(?:pre-?approved|lifetime free|free|apply for|get your) (?:credit card|card)\\b|\\blimit (?:enhancement|increase|upgrade)\\b|\\bincrease your (?:credit )?limit\\b|\\bupgrade your (?:credit )?card\\b|\\bcredit limit (?:enhanced|increased) to\\b'
+  + '|\\b(?:flat|upto|up to) \\d+%\\s*off\\b|\\buse code\\b|\\bpromo code\\b|\\bcoupon code\\b|\\bvoucher code\\b|\\bexclusive offer\\b|\\bspecial offer\\b|\\blimited (?:period )?offer\\b|\\bvalid till\\b|\\bflash sale\\b|\\bmega sale\\b|\\bgreat indian festival\\b|\\bbig billion days\\b|\\bshop now\\b|\\border now\\b|\\bbook now to get\\b|\\bwin (?:cash|rewards|gold|iphone|car|prizes)\\b|\\bscratch card\\b|\\breward points? (?:expiring|will expire|earned|credited)\\b|\\bredeem (?:points|cashback|coupon)\\b|\\bclaim your (?:reward|prize|cashback|bonus)\\b'
+  + '|\\b(?:play )?rummy\\b|\\bwin real (?:cash|money)\\b|\\bjackpot\\b|\\bbetting\\b|\\bcasino\\b|\\bearn rs\\.?\\s*\\d+\\s*(?:daily|per day|from home)\\b|\\bpart[- ]time job\\b|\\bwork from home\\b|\\bguaranteed returns\\b|\\btrading calls\\b|\\bstock tips\\b|\\boption tips\\b|\\bsure shot\\b|\\bdouble your money\\b'
+  + '|\\bdata (?:pack|balance|quota|limit|usage) (?:is )?(?:exhausted|consumed|over|left)\\b|\\b\\d+%\\s*of (?:daily )?data (?:limit )?consumed\\b|\\bdata alert\\b|\\brecharge (?:now|with rs|pack)\\b|\\bunlimited (?:5g|calls)\\b|\\bcaller ?tune\\b|\\bhello ?tune\\b|\\bcricket pack\\b|\\bextra data\\b'
+  + '|\\b(?:update|link|pending|submit|verify) kyc\\b|\\bkyc (?:suspended|expired|pending|verification)\\b|\\blink (?:pan|aadhaar|aadhar)\\b|\\bpan not linked\\b|\\bnetbanking (?:blocked|disabled|locked)\\b|\\blogin (?:alert|notification)\\b|\\bnew login\\b|\\bnew device\\b|\\bpassword (?:changed|reset|updated)\\b|\\bmpin (?:changed|reset|updated)\\b|\\btpin (?:changed|reset|updated)\\b|\\bupi pin (?:changed|reset|updated)\\b|\\bemail (?:updated|registered|changed)\\b|\\bmobile number (?:updated|registered|changed)\\b|\\baddress (?:updated|registered|changed)\\b|\\bnominee (?:updated|registered|added)\\b'
+  + '|\\b(?:cheque|check) (?:returned|bounced|dishonou?red)\\b|\\b(?:ecs|nach|mandate|si) (?:returned|bounced|failed|rejected)\\b|\\binsufficient funds\\b|\\bunpaid due to\\b|\\bfailed due to\\b'
+  + '|\\bapply now\\b|\\bclick here\\b|\\bt&c apply\\b',
+  'i',
+);
+
 const NOT_A_TRANSACTION = [
   [/\botp\b|one[- ]time password|verification code|do not share|never share/i, 'otp'],
+  [SPAM_AND_PROMO, 'promo'],
   [REMINDER, 'reminder'],
   [MANDATE_SETUP, 'mandate-setup'],
   [/\brequest(?:ed|ing)? (?:money|payment)\b|collect request|has requested (?:rs|inr|₹)|\bmandate request\b/i, 'request'],
   [/\bfailed\b|\bdeclined\b|\breversed\b|could not be processed|unsuccessful|txn reversed/i, 'failed'],
   [/\bavailable balance\b|\bbal(?:ance)? (?:in|as on|enquiry|is)\b|\bavl bal\b/i, 'balance'],
-  [/\boffer\b|cashback up to|\bdiscount\b|apply now|click here|t&c apply|congratulations|pre-approved loan|win up to|reward points/i, 'promo'],
+  [/\boffer\b|cashback up to|\bdiscount\b|congratulations|pre-approved loan|win up to|reward points/i, 'promo'],
 ];
 
 /*
@@ -514,7 +547,10 @@ const NOT_A_TRANSACTION = [
  * wallet top up as income would book every rupee already spent as earnings.
  */
 const SELF_TRANSFER = [
-  [/credited to your card|payment of .* was credited|card.*payment received/i, 'card-payment'],
+  [/credited to your (?:credit )?card|payment of .* was credited|card.*payment received|payment received towards .* card|payment received for your .* card|thank you for payment towards .* card/i, 'card-payment'],
+  [/\b(?:paid|payment|debited)\b.*(?:towards|for|to)\s+(?:your\s+)?(?:credit\s+card|sbi\s+card|hdfc\s+card|icici\s+card|axis\s+card|cred|cheq|onecard|amex)\b/i, 'card-payment'],
+  [/\b(?:credit\s+card|card\s+bill|cc\s+bill)\s+(?:payment|bill\s+payment|paid|debited)\b/i, 'card-payment'],
+  [/info[:\s]*(?:ach\s*d-?\s*|nach-?\s*|cms-?\s*)?(?:cred|cheq|sbi\s*card|cc\s*payment|autopay\s*cc)/i, 'card-payment'],
   // A tag recharge is the user's own money moving from their account to their tag.
   // A meal wallet credit is not: the employer funds it, so it is money arriving. Treating
   // it as a transfer left every wallet spend as an expense with no inflow behind it, and
@@ -535,8 +571,8 @@ const SELF_TRANSFER = [
 const COMPLETED_MOVEMENT = new RegExp(
   '(?:rs\\.?|inr|₹)\\s*\\.?\\s*[\\d,]+(?:\\.\\d+)?\\s*(?:has been\\s+|was\\s+)?'
   + '(?:spent|debited|credited|deducted|withdrawn|paid|deposited)\\b'
-  + '|\\b(?:spent|debited|credited|deducted|withdrawn|paid|deposited)\\s+'
-  + '(?:of\\s+|from\\s+|at\\s+|on\\s+|via\\s+)?(?:rs\\.?|inr|₹)\\s*\\.?\\s*[\\d,]',
+  + '|\\b(?:spent|debited|credited|deducted|withdrawn|paid|deposited)[\\s:]+'
+  + '(?:of\\s+|from\\s+|at\\s+|on\\s+|via\\s+|for\\s+|by\\s+|on\\s+\\d{1,2}[-/](?:[A-Za-z]{3}|\\d{1,2})[-/]\\d{2,4}\\s+(?:by|for|of|with)\\s+)?(?:rs\\.?|inr|₹)\\s*\\.?\\s*[\\d,]',
   'i',
 );
 
@@ -548,7 +584,8 @@ const HEDGED = new RegExp(
   + '|\\bmandate (?:pre-?debit|notification|intimation|alert|advice|reminder|registration|creation|setup|request)\\b'
   + '|\\b(?:registered|created|set ?up|setup|activated) (?:ach|nach|e-?mandate|mandate)\\b'
   + '|\\b(?:scheduled|presented) for (?:debit|deduction|clearing)\\b'
-  + '|upcoming|payable by|pay before|kindly pay|please pay|to avoid',
+  + '|upcoming|payable by|pay before|kindly pay|please pay|to avoid'
+  + '|\\bapply now\\b|\\bclick here\\b|\\bcheck loan eligibility\\b|\\bpre-?approved (?:loan|credit card|card)\\b|\\binstant loan\\b',
   'i',
 );
 
@@ -562,12 +599,19 @@ export function notATransaction(text) {
   for (const [pattern, reason] of SELF_TRANSFER) {
     if (pattern.test(text)) return reason;
   }
+
+  // Failed transactions should always report 'failed'
+  if (/\bfailed\b|\bdeclined\b|\breversed\b|could not be processed|unsuccessful|txn reversed/i.test(text)) {
+    return 'failed';
+  }
+
   // Something that plainly already happened is a transaction, whatever else it mentions.
   if (COMPLETED_MOVEMENT.test(text) && !HEDGED.test(text)) return '';
 
-  // Setup notifications and reminders should never be recorded as completed transactions
+  // Setup notifications, reminders, spam and promos should never be recorded as completed transactions
   if (MANDATE_SETUP.test(text)) return 'mandate-setup';
   if (REMINDER.test(text)) return 'reminder';
+  if (SPAM_AND_PROMO.test(text)) return 'promo';
 
   for (const [pattern, reason] of NOT_A_TRANSACTION) {
     if (pattern.test(text)) return reason;
@@ -588,12 +632,12 @@ const MERCHANT_PATTERNS = [
   /\b(?:vpa|to vpa)\s+([^\s.,;]+)/i,
   /\bto\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s+on\s+\d/i,
   /\b(?:paid|transferred|sent)\s+to\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)(?:\s+(?:on|dt\.?|avl|bal|using|via|ref|txn|for|through)\b|[.,;]|$)/i,
-  /\btowards\s+(?:ach\s*[dc]\s*-?\s*|nach\s*-?\s*|cms\s*-?\s*|ecs\s*-?\s*|mandate\s*-?\s*|si\s*-?\s*)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*(?:umrn|ref|[.,;]|$)/i,
-  /\binfo[:\s]*(?:ach\s*[dc]\s*-?\s*|nach\s*-?\s*|cms\s*-?\s*|ecs\s*-?\s*|mandate\s*-?\s*|upi\/)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*[.;-]/i,
+  /\btowards\s+(?:ach\s*[dc*:\s/-]*|nach[*:\s/-]*|cms[*:\s/-]*|ecs[*:\s/-]*|mandate[*:\s/-]*|si[*:\s/-]*)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*(?:umrn|ref|[.,;]|$)/i,
+  /\binfo[:\s]*(?:ach\s*[dc*:\s/-]*|nach[*:\s/-]*|cms[*:\s/-]*|ecs[*:\s/-]*|mandate[*:\s/-]*|upi\/)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*[.;-]/i,
   /\bat\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*[.;]/i,
   /\b(?:biller|merchant|beneficiary|party)[:\s]+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*[.;\n\r]/i,
   /\bfrom\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s+(?:on|dt\.?|avl|bal|using|via)\b/i,
-  /\bfor\s+(?:ach\s*[dc]\s*-?\s*|nach\s*-?\s*|cms\s*-?\s*|ecs\s*-?\s*|mandate\s*-?\s*)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)(?:\s+(?:on|dt\.?|avl|bal|using|via|ref|txn)\b|[.,;]|$)/i,
+  /\bfor\s+(?:ach\s*[dc*:\s/-]*|nach[*:\s/-]*|cms[*:\s/-]*|ecs[*:\s/-]*|mandate[*:\s/-]*)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)(?:\s+(?:on|dt\.?|avl|bal|using|via|ref|txn)\b|[.,;]|$)/i,
 ];
 
 /*
@@ -610,7 +654,8 @@ const NOT_A_MERCHANT = new RegExp(
   + '|^(?:your |the |a |my )?(?:a/c|ac|acct|account|card|credit card|debit card|bank|wallet'
   + '|upi|vpa|ref|txn|payment|amount|balance|limit'
   + '|ach|nach|ecs|cms|mandate|standing instruction|si|neft|rtgs|imps|enach|e-nach)\\b'
-  + '|^(?:hdfc|icici|sbi|axis|kotak|au bank|au credit|dcb|idfc|indusind|yes bank|pnb|canara|federal|rbl|bob|boi|union|iob|uco)(?:\\s+bank)?(?:\\s+(?:a/c|ac|acct|account|card|credit card|debit card))?\\s*$',
+  + '|^(?:rs|inr|usd|eur|gbp|₹)\\b'
+  + '|^(?:hdfc|icici|sbi|axis|kotak|au bank|au credit|dcb|idfc|indusind|yes bank|pnb|canara|federal|rbl|bob|boi|union|iob|uco|scb|stanchart|standard chartered|citi|citibank|hsbc|dbs|deutsche|barclays|equitas|ujjivan|bandhan|sib|south indian|kvb|karur vysya|cub|city union|karnataka|psb|punjab & sind|bom|bank of maharashtra|cbi|central bank|indian bank|airtel payments|ippb|fino|jio payments)(?:\\s+bank)?(?:\\s+(?:a/c|ac|acct|account|card|credit card|debit card))?\\s*$',
   'i',
 );
 
@@ -620,8 +665,9 @@ export function extractMerchant(body) {
   for (const pattern of MERCHANT_PATTERNS) {
     const match = pattern.exec(text);
     if (!match) continue;
-    let found = match[1].trim().replace(/\s+/g, ' ').replace(/[.,;\-\s]+$/, '');
-    found = found.replace(/\s*\/.*$/, '').trim();
+    let found = match[1].trim().replace(/\s+/g, ' ').replace(/^[.,;:\-\s]+|[.,;:\-\s]+$/g, '');
+    found = found.replace(/[*\/].*$/, '').trim();
+    found = found.replace(/(?:DIV|DIVIDEND)\d*.*$/i, '').trim();
     // Keep looking: a later pattern may still find the real counterparty.
     if (!found || NOT_A_MERCHANT.test(found) || !/[a-z]/i.test(found)) continue;
     return found;
@@ -640,5 +686,9 @@ export function categoryForMerchant(merchant, body = '') {
     const found = keywords().find(merchant);
     if (found) return found;
   }
-  return body ? keywords().find(body) : '';
+  const bodyText = String(body || '');
+  if (/\b(?:dividend|dividends|interim dividend|final dividend)\b|[*:\s/-][a-z0-9_]*div\d*[*:\s/.-]/i.test(bodyText)) {
+    return 'Interest & Dividends';
+  }
+  return bodyText ? keywords().find(bodyText) : '';
 }

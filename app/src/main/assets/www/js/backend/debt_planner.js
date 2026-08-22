@@ -141,11 +141,13 @@ function simulatePayoff(debts, extraMonthly) {
 export function calculateHomeLoanPartPayment(principal, annualRate, tenureYears, extraEmisPerYear = 1, annualStepUpPct = 5) {
   const p = number(principal, 5000000);
   const r = number(annualRate, 8.5) / 100 / 12;
-  const totalMonths = number(tenureYears, 20) * 12;
+  const totalMonths = Math.max(1, number(tenureYears, 20) * 12);
 
   // Base EMI formula: E = P * r * (1+r)^n / ((1+r)^n - 1)
-  const baseEmi = Math.round((p * r * Math.pow(1 + r, totalMonths)) / (Math.pow(1 + r, totalMonths) - 1));
-  const baseTotalInterest = (baseEmi * totalMonths) - p;
+  const baseEmi = r > 0
+    ? Math.round((p * r * Math.pow(1 + r, totalMonths)) / (Math.pow(1 + r, totalMonths) - 1))
+    : Math.round(p / totalMonths);
+  const baseTotalInterest = Math.max(0, (baseEmi * totalMonths) - p);
 
   // Scenario 1: 1 Extra EMI paid every 12th month
   let balExtra = p;
@@ -205,13 +207,133 @@ export function calculateHomeLoanPartPayment(principal, annualRate, tenureYears,
 }
 
 /**
+ * Calculates comprehensive Debt & Credit Card Summary across loans and credit cards.
+ */
+export function calculateDebtSummary(db, args = {}) {
+  const memberId = args.member_id;
+  const [clause, params] = memberClause(memberId, 'WHERE');
+
+  const loans = db.all(
+    `SELECT id, name, loan_type, principal_amount, current_outstanding, interest_rate, monthly_emi, direction FROM loans${clause}`
+    + `${clause ? ' AND' : ' WHERE'} COALESCE(direction, 'borrowed') != 'lent'`,
+    params,
+  );
+
+  const cards = db.all(
+    `SELECT id, card_name, bank, last_4, COALESCE(total_limit, 0) AS total_limit, available_limit, COALESCE(current_balance, 0) AS current_balance, COALESCE(due_date, 15) AS due_date, updated_at FROM credit_cards${clause}`,
+    params,
+  );
+
+  let totalLoanOutstanding = 0;
+  let totalLoanEmi = 0;
+  const loanList = loans.map((l) => {
+    const outstanding = number(l.current_outstanding);
+    const emi = number(l.monthly_emi);
+    totalLoanOutstanding += outstanding;
+    totalLoanEmi += emi;
+    return {
+      id: l.id,
+      name: l.name,
+      loan_type: l.loan_type,
+      principal_amount: number(l.principal_amount),
+      current_outstanding: outstanding,
+      interest_rate: number(l.interest_rate),
+      monthly_emi: emi,
+    };
+  });
+
+  let totalCreditLimit = 0;
+  let totalCardBalance = 0;
+  let totalAvailableLimit = 0;
+  let totalCardMinDue = 0;
+
+  const cardList = cards.map((c) => {
+    const limit = number(c.total_limit);
+    const balance = number(c.current_balance);
+    const avail = c.available_limit !== null && c.available_limit !== undefined
+      ? number(c.available_limit)
+      : Math.max(0, limit - balance);
+    const utilization = limit > 0 ? Math.round((balance / limit) * 100) : 0;
+    const minDue = Math.max(0, Math.round(balance * 0.05));
+
+    totalCreditLimit += limit;
+    totalCardBalance += balance;
+    totalAvailableLimit += avail;
+    totalCardMinDue += minDue;
+
+    return {
+      id: c.id,
+      card_name: c.card_name,
+      bank: c.bank,
+      last_4: c.last_4 || '',
+      total_limit: limit,
+      available_limit: avail,
+      current_balance: balance,
+      utilization_percent: utilization,
+      due_date: c.due_date,
+      min_due: minDue,
+      updated_at: c.updated_at || '',
+    };
+  });
+
+  const totalDebt = totalLoanOutstanding + totalCardBalance;
+  const monthlyDebtObligations = totalLoanEmi + totalCardMinDue;
+  const overallUtilization = totalCreditLimit > 0 ? Math.round((totalCardBalance / totalCreditLimit) * 100) : 0;
+
+  // DTI calculation
+  const [andClause, andParams] = memberClause(memberId, 'AND');
+  const salary = db.get(
+    `SELECT amount FROM transactions WHERE type = 'Income'${andClause} ORDER BY date DESC LIMIT 1`,
+    andParams,
+  );
+  const monthlyIncome = salary ? number(salary.amount) : 50000;
+  const dti = monthlyIncome > 0 ? Math.round((monthlyDebtObligations / monthlyIncome) * 1000) / 10 : 0;
+
+  let dtiRating = 'Healthy';
+  let dtiColor = 'var(--income)';
+  if (dti > 45) {
+    dtiRating = 'High Risk';
+    dtiColor = 'var(--expense)';
+  } else if (dti > 30) {
+    dtiRating = 'Moderate';
+    dtiColor = 'var(--warning, #F59E0B)';
+  }
+
+  return {
+    status: 'success',
+    total_debt: Math.round(totalDebt),
+    total_loan_outstanding: Math.round(totalLoanOutstanding),
+    loan_balance: Math.round(totalLoanOutstanding),
+    total_loan_emi: Math.round(totalLoanEmi),
+    loan_monthly_emis: Math.round(totalLoanEmi),
+    total_credit_limit: Math.round(totalCreditLimit),
+    total_available_limit: Math.round(totalAvailableLimit),
+    available_credit_limit: Math.round(totalAvailableLimit),
+    total_card_balance: Math.round(totalCardBalance),
+    credit_card_balance: Math.round(totalCardBalance),
+    card_min_dues: Math.round(totalCardMinDue),
+    credit_utilization_percent: overallUtilization,
+    overall_utilization_pct: overallUtilization,
+    monthly_debt_obligations: Math.round(monthlyDebtObligations),
+    dti_percent: dti,
+    dti_rating: dtiRating,
+    dti_color: dtiColor,
+    monthly_net_income: Math.round(monthlyIncome),
+    active_loans_count: loans.filter((l) => l.current_outstanding > 0).length,
+    active_cards_count: cards.length,
+    loans: loanList,
+    cards: cardList,
+  };
+}
+
+/**
  * Recommends the optimal Credit Card to swipe today for maximum interest-free grace period.
  */
 export function getCreditCardOptimizer(db, args = {}) {
   const memberId = args.member_id;
   const [clause, params] = memberClause(memberId, 'WHERE');
 
-  const cards = db.all(`SELECT id, card_name, COALESCE(total_limit, 0) AS credit_limit, current_balance, COALESCE(due_date, 20) AS due_day, 1 AS billing_cycle_day FROM credit_cards${clause}`, params);
+  const cards = db.all(`SELECT id, card_name, bank, last_4, COALESCE(total_limit, 0) AS credit_limit, available_limit, current_balance, COALESCE(due_date, 20) AS due_day, 1 AS billing_cycle_day FROM credit_cards${clause}`, params);
 
   const todayDate = new Date();
   const currentDay = todayDate.getDate();
@@ -221,6 +343,9 @@ export function getCreditCardOptimizer(db, args = {}) {
     const dueDay = number(c.due_day, 20);
     const limit = number(c.credit_limit, 100000);
     const balance = number(c.current_balance, 0);
+    const avail = c.available_limit !== null && c.available_limit !== undefined
+      ? number(c.available_limit)
+      : Math.max(0, limit - balance);
     const utilization = limit > 0 ? Math.round((balance / limit) * 100) : 0;
 
     // Calculate days remaining in billing cycle + grace days until payment due
@@ -231,7 +356,10 @@ export function getCreditCardOptimizer(db, args = {}) {
     return {
       id: c.id,
       card_name: c.card_name,
+      bank: c.bank,
+      last_4: c.last_4,
       credit_limit: limit,
+      available_limit: avail,
       current_balance: balance,
       utilization_percent: utilization,
       utilization_warning: utilization > 30,

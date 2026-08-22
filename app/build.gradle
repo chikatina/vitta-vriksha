@@ -18,8 +18,8 @@ android {
         applicationId "com.chikatistudio.vittavriksha"
         minSdk 24
         targetSdk 37
-        versionCode 3
-        versionName "1.0.3"
+        versionCode 8
+        versionName "1.0.4"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
@@ -101,15 +101,35 @@ dependencies {
     implementation(libs.androidx.webkit)
 }
 
-tasks.register('validateWebAssets', Exec) {
-    description = 'Validates JavaScript web assets and runs the test suite before packing APK.'
+tasks.register('checkCodingStandards', Exec) {
+    description = 'Enforces Vitta Vriksha UI architecture, styling, and coding guidelines from AGENTS.md.'
     group = 'verification'
     def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
-    commandLine(isWindows ? ['cmd', '/c', 'node --test test/smoke_app_build.test.mjs'] : ['sh', '-c', 'node --test test/smoke_app_build.test.mjs'])
+    commandLine(isWindows ? ['cmd', '/c', 'node tools/check-style-guidelines.mjs'] : ['sh', '-c', 'node tools/check-style-guidelines.mjs'])
     workingDir rootProject.projectDir
 }
 
+tasks.register('validateWebAssets', Exec) {
+    description = 'Validates JavaScript web assets and runs the test suite before packing APK or bundle.'
+    group = 'verification'
+    dependsOn 'checkCodingStandards'
+    def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
+    commandLine(isWindows ? ['cmd', '/c', 'node --test test/*.test.mjs'] : ['sh', '-c', 'node --test test/*.test.mjs'])
+    workingDir rootProject.projectDir
+}
+
+tasks.named('preBuild').configure {
+    dependsOn 'checkCodingStandards'
+    dependsOn 'validateWebAssets'
+}
+
+tasks.named('check').configure {
+    dependsOn 'checkCodingStandards'
+    dependsOn 'validateWebAssets'
+}
+
 tasks.matching { it.name.startsWith('generate') && it.name.endsWith('Assets') }.configureEach {
+    dependsOn 'checkCodingStandards'
     dependsOn 'validateWebAssets'
 }
 

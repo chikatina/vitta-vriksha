@@ -7,7 +7,7 @@ import {
 
 const RELATIONSHIPS = ['Spouse', 'Parent', 'Child', 'Sibling', 'Other'];
 
-const AVATAR_COLORS = ['#0E6B5A', '#3B82F6', '#8B5CF6', '#EC4899', '#F59E0B', '#06B6D4', '#EF4444'];
+const AVATAR_COLORS = ['#88A838', '#988818', '#F8C828', '#083828', '#3B82F6', '#EC4899', '#EF4444'];
 
 export async function renderFamily(container, app) {
   const res = await Bridge.db('get_family_members');

@@ -3,11 +3,15 @@ package com.chikatistudio.vittavriksha
 import android.Manifest
 import android.app.AlarmManager
 import android.app.PendingIntent
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Telephony
 import android.util.Base64
 import android.webkit.JavascriptInterface
@@ -363,6 +367,69 @@ class WebAppInterface(private val mContext: Context, private val webView: WebVie
     // ------------------------------------------------------------------- files
 
     /**
+     * Saves a file to the device's public Downloads directory.
+     *
+     * On Android 10+ (API 29+), this uses MediaStore.Downloads without requiring runtime storage
+     * permissions. On older Android versions, it writes to Environment.DIRECTORY_DOWNLOADS and
+     * notifies MediaScannerConnection.
+     */
+    @JavascriptInterface
+    fun saveFile(name: String, mimeType: String, encoded: String): String {
+        return try {
+            val bytes = Base64.decode(encoded, Base64.DEFAULT)
+            var savedPath = "Downloads/$name"
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+
+                val resolver = mContext.contentResolver
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+                    ?: return JSONObject().put("success", false).put("error", "Could not create file in Downloads").toString()
+
+                resolver.openOutputStream(uri)?.use { outputStream ->
+                    outputStream.write(bytes)
+                }
+
+                contentValues.clear()
+                contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                resolver.update(uri, contentValues, null, null)
+            } else {
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (!downloadsDir.exists()) {
+                    downloadsDir.mkdirs()
+                }
+                val destFile = File(downloadsDir, name)
+                destFile.writeBytes(bytes)
+                savedPath = destFile.absolutePath
+
+                MediaScannerConnection.scanFile(
+                    mContext,
+                    arrayOf(destFile.absolutePath),
+                    arrayOf(mimeType),
+                    null,
+                )
+            }
+
+            JSONObject().apply {
+                put("success", true)
+                put("filename", name)
+                put("path", savedPath)
+            }.toString()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            JSONObject().apply {
+                put("success", false)
+                put("error", e.localizedMessage ?: "Failed to save file")
+            }.toString()
+        }
+    }
+
+    /**
      * Hands a file to the share sheet, which is how an encrypted export leaves the app.
      *
      * The file goes to the cache under a provider path, so the receiving app gets a
@@ -394,5 +461,14 @@ class WebAppInterface(private val mContext: Context, private val webView: WebVie
             e.printStackTrace()
             false
         }
+    }
+
+    /**
+     * Reports whether the app is running in a debug or test build.
+     * Used to restrict internal debugging tools (e.g. sample demo data loading).
+     */
+    @JavascriptInterface
+    fun isDebug(): Boolean {
+        return BuildConfig.DEBUG
     }
 }

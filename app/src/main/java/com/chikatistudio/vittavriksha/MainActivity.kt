@@ -190,10 +190,69 @@ class MainActivity : AppCompatActivity() {
                 this@MainActivity.filePathCallback?.onReceiveValue(null)
                 this@MainActivity.filePathCallback = filePathCallback
 
-                val intent = fileChooserParams?.createIntent()
-                if (intent == null) {
-                    this@MainActivity.filePathCallback = null
-                    return false
+                // Build a normalized intent that correctly handles custom extensions (e.g. .vittavriksha)
+                // so Android's document picker does not grey out or disable backup files.
+                val intent = try {
+                    val rawAcceptTypes = fileChooserParams?.acceptTypes ?: emptyArray()
+                    val mimeTypes = mutableListOf<String>()
+                    var allowAll = rawAcceptTypes.isEmpty()
+
+                    for (raw in rawAcceptTypes) {
+                        for (part in raw.split(",")) {
+                            val clean = part.trim()
+                            if (clean.isEmpty() || clean == "*/*") {
+                                allowAll = true
+                            } else if (clean.startsWith(".")) {
+                                when (clean.lowercase()) {
+                                    ".pdf" -> mimeTypes.add("application/pdf")
+                                    ".json" -> mimeTypes.add("application/json")
+                                    ".csv" -> {
+                                        mimeTypes.add("text/csv")
+                                        mimeTypes.add("text/comma-separated-values")
+                                        mimeTypes.add("text/plain")
+                                    }
+                                    ".txt" -> mimeTypes.add("text/plain")
+                                    ".vittavriksha" -> {
+                                        allowAll = true
+                                    }
+                                    else -> allowAll = true
+                                }
+                            } else if (clean.contains("/")) {
+                                mimeTypes.add(clean)
+                            }
+                        }
+                    }
+
+                    val baseIntent = if (fileChooserParams != null) {
+                        try {
+                            fileChooserParams.createIntent()
+                        } catch (e: Exception) {
+                            Intent(Intent.ACTION_GET_CONTENT).apply {
+                                addCategory(Intent.CATEGORY_OPENABLE)
+                            }
+                        }
+                    } else {
+                        Intent(Intent.ACTION_GET_CONTENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                        }
+                    }
+
+                    if (allowAll || mimeTypes.isEmpty() || mimeTypes.contains("*/*")) {
+                        baseIntent.type = "*/*"
+                        baseIntent.removeExtra(Intent.EXTRA_MIME_TYPES)
+                    } else if (mimeTypes.size == 1) {
+                        baseIntent.type = mimeTypes[0]
+                        baseIntent.removeExtra(Intent.EXTRA_MIME_TYPES)
+                    } else {
+                        baseIntent.type = "*/*"
+                        baseIntent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.distinct().toTypedArray())
+                    }
+                    baseIntent
+                } catch (e: Exception) {
+                    fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                        type = "*/*"
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                    }
                 }
 
                 return try {
@@ -316,6 +375,24 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationIntent(intent)
+    }
+
+    private fun handleNotificationIntent(intent: Intent?) {
+        val reminderId = intent?.getStringExtra(ReminderReceiver.EXTRA_ID)
+            ?: intent?.getStringExtra("reminder_id")
+            ?: return
+        if (::webView.isInitialized) {
+            val escaped = reminderId.replace("'", "\\'")
+            webView.evaluateJavascript("window.onNotificationClicked && window.onNotificationClicked('$escaped');", null)
+            intent?.removeExtra(ReminderReceiver.EXTRA_ID)
+            intent?.removeExtra("reminder_id")
+        }
+    }
+
     /**
      * Permissions can also be changed from system settings while the app sits in the
      * background, so the web layer is told to re-read them on the way back in.
@@ -325,6 +402,7 @@ class MainActivity : AppCompatActivity() {
         leftForAnotherApp = false
         if (::webView.isInitialized) {
             webView.evaluateJavascript("window.onAppResumed && window.onAppResumed();", null)
+            handleNotificationIntent(intent)
         }
     }
 

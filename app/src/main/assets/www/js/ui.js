@@ -7,6 +7,7 @@
  */
 
 import { ICON_CODEPOINTS } from './icon-codepoints.js';
+import { saveFile as nativeSaveFile, encodeBase64 } from './backend/native.js';
 
 const OVERLAY_MS = 320;
 
@@ -257,6 +258,111 @@ export function promptDialog(title, {
   });
 }
 
+/**
+ * Displays an active progress modal for heavy background processing (CAS parsing, bulk SMS ingestion, CSV imports).
+ * Returns a controller with .update({ percent, message, detail }), .complete(message, delayMs), .fail(message), and .close().
+ */
+export function showProgressModal(title, {
+  message = 'Processing...',
+  initialPercent = 0,
+  indeterminate = false,
+  detail = '',
+} = {}) {
+  closeOpenMenus();
+  document.querySelectorAll('.scrim, .dialog, .sheet, .progress-dialog-overlay').forEach((el) => el.remove());
+
+  const scrim = document.createElement('div');
+  scrim.className = 'scrim progress-dialog-overlay open';
+  document.body.appendChild(scrim);
+
+  const node = document.createElement('div');
+  node.className = 'dialog progress-dialog open';
+  node.setAttribute('data-no-autofocus', '');
+
+  let currentPercent = Math.max(0, Math.min(100, initialPercent));
+  let isClosed = false;
+
+  node.innerHTML = `
+    <div class="progress-dialog-header">
+      <span class="spinner"></span>
+      <span class="progress-dialog-title">${h(title)}</span>
+    </div>
+    <div class="progress-dialog-status" data-progress-message>${h(message)}</div>
+    <div class="progress" style="margin:4px 0">
+      <div class="progress-bar ${indeterminate ? 'indeterminate' : ''}" data-progress-bar style="width:${indeterminate ? '100%' : `${currentPercent}%`}"></div>
+    </div>
+    <div class="progress-dialog-meta">
+      <span data-progress-detail>${h(detail)}</span>
+      <span data-progress-pct style="font-weight:600">${indeterminate ? '' : `${Math.round(currentPercent)}%`}</span>
+    </div>
+  `;
+
+  document.body.appendChild(node);
+
+  const msgEl = node.querySelector('[data-progress-message]');
+  const barEl = node.querySelector('[data-progress-bar]');
+  const detailEl = node.querySelector('[data-progress-detail]');
+  const pctEl = node.querySelector('[data-progress-pct]');
+
+  const close = () => {
+    if (isClosed) return;
+    isClosed = true;
+    scrim.classList.remove('open');
+    node.classList.remove('open');
+    setTimeout(() => {
+      scrim.remove();
+      node.remove();
+    }, OVERLAY_MS);
+  };
+
+  const update = ({ percent, message: nextMsg, detail: nextDetail, indeterminate: nextIndeterminate } = {}) => {
+    if (isClosed) return;
+    if (percent !== undefined) {
+      currentPercent = Math.max(0, Math.min(100, Number(percent) || 0));
+      barEl.style.width = `${currentPercent}%`;
+      pctEl.textContent = `${Math.round(currentPercent)}%`;
+    }
+    if (nextIndeterminate !== undefined) {
+      barEl.classList.toggle('indeterminate', Boolean(nextIndeterminate));
+      if (nextIndeterminate) pctEl.textContent = '';
+    }
+    if (nextMsg !== undefined && msgEl) {
+      msgEl.textContent = nextMsg;
+    }
+    if (nextDetail !== undefined && detailEl) {
+      detailEl.textContent = nextDetail;
+    }
+  };
+
+  const complete = (completionMessage = 'Done!', delayMs = 350) => {
+    if (isClosed) return;
+    update({ percent: 100, message: completionMessage, indeterminate: false });
+    const spinner = node.querySelector('.spinner');
+    if (spinner) {
+      spinner.outerHTML = icon('check_circle', 'icon-sm');
+    }
+    setTimeout(close, delayMs);
+  };
+
+  const fail = (errorMessage = 'Processing failed.') => {
+    if (isClosed) return;
+    update({ message: errorMessage, indeterminate: false });
+    const spinner = node.querySelector('.spinner');
+    if (spinner) {
+      spinner.outerHTML = icon('error', 'icon-sm');
+    }
+    barEl.style.background = 'var(--expense)';
+    setTimeout(close, 2200);
+  };
+
+  return {
+    update,
+    complete,
+    fail,
+    close,
+  };
+}
+
 /* ------------------------------------------------------------------ sheets */
 
 /**
@@ -328,21 +434,36 @@ export function chooser(title, options) {
  * @param {string|number} spec.value the current value
  * @param {Array<string|{value, label, sub}>} spec.options
  * @param {boolean} [spec.half] share a row with the next field
+ * @param {boolean} [spec.compact] render without wrapper for toolbars/rows
  * @param {string} [spec.placeholder] shown when nothing is chosen
  */
 export function selectField({
-  key, label, value, options, half = false, placeholder = 'Choose', id = `field_${key}`,
+  key, label, value, options, half = false, compact = false, placeholder = 'Choose', id = `field_${key}`,
 }) {
   const normalised = normaliseOptions(options);
   const chosen = normalised.find((option) => String(option.value) === String(value ?? ''));
 
+  if (compact) {
+    return `
+      <button type="button" class="select-button select-compact" id="${h(id)}" data-field="${h(key)}"
+              data-value="${h(chosen ? chosen.value : '')}"
+              data-options="${h(JSON.stringify(normalised))}"
+              data-label="${h(label || '')}" data-placeholder="${h(placeholder)}"
+              aria-haspopup="listbox" aria-expanded="false">
+        <span class="select-button-value ${chosen ? '' : 'is-empty'}">
+          ${h(chosen ? chosen.label : placeholder)}
+        </span>
+        ${icon('expand_more', 'select-button-arrow')}
+      </button>`;
+  }
+
   return `
     <div class="field" style="${half ? 'flex:1;min-width:0;' : ''}">
-      <label class="field-label" for="${h(id)}">${h(label)}</label>
+      ${label ? `<label class="field-label" for="${h(id)}">${h(label)}</label>` : ''}
       <button type="button" class="select-button" id="${h(id)}" data-field="${h(key)}"
               data-value="${h(chosen ? chosen.value : '')}"
               data-options="${h(JSON.stringify(normalised))}"
-              data-label="${h(label)}" data-placeholder="${h(placeholder)}"
+              data-label="${h(label || '')}" data-placeholder="${h(placeholder)}"
               aria-haspopup="listbox" aria-expanded="false">
         <span class="select-button-value ${chosen ? '' : 'is-empty'}">
           ${h(chosen ? chosen.label : placeholder)}
@@ -468,13 +589,18 @@ export function openMenu(anchor, options, current) {
     const leftOffset = Math.max(margin, Math.min(box.left + (box.width - calculatedWidth) / 2, window.innerWidth - calculatedWidth - margin));
     menu.style.left = `${leftOffset}px`;
 
-    // Below the field when it fits, above it when it does not.
-    const height = menu.offsetHeight || 200;
+    // Limit dropdown height to at most 5-6 options (~280px) and keep within screen bounds
+    const maxMenuHeight = 280;
     const below = window.innerHeight - box.bottom - margin;
+    const above = box.top - margin;
+    const effectiveMaxHeight = Math.min(maxMenuHeight, Math.max(160, Math.max(below, above)));
+    menu.style.maxHeight = `${effectiveMaxHeight}px`;
+
+    // Below the field when it fits, above it when it does not.
+    const height = Math.min(menu.offsetHeight || maxMenuHeight, effectiveMaxHeight);
     menu.style.top = height <= below || below >= box.top
       ? `${box.bottom + 4}px`
       : `${Math.max(margin, box.top - height - 4)}px`;
-    menu.style.maxHeight = `${Math.max(160, Math.max(below, box.top) - margin)}px`;
 
     requestAnimationFrame(() => {
       menu.classList.add('open');
@@ -562,7 +688,7 @@ export function pickFile(accept, { binary = false } = {}) {
     // the window regaining focus with nothing selected.
     const onReturn = () => setTimeout(() => {
       if (!settled && !(input.files && input.files.length)) finish(null);
-    }, 800);
+    }, 2000);
 
     input.addEventListener('change', async () => {
       const file = input.files && input.files[0];
@@ -602,19 +728,19 @@ function readAsBase64(file) {
 }
 
 /**
- * Hands a generated file to the user. Inside the WebView this goes through the Android
- * download manager; in a desktop browser it is an ordinary anchor click.
+ * Hands a generated file to the user. Inside the WebView this saves directly to the device's
+ * public Downloads directory; in a desktop browser it is an ordinary anchor download.
  */
 export function saveFile(filename, contents, mime = 'application/octet-stream') {
-  const blob = new Blob([contents], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  let base64;
+  if (typeof contents === 'string') {
+    base64 = encodeBase64(new TextEncoder().encode(contents));
+  } else if (contents instanceof Uint8Array || contents instanceof ArrayBuffer) {
+    base64 = encodeBase64(contents);
+  } else {
+    base64 = encodeBase64(new TextEncoder().encode(String(contents ?? '')));
+  }
+  return nativeSaveFile(filename, mime, base64);
 }
 
 /**
@@ -659,3 +785,38 @@ export function emptyState(glyph, title, body, actionHtml = '') {
       ${actionHtml}
     </div>`;
 }
+
+/**
+ * Prominent, bold and unmissable disclaimer card for tax calculations and capital gains.
+ */
+export function taxDisclaimerCard({ compact = false, customText = '' } = {}) {
+  const defaultText = 'Vitta Vriksha is an offline personal productivity enablement tool and is NOT a financial institution, SEBI-registered advisor, or Chartered Accountant. All capital gains, holding periods, grandfathering values, and tax projections are estimates generated strictly for personal tracking based on user-provided data and statutory formulas. Tax rules are complex, subject to regulatory changes, and vary based on your individual tax regime, deductions, and slab. Users must independently verify all calculations and consult a certified Chartered Accountant (CA) or check against official broker capital gains statements before filing Income Tax Returns.';
+  const text = customText || defaultText;
+
+  if (compact) {
+    return `
+      <div class="banner banner-warning" style="margin:10px 0;border-left:4px solid var(--warning,#F59E0B);background:var(--warning-container,#FFF3CD);color:var(--on-warning-container,#664D03);padding:8px 12px">
+        ${icon('warning', 'icon-sm')}
+        <span class="banner-main" style="margin-left:6px">
+          <strong class="banner-title" style="font-weight:700">Productivity Tool Only — No Financial/Tax Advice:</strong>
+          <span class="banner-body" style="font-size:11.5px"> Estimates for personal reference only. Verify independently with a Chartered Accountant (CA) before filing.</span>
+        </span>
+      </div>`;
+  }
+
+  return `
+    <div class="card" style="border:2px solid var(--warning,#F59E0B);background:var(--warning-container,#FFFBEB);color:var(--on-warning-container,#78350F);padding:14px;border-radius:var(--radius);margin:12px 0">
+      <div class="row" style="gap:10px;align-items:flex-start">
+        ${icon('warning', 'icon')}
+        <div style="flex:1">
+          <div style="font-weight:800;font-size:13px;letter-spacing:0.3px;text-transform:uppercase;color:var(--warning-dark,#B45309);margin-bottom:6px">
+            IMPORTANT NOTICE: ESTIMATOR & PRODUCTIVITY TOOL ONLY — NO FINANCIAL OR TAX ADVICE
+          </div>
+          <div style="font-size:11.5px;line-height:1.45;color:inherit;font-weight:500">
+            ${h(text)}
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+

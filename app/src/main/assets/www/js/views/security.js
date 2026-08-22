@@ -95,6 +95,10 @@ export async function renderSecurity(container, app) {
       ${permissionRow('SMS', 'sms', 'Bank SMS Tracking',
     smsTrackingActive ? 'Auto-parsing transactions from bank alerts' : (smsGranted ? 'Tracking is paused (messages ignored)' : 'Auto-parse transactions from bank alerts'),
     smsGranted, smsActionHtml)}
+      ${!smsTrackingActive ? `
+        <div class="caption" style="margin-top:4px;margin-bottom:8px;color:var(--on-surface-variant)">
+          ${icon('schedule', 'icon-sm')} Evening spend review reminder is set for ${app.settings.daily_review_reminder_time || '21:00'}.
+        </div>` : ''}
       ${permissionRow('NOTIFICATIONS', 'notifications', 'Notifications',
     'Reminders for SIPs, EMIs and renewals', notificationsGranted)}
 
@@ -131,7 +135,7 @@ export async function renderSecurity(container, app) {
         await sheet('Enable Fingerprint', body, {
           actions: `
             <button class="btn btn-outlined" data-cancel>Cancel</button>
-            <button class="btn btn-filled" data-confirm>Enable</button>`,
+            <button class="btn btn-filled" data-confirm>Continue</button>`,
           onMount(node, close) {
             node.querySelector('[data-cancel]').addEventListener('click', () => close(null));
             node.querySelector('[data-confirm]').addEventListener('click', async () => {
@@ -139,10 +143,22 @@ export async function renderSecurity(container, app) {
               if (!pin) return;
               const res = await Bridge.db('verify_pin', { pin });
               if (res && res.status === 'success') {
-                localStorage.setItem('biometric_enabled', '1');
-                localStorage.setItem('bio_vault_pin', pin);
                 close(null);
-                toast('Fingerprint unlock enabled');
+                toast('Scan your fingerprint to verify...', 'info');
+                const auth = await Bridge.verifyBiometric();
+                if (auth.success) {
+                  localStorage.setItem('biometric_enabled', '1');
+                  localStorage.setItem('bio_vault_pin', pin);
+                  toast('Fingerprint unlock verified and enabled', 'success');
+                } else {
+                  localStorage.removeItem('biometric_enabled');
+                  localStorage.removeItem('bio_vault_pin');
+                  if (auth.message && auth.message !== 'CANCELED' && !auth.message.toLowerCase().includes('cancel')) {
+                    toast(auth.message, 'error');
+                  } else {
+                    toast('Fingerprint verification cancelled.', 'info');
+                  }
+                }
                 app.refresh();
               } else {
                 toast('Invalid PIN. Please try again.');
@@ -176,6 +192,7 @@ export async function renderSecurity(container, app) {
 
       btn.disabled = true;
       await Bridge.requestPermission(name);
+      Bridge.call('reminders', { action: 'sync' }).catch(() => {});
       app.refresh();
     });
   });
@@ -185,6 +202,7 @@ export async function renderSecurity(container, app) {
     toggleSmsSec.addEventListener('click', () => {
       const newState = !smsTrackingActive;
       Bridge.setSmsTrackingEnabled(newState);
+      Bridge.call('reminders', { action: 'sync' }).catch(() => {});
       toast(newState ? 'Bank SMS tracking enabled' : 'Bank SMS tracking paused');
       app.refresh();
     });
@@ -255,6 +273,9 @@ async function changePin(app, pinSet) {
         });
         if (res) {
           app.settings.pin_is_set = '1';
+          if (localStorage.getItem('biometric_enabled') === '1' || localStorage.getItem('bio_vault_pin')) {
+            localStorage.setItem('bio_vault_pin', next);
+          }
           toast('PIN saved.', 'success');
           close(true);
         }

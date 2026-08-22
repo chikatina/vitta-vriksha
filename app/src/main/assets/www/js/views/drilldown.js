@@ -28,6 +28,7 @@ export const FLOWS = [
   { value: 'spend', label: 'Spent', metric: 'spend_total', dimensionMetric: 'spend_by_category' },
   { value: 'income', label: 'Received', metric: 'income_expense', dimensionMetric: 'income_by_category' },
   { value: 'invest', label: 'Invested', metric: 'investment_growth', dimensionMetric: 'invest_by_scheme' },
+  { value: 'transfer', label: 'Moved', metric: 'spend_total', dimensionMetric: 'spend_by_category' },
 ];
 
 const money = (app, value) => formatCurrency(value, app.currency, app.locale);
@@ -209,6 +210,11 @@ export async function openPeriodSheet(app, {
         <div class="row-between" style="margin-top:6px">
           <span class="caption">Invested</span>
           <span class="title invested">${h(money(app, summary.invested))}</span>
+        </div>` : ''}
+      ${summary.transferred ? `
+        <div class="row-between" style="margin-top:6px">
+          <span class="caption">Moved (Transfers)</span>
+          <span class="title transfer">${h(money(app, summary.transferred))}</span>
         </div>` : ''}
       <div style="margin-top:10px">${deltaLine(summary.change.expense)}</div>
     </div>
@@ -580,10 +586,10 @@ export async function openCashflowSheet(app) {
     <div style="display:flex;flex-direction:column;gap:14px">
       <!-- Safe to spend card -->
       <div class="card-flat" style="background:var(--surface-container-high);border-radius:var(--radius);padding:14px;border-left:4px solid ${statusColor}">
-        <div class="row-between">
-          <span class="label" style="font-weight:700">Safe-to-Spend Allowance</span>
-          <span class="badge" style="background:${isDeficit ? 'var(--expense-container)' : 'var(--surface-container-highest)'};color:${statusColor}">
-            ${isDeficit ? 'Deficit Warning' : (isTight ? 'Tight Budget' : 'Safe to Spend')}
+        <div class="row-between" style="align-items:center;flex-wrap:wrap;gap:6px">
+          <span class="label" style="font-weight:700">Safe-to-Spend</span>
+          <span class="badge" style="flex-shrink:0;background:${isDeficit ? 'var(--expense-container)' : 'var(--surface-container-highest)'};color:${statusColor}">
+            ${isDeficit ? 'Deficit' : (isTight ? 'Tight Budget' : 'Safe to Spend')}
           </span>
         </div>
         <div class="display" style="font-size:28px;color:${statusColor};margin:6px 0">
@@ -623,7 +629,7 @@ export async function openCashflowSheet(app) {
             <span class="list-row-amount expense">-${h(money(app, safe.breakdown.credit_cards))}</span>
           </div>
           <div class="list-row">
-            <span class="avatar avatar-sm" style="background:var(--surface-container-highest)">${icon('receipt')}</span>
+            <span class="avatar avatar-sm" style="background:var(--surface-container-highest)">${icon('receipt_long')}</span>
             <span class="list-row-main">
               <span class="list-row-title">Fixed Bills & Rent (${safe.counts.recurring})</span>
               <span class="list-row-sub">Recurring utilities & subscriptions</span>
@@ -635,9 +641,9 @@ export async function openCashflowSheet(app) {
 
       <!-- 30-Day Cashflow Runway -->
       <div class="card">
-        <div class="row-between">
+        <div class="row-between" style="align-items:center;flex-wrap:wrap;gap:6px">
           <span class="card-title" style="margin-bottom:0">30-Day Runway Trajectory</span>
-          <span class="badge ${runway.is_runway_safe ? 'badge-income' : 'badge-expense'}">
+          <span class="badge ${runway.is_runway_safe ? 'badge-income' : 'badge-expense'}" style="flex-shrink:0">
             ${runway.is_runway_safe ? 'Runway Safe' : 'Low Balance Risk'}
           </span>
         </div>

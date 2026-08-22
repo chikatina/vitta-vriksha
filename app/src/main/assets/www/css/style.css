@@ -17,12 +17,12 @@
 /* ------------------------------------------------------------------ tokens */
 
 :root {
-  --accent-light: #0E6B5A;
-  --accent-dark: #4CC7AC;
-  --accent-container-light: #B8F0E3;
-  --accent-container-dark: #0A5244;
-  --on-accent-container-light: #04241D;
-  --on-accent-container-dark: #B8F0E3;
+  --accent-light: #5B7D1D;
+  --accent-dark: #88A838;
+  --accent-container-light: #EBF2D6;
+  --accent-container-dark: #083828;
+  --on-accent-container-light: #083828;
+  --on-accent-container-dark: #E8F4C8;
 
   --radius-xs: 8px;
   --radius-sm: 12px;
@@ -53,33 +53,49 @@
   --nav-height: 64px;
 
   /* Stacking context tokens (Z-Index Architecture)
-   * Ensures menus and dropdowns at the 9XX level are always on top of sheets and overlays. */
+   * Ensures lock overlays at 1000 and menus/toasts are always on top of all content and tours. */
   --z-app-bar: 10;
   --z-nav: 50;
   --z-fab: 55;
-  --z-overlay: 400;
   --z-scrim: 500;
   --z-sheet: 600;
   --z-dialog: 700;
-  --z-toast: 800;
+  --z-toast: 1100;
   --z-menu-scrim: 990;
   --z-menu: 999;
+  --z-overlay: 1000;
 }
 
-[data-accent='indigo'] {
-  --accent-light: #4338CA; --accent-dark: #A5B4FC;
-  --accent-container-light: #DDD9FE; --accent-container-dark: #312B8C;
-  --on-accent-container-light: #16114D; --on-accent-container-dark: #DDD9FE;
+[data-accent='olive'] {
+  --accent-light: #5B7D1D; --accent-dark: #88A838;
+  --accent-container-light: #EBF2D6; --accent-container-dark: #083828;
+  --on-accent-container-light: #083828; --on-accent-container-dark: #E8F4C8;
 }
-[data-accent='violet'] {
-  --accent-light: #7C3AED; --accent-dark: #C4B5FD;
-  --accent-container-light: #EADDFF; --accent-container-dark: #512BA8;
-  --on-accent-container-light: #21005D; --on-accent-container-dark: #EADDFF;
+[data-accent='gold'],
+[data-accent='ochre'] {
+  --accent-light: #8A6800; --accent-dark: #F8C828;
+  --accent-container-light: #FDF2C8; --accent-container-dark: #4A3A00;
+  --on-accent-container-light: #2A2000; --on-accent-container-dark: #FDF2C8;
+}
+[data-accent='bronze'] {
+  --accent-light: #736710; --accent-dark: #988818;
+  --accent-container-light: #F4ECC4; --accent-container-dark: #383204;
+  --on-accent-container-light: #201C00; --on-accent-container-dark: #F4ECC4;
+}
+[data-accent='forest'] {
+  --accent-light: #083828; --accent-dark: #4E8A74;
+  --accent-container-light: #D2ECE4; --accent-container-dark: #05261B;
+  --on-accent-container-light: #031610; --on-accent-container-dark: #D2ECE4;
 }
 [data-accent='amber'] {
   --accent-light: #96601C; --accent-dark: #F2C168;
   --accent-container-light: #FFDEA8; --accent-container-dark: #6E4407;
   --on-accent-container-light: #2A1800; --on-accent-container-dark: #FFDEA8;
+}
+[data-accent='indigo'] {
+  --accent-light: #4338CA; --accent-dark: #A5B4FC;
+  --accent-container-light: #DDD9FE; --accent-container-dark: #312B8C;
+  --on-accent-container-light: #16114D; --on-accent-container-dark: #DDD9FE;
 }
 [data-accent='rose'] {
   --accent-light: #B32350; --accent-dark: #FFB1C4;
@@ -91,75 +107,112 @@
 [data-appearance='light'] {
   color-scheme: light;
 
-  --surface: #FBFCFB;
+  --surface: #FAF4ED;
   --surface-container: #FFFFFF;
-  --surface-container-high: #F0F4F2;
-  --surface-container-highest: #E7EDEA;
-  --outline: #DCE3DF;
-  --outline-strong: #B4C0BA;
+  --surface-container-high: #F8E8D8;
+  --surface-container-highest: #F8E8C8;
+  --outline: #E6D8C4;
+  --outline-strong: #C6B69E;
 
-  --on-surface: #131A17;
-  --on-surface-variant: #55605B;
-  --on-surface-faint: #8A968F;
-  --brand-trunk: #07392F;
+  --on-surface: #182218;
+  --on-surface-variant: #586450;
+  --on-surface-faint: #88947E;
+  --brand-trunk: #083828;
 
   --accent: var(--accent-light);
   --on-accent: #FFFFFF;
   --accent-container: var(--accent-container-light);
   --on-accent-container: var(--on-accent-container-light);
 
-  --income: #0F7A4A;
-  --income-container: #CBF2DC;
-  --expense: #B3261E;
-  --expense-container: #FBDAD6;
-  --investment: #B45309;
-  --investment-container: #FEF3C7;
-  --warning: #8A5B00;
-  --warning-container: #FFE3A8;
-  --info: #1B5FA8;
-  --info-container: #D6E6FA;
+  --income: #4F8522;
+  --income-container: #EAF2D6;
+  --expense: #BA382A;
+  --expense-container: #FBE4E0;
+  --investment: #988818;
+  --investment-container: #F8E8C8;
+  --warning: #C89410;
+  --warning-container: #FDF2C8;
+  --info: #24645C;
+  --info-container: #D6ECE8;
 
-  --scrim: rgba(15, 25, 21, 0.4);
-  --shadow-1: 0 1px 2px rgba(12, 30, 24, 0.06), 0 1px 3px rgba(12, 30, 24, 0.04);
-  --shadow-2: 0 2px 6px rgba(12, 30, 24, 0.08), 0 1px 2px rgba(12, 30, 24, 0.05);
-  --shadow-3: 0 8px 24px rgba(12, 30, 24, 0.14), 0 2px 6px rgba(12, 30, 24, 0.08);
+  --scrim: rgba(8, 56, 40, 0.4);
+  --shadow-1: 0 1px 2px rgba(8, 56, 40, 0.06), 0 1px 3px rgba(8, 56, 40, 0.04);
+  --shadow-2: 0 2px 6px rgba(8, 56, 40, 0.08), 0 1px 2px rgba(8, 56, 40, 0.05);
+  --shadow-3: 0 8px 24px rgba(8, 56, 40, 0.14), 0 2px 6px rgba(8, 56, 40, 0.08);
 }
 
 [data-appearance='dark'] {
   color-scheme: dark;
 
-  --surface: #0E1512;
-  --surface-container: #161E1A;
-  --surface-container-high: #1E2723;
-  --surface-container-highest: #27312C;
-  --outline: #2C3833;
-  --outline-strong: #465049;
+  --surface: #0A1612;
+  --surface-container: #10201A;
+  --surface-container-high: #162A22;
+  --surface-container-highest: #1E362C;
+  --outline: #274236;
+  --outline-strong: #426454;
 
-  --on-surface: #E6EDE9;
-  --on-surface-variant: #A5B2AC;
-  --on-surface-faint: #75827C;
-  --brand-trunk: #FAF3E8;
+  --on-surface: #F4EFE6;
+  --on-surface-variant: #B2C2B0;
+  --on-surface-faint: #788C76;
+  --brand-trunk: #F8E8C8;
 
   --accent: var(--accent-dark);
-  --on-accent: #04241D;
+  --on-accent: #083828;
   --accent-container: var(--accent-container-dark);
   --on-accent-container: var(--on-accent-container-dark);
 
-  --income: #5CD693;
-  --income-container: #0C4429;
-  --expense: #FF897D;
-  --expense-container: #6B1610;
-  --investment: #FBBF24;
-  --investment-container: #5C3807;
-  --warning: #F5C451;
-  --warning-container: #5A3C00;
-  --info: #93C5FD;
-  --info-container: #133A63;
+  --income: #88A838;
+  --income-container: #083828;
+  --expense: #FF887B;
+  --expense-container: #521814;
+  --investment: #F8C828;
+  --investment-container: #3D3004;
+  --warning: #F8C828;
+  --warning-container: #443504;
+  --info: #7CD4C8;
+  --info-container: #0C3C36;
 
-  --scrim: rgba(0, 0, 0, 0.6);
+  --scrim: rgba(0, 0, 0, 0.65);
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.45);
   --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+[data-appearance='oled'] {
+  color-scheme: dark;
+
+  --surface: #000000;
+  --surface-container: #000000;
+  --surface-container-high: #08140F;
+  --surface-container-highest: #0E2018;
+  --outline: #1A2E24;
+  --outline-strong: #304D3E;
+
+  --on-surface: #F4EFE6;
+  --on-surface-variant: #B0C0AE;
+  --on-surface-faint: #748872;
+  --brand-trunk: #F8E8C8;
+
+  --accent: var(--accent-dark);
+  --on-accent: #000000;
+  --accent-container: var(--accent-container-dark);
+  --on-accent-container: var(--on-accent-container-dark);
+
+  --income: #88A838;
+  --income-container: #083828;
+  --expense: #FF887B;
+  --expense-container: #46120E;
+  --investment: #F8C828;
+  --investment-container: #362A03;
+  --warning: #F8C828;
+  --warning-container: #362A03;
+  --info: #7CD4C8;
+  --info-container: #082E28;
+
+  --scrim: rgba(0, 0, 0, 0.85);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.8);
+  --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.85);
+  --shadow-3: 0 8px 24px rgba(0, 0, 0, 0.95);
 }
 
 /* ------------------------------------------------------------------- reset */
@@ -286,6 +339,7 @@ a { color: var(--accent); }
 .income { color: var(--income); }
 .expense { color: var(--expense); }
 .invested, .investment { color: var(--investment); }
+.transfer { color: var(--on-surface-variant); }
 .muted { color: var(--on-surface-variant); }
 
 /* ------------------------------------------------------------------ layout */
@@ -332,12 +386,15 @@ a { color: var(--accent); }
 .view {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior-y: contain;
   padding: 0 var(--gap-4);
   padding-bottom: calc(var(--nav-height) + var(--inset-bottom) + 90px);
   display: flex;
   flex-direction: column;
   gap: var(--gap-4);
+  width: 100%;
+  box-sizing: border-box;
 }
 
 /* Every direct child of .view must not shrink below its content height.
@@ -345,7 +402,7 @@ a { color: var(--accent); }
  * a scroll container (overflow-y:auto). Default flex-shrink:1 causes children
  * to squash each other — chips collapse, cards disappear. With shrink:0 each
  * child takes its natural size and the container scrolls the overflow. */
-.view > * { flex-shrink: 0; }
+.view > * { flex-shrink: 0; min-width: 0; }
 
 .sticky-header {
   position: sticky;
@@ -362,6 +419,7 @@ a { color: var(--accent); }
   padding-left: var(--gap-4);
   padding-right: var(--gap-4);
   margin-bottom: var(--gap-2);
+  box-sizing: border-box;
 }
 
 .section {
@@ -671,6 +729,8 @@ a { color: var(--accent); }
 .btn-block { width: 100%; }
 .btn-sm { height: 34px; padding: 0 var(--gap-4); font-size: 13px; }
 .btn-sm .icon { font-size: 17px; }
+.btn-xs { height: 28px; padding: 0 var(--gap-2); font-size: 11.5px; border-radius: var(--radius-full); }
+.btn-xs .icon { font-size: 15px; }
 
 /* Spacing between cards and buttons */
 .card > .btn,
@@ -863,6 +923,25 @@ a { color: var(--accent); }
 
 .select-button[aria-expanded='true'] .select-button-arrow { transform: rotate(180deg); }
 
+.select-button.select-compact {
+  padding: 6px 10px;
+  font-size: 13px;
+  min-height: 34px;
+  background: var(--surface-container-highest);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-sm);
+}
+
+.select-button.select-compact .select-button-arrow {
+  font-size: 18px;
+}
+
+.select-button.select-compact:focus-visible,
+.select-button.select-compact[aria-expanded='true'] {
+  border-color: var(--accent);
+  background: var(--surface-container);
+}
+
 /* Catches the tap that dismisses an open menu, without dimming what is behind it.
  * Sits at 9XX level (z-index: 990 / 999) to always stay above sheets, dialogs and overlays. */
 .menu-scrim {
@@ -875,6 +954,7 @@ a { color: var(--accent); }
   position: fixed;
   z-index: var(--z-menu);
   overflow-y: auto;
+  max-height: 280px;
   padding: var(--gap-2) 0;
   background: var(--surface-container-high);
   border-radius: var(--radius-md);
@@ -954,6 +1034,7 @@ a { color: var(--accent); }
 .amount-input.expense { color: var(--expense); }
 .amount-input.income { color: var(--income); }
 .amount-input.invested, .amount-input.investment { color: var(--investment); }
+.amount-input.transfer { color: var(--on-surface-variant); }
 
 .amount-input:focus { outline: none; }
 
@@ -1071,12 +1152,12 @@ a { color: var(--accent); }
   transition: background 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease);
 }
 
-.chip .icon { font-size: 17px; }
-
-.chip[aria-selected='true'] {
+.chip[aria-selected='true'],
+.chip.active {
   background: var(--accent-container);
   border-color: transparent;
   color: var(--on-accent-container);
+  font-weight: 650;
 }
 
 .badge {
@@ -1090,6 +1171,9 @@ a { color: var(--accent); }
   font-weight: 650;
   background: var(--surface-container-highest);
   color: var(--on-surface-variant);
+  flex-shrink: 0;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .badge .icon { font-size: 14px; }
@@ -1106,16 +1190,82 @@ a { color: var(--accent); }
   border-radius: var(--radius-full);
   background: var(--surface-container-highest);
   overflow: hidden;
+  position: relative;
 }
 
 .progress-bar {
   height: 100%;
   border-radius: var(--radius-full);
   background: var(--accent);
-  transition: width 0.5s var(--ease-emphasised);
+  transition: width 0.35s var(--ease-emphasised);
 }
 
 .progress-bar.over { background: var(--expense); }
+
+.progress-bar.indeterminate {
+  width: 100%;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-container) 50%, var(--accent) 100%);
+  background-size: 200% 100%;
+  animation: progress-indeterminate 1.4s infinite linear;
+}
+
+@keyframes progress-indeterminate {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  border: 2.5px solid var(--surface-container-highest);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.progress-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-3);
+  padding: var(--gap-5);
+  min-width: 280px;
+  max-width: 380px;
+}
+
+.progress-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: var(--gap-3);
+}
+
+.progress-dialog-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--on-surface);
+  flex: 1;
+}
+
+.progress-dialog-status {
+  font-size: 13.5px;
+  color: var(--on-surface-variant);
+  line-height: 1.4;
+}
+
+.progress-dialog-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--on-surface-variant);
+  font-variant-numeric: tabular-nums;
+}
 
 .empty {
   display: flex;
@@ -1158,6 +1308,18 @@ a { color: var(--accent); }
 
 .banner-title { display: block; font-size: 14px; font-weight: 620; }
 .banner-body { display: block; font-size: 12.5px; opacity: 0.9; }
+
+/* Interactive Transaction Alert Tooltip Card */
+.interactive-alert-card {
+  background: linear-gradient(135deg, var(--surface-container-low), var(--surface-container));
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  margin-bottom: var(--gap-3);
+  box-shadow: var(--shadow-2);
+  position: relative;
+  transition: opacity 0.2s var(--ease), transform 0.2s var(--ease);
+}
 
 /* A failed operation: what happened, what to do, and a code to quote. */
 .error-panel {
@@ -1459,26 +1621,31 @@ html.keyboard-open .view {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .setup-content {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: var(--gap-3);
   text-align: center;
-  padding: var(--gap-2) 0;
+  padding: var(--gap-2) var(--gap-4) var(--gap-5) var(--gap-4);
+  box-sizing: border-box;
+  width: 100%;
 }
 
 .setup-footer {
   display: flex;
   flex-direction: column;
   gap: var(--gap-2);
-  padding-top: var(--gap-4);
+  padding-top: var(--gap-2);
   flex-shrink: 0;
 }
 
@@ -1623,11 +1790,15 @@ html.keyboard-open .view {
   position: relative;
   display: flex;
   align-items: center;
-  gap: var(--gap-2);
+  gap: 6px;
   background: var(--surface-container-high);
   border-radius: var(--radius-full);
-  padding: 0 var(--gap-4);
+  padding: 0 10px;
+  height: 38px;
+  min-width: 0;
+  flex: 1 1 0;
   border: 1px solid var(--outline);
+  box-sizing: border-box;
   transition: border-color 0.15s var(--ease), background 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 
@@ -1645,12 +1816,13 @@ html.keyboard-open .view {
 }
 
 .ledger-search-input {
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
+  width: 0;
   border: none;
   background: transparent;
-  padding: 10px 0;
-  font-size: 14.5px;
+  padding: 6px 0;
+  font-size: 13px;
   font-family: var(--font);
   color: var(--on-surface);
   outline: none;
@@ -1658,14 +1830,15 @@ html.keyboard-open .view {
 
 .ledger-search-input::placeholder {
   color: var(--on-surface-faint);
+  font-size: 12.5px;
 }
 
 .ledger-search-clear {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: var(--radius-full);
   background: var(--surface-container-highest);
   color: var(--on-surface-variant);
@@ -2149,3 +2322,348 @@ html.keyboard-open .view {
   min-height: 44px;
 }
 
+/* ── Floating Batch Action Bar ── */
+.batch-action-bar {
+  position: fixed;
+  bottom: calc(var(--nav-height) + var(--gap-2) + var(--inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 24px);
+  max-width: 480px;
+  background: var(--surface-container-highest);
+  border: 1px solid var(--outline-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap-1);
+  z-index: var(--z-fab);
+  animation: slideUpFade 0.2s var(--ease);
+}
+
+@keyframes slideUpFade {
+  from { opacity: 0; transform: translate(-50%, 12px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (max-width: 400px) {
+  .batch-action-bar {
+    padding: 6px 8px;
+    gap: 4px;
+    width: calc(100% - 16px);
+  }
+  .batch-action-bar .btn-sm {
+    height: 30px;
+    padding: 0 8px;
+    font-size: 11.5px;
+  }
+  .batch-action-bar .btn-sm .icon {
+    font-size: 15px;
+  }
+}
+
+.split-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 380px) {
+  .split-line {
+    flex-wrap: wrap;
+  }
+  .split-line > div:first-child {
+    width: 100%;
+    flex: 1 1 100% !important;
+  }
+  .split-line .split-amt {
+    max-width: 100px;
+    flex: 1;
+  }
+  .split-line .split-note {
+    flex: 2;
+    min-width: 100px;
+  }
+}
+
+/* ── Waterfall Cashflow Bar ── */
+.waterfall-bar {
+  display: flex;
+  height: 10px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  background: var(--surface-container-highest);
+  margin: var(--gap-2) 0;
+}
+.waterfall-bar > div {
+  height: 100%;
+  transition: width 0.4s var(--ease);
+}
+.waterfall-bar .wf-expense { background: var(--expense); }
+.waterfall-bar .wf-invest { background: var(--investment); }
+.waterfall-bar .wf-kept { background: var(--income); }
+
+/* ── Anomaly & High Spend Chips ── */
+.badge-anomaly {
+  background: var(--warning-container);
+  color: var(--warning);
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-weight: 600;
+  vertical-align: middle;
+  line-height: 1.2;
+}
+
+/* ── Quick-Peek Masked Amount ── */
+.peekable-amount {
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.15s ease;
+}
+.peekable-amount:active {
+  opacity: 0.7;
+}
+
+/* ── Net Worth Milestones ── */
+.milestone-track {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: none;
+}
+.milestone-track::-webkit-scrollbar { display: none; }
+.milestone-chip {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  background: var(--surface-container-high);
+  border: 1px solid var(--outline);
+  font-size: 12px;
+  font-weight: 600;
+}
+.milestone-chip.achieved {
+  background: var(--income-container);
+  color: var(--income);
+  border-color: transparent;
+}
+.milestone-chip.next {
+  background: var(--accent-container);
+  color: var(--on-accent-container);
+  border-color: var(--accent);
+}
+
+/* ── Getting Started Card Auto-Dismiss Animation ── */
+[data-onboarding-card] {
+  transition: max-height 0.45s var(--ease-emphasised), 
+              opacity 0.35s var(--ease), 
+              margin-bottom 0.45s var(--ease-emphasised), 
+              transform 0.35s var(--ease),
+              padding 0.35s var(--ease);
+  max-height: 800px;
+}
+
+[data-onboarding-card].auto-dismissing {
+  max-height: 0 !important;
+  opacity: 0 !important;
+  margin-bottom: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  border-width: 0 !important;
+  overflow: hidden !important;
+  transform: translateY(-8px) scale(0.96) !important;
+  pointer-events: none !important;
+}
+
+/* ── Interactive Modal App Tour (Driver.js-Style with Cutout Mask & Click-Through Prevention) ── */
+.app-tour-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 730;
+  background: rgba(0, 0, 0, 0.65);
+  pointer-events: auto; /* Prevent click-through to underlying app elements */
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 0.24s var(--ease), background 0.24s var(--ease);
+}
+
+.app-tour-scrim.open {
+  opacity: 1;
+}
+
+.app-tour-scrim.has-spotlight {
+  /* When spotlight is active, the spotlight's 9999px box-shadow provides the cutout mask */
+  background: transparent;
+}
+
+body.tour-active #fab,
+body.tour-active #nav,
+body.tour-active #app-bar,
+body.tour-active .view {
+  pointer-events: none !important;
+  user-select: none !important;
+}
+
+.tour-highlight-target {
+  position: relative !important;
+  z-index: 735 !important;
+}
+
+.app-tour-container {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--keyboard-inset, 0px) + var(--inset-bottom) + var(--nav-height) + 10px);
+  margin: 0 auto;
+  width: min(440px, calc(100vw - 20px));
+  z-index: 750;
+  transform: translateY(20px) scale(0.98);
+  opacity: 0;
+  transition: transform 0.28s var(--ease-emphasised), opacity 0.22s var(--ease);
+  pointer-events: none;
+}
+
+.app-tour-container.open {
+  transform: translateY(0) scale(1);
+  opacity: 1;
+}
+
+.app-tour-card {
+  pointer-events: auto; /* Only tour controls handle clicks */
+  background: var(--surface-container-highest);
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.25);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: none;
+  overflow: hidden;
+  box-sizing: border-box;
+  transition: all 0.25s var(--ease);
+}
+
+.app-tour-card.minimized {
+  padding: 6px 10px;
+  gap: 4px;
+}
+
+.app-tour-card.minimized .app-tour-body,
+.app-tour-card.minimized .app-tour-feature-list {
+  display: none;
+}
+
+.app-tour-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.app-tour-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  background: var(--accent);
+  color: var(--on-accent);
+  border-radius: var(--radius-full);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.app-tour-feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: var(--surface-container);
+  border-radius: var(--radius-md);
+  padding: 6px 8px;
+  border: 1px solid var(--outline-variant);
+}
+
+.app-tour-feature-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.app-tour-feature-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-container-high);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.app-tour-feature-text strong {
+  display: block;
+  font-size: 11.5px;
+  color: var(--on-surface);
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.app-tour-feature-text span {
+  color: var(--on-surface-variant);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+/* ── Driver.js-Style Glowing Spotlight Box with Cutout Mask ── */
+.app-tour-spotlight {
+  position: fixed;
+  z-index: 740;
+  pointer-events: none;
+  box-sizing: border-box;
+  background: transparent;
+  border-radius: var(--radius-md);
+  border: 2px solid var(--accent);
+  /* Massive box-shadow darkens everything outside the spotlight while leaving the target in 100% clear focus */
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.68),
+              0 0 16px rgba(16, 185, 129, 0.45);
+  opacity: 0;
+  transform: translateZ(0);
+  transition: top 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+              left 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+              width 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+              height 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+              border-radius 0.25s ease,
+              opacity 0.24s ease;
+  animation: tourSpotlightPulse 2.4s infinite ease-in-out;
+}
+
+@keyframes tourSpotlightPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.68), 0 0 14px rgba(16, 185, 129, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.68), 0 0 26px rgba(16, 185, 129, 0.75), inset 0 0 8px rgba(16, 185, 129, 0.15);
+  }
+}
+
+.app-tour-container.dock-top {
+  bottom: auto;
+  top: calc(var(--inset-top) + 14px);
+  transform: translateY(-20px) scale(0.98);
+}
+
+.app-tour-container.dock-top.open {
+  transform: translateY(0) scale(1);
+}

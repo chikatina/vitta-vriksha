@@ -125,8 +125,8 @@ describe('the dashboard panels', () => {
       // A panel that has data and still draws nothing is a panel that has gone wrong.
       // Panels that require specialised data the basic seed does not provide are skipped:
       // spend_by_member needs family, accounts_summary needs asset_accounts,
-      // investments_summary needs holdings.
-      if (['spend_by_member', 'accounts_summary', 'investments_summary'].includes(entry.id)) continue;
+      // investments_summary needs holdings, debt_summary needs credit cards/loans.
+      if (['spend_by_member', 'accounts_summary', 'investments_summary', 'debt_summary'].includes(entry.id)) continue;
       assert.ok(entry.html.length > 0, `${entry.id} drew nothing`);
       assert.ok(!entry.html.includes('undefined'), `${entry.id} rendered "undefined"`);
       assert.ok(!entry.html.includes('NaN'), `${entry.id} rendered "NaN"`);

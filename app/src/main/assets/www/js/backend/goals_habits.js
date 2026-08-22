@@ -69,7 +69,7 @@ export function calculateNoSpendDays(db, args = {}) {
     current_streak: currentStreak,
     longest_streak: maxStreak,
     days: calendarDays,
-    badge: noSpendRatio >= 50 ? '🌱 Frugal Master' : (noSpendRatio >= 30 ? '🌿 Mindful Spender' : '🌱 Building Habit'),
+    badge: noSpendRatio >= 50 ? 'Frugal Master' : (noSpendRatio >= 30 ? 'Mindful Spender' : 'Building Habit'),
   };
 }
 
@@ -148,7 +148,7 @@ export function getMonthlyFinanceWrapped(db, args = {}) {
         merchant: topMerchantRow ? topMerchantRow.merchant : '',
         stat: topMerchantRow ? topMerchantRow.merchant : '-',
         stat_label: 'Favorite Merchant',
-        icon: 'local_mall',
+        icon: 'shopping_bag',
       },
       {
         id: 'habits',
@@ -157,7 +157,7 @@ export function getMonthlyFinanceWrapped(db, args = {}) {
         subtitle: `Best streak was ${noSpend.longest_streak} consecutive days with zero discretionary spend!`,
         stat: noSpend.badge,
         stat_label: 'Achievement Badge',
-        icon: 'emoji_events',
+        icon: 'star',
       },
     ],
   };
@@ -250,7 +250,7 @@ export function evaluateChallenge(db, challenge) {
     total_breaches: breaches,
     is_passing: isPassing,
     total_spent: Math.round(totalSpentInChallenge),
-    status_label: isPassing ? '🔥 Perfect Streak' : `${breaches} rule breach${breaches > 1 ? 'es' : ''}`,
+    status_label: isPassing ? 'Perfect Streak' : `${breaches} rule breach${breaches > 1 ? 'es' : ''}`,
   };
 }
 

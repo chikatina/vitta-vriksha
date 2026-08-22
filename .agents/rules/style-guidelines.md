@@ -1,0 +1,23 @@
+# UI Design & Style System Rules
+
+- **Design Tokens**: All styling must live in `assets/www/css/style.css` using CSS custom properties (`var(--primary)`, `var(--expense)`, etc.).
+- **No Inline Styles**: Do not use inline `style="..."` for component layout or color overrides; define reusable CSS classes instead.
+- **Semantic Financial Palette**:
+  - **Expense (Money Out)**: `--expense` (`#B3261E`), `.badge-expense`, `-₹X` sign.
+  - **Income (Money In)**: `--income` (`#0F7A4A`), `.badge-income`, `+₹X` sign.
+  - **Investment / Transfer**: `--investment` (`#B45309`), `.badge-accent`, neutral sign.
+- **Z-Index Stacking Architecture (9XX Rule)**:
+  - `--z-app-bar`: `10`
+  - `--z-nav`: `50`
+  - `--z-scrim`: `500`
+  - `--z-sheet`: `600`
+  - `--z-dialog`: `700`
+  - **`--z-menu-scrim`**: **`990`** (Tap dismisser for exposed dropdowns)
+  - **`--z-menu`**: **`999`** (Exposed dropdown menus and pickers - float above dialogs & sheets)
+  - `--z-overlay`: `1000` (Lock screen / PIN)
+  - `--z-toast`: `1100` (Notifications)
+- **UI Copywriting & Microcopy**:
+  - **Brevity & Conciseness**: 1-2 word action verbs for buttons (`Save`, `Add`, `Link`, `Ignore`).
+  - **Neutral Prose**: No exclamation marks, no em dashes (`—`), no hype words.
+  - **Subtitle separator**: Use centered bullet dots `·` (e.g., `HDFC Bank · Debit Card · ending 5678`).
+- **Heavy Operations**: Any long-running task must provide immediate visual feedback via `showProgressModal(title, options)` or staged `.progress-bar` elements.

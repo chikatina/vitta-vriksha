@@ -32,6 +32,7 @@ import { renderSecurity } from './views/security.js';
 import { renderAbout } from './views/about.js';
 import { renderGuide } from './views/guide.js';
 import { renderSupport } from './views/support.js';
+import { renderSmsIngest } from './views/sms-ingest.js';
 import { seedDemoData } from './demo-seed.js';
 
 const TABS = [
@@ -56,6 +57,7 @@ const PAGES = {
   // Reached from Home, from the Ledger and from More, because "what made this up" is a
   // question asked from wherever the figure was seen.
   insights: { parent: 'home', title: 'Insights', render: renderInsights },
+  sms_ingest: { parent: 'home', title: 'Bank SMS Ingestion', render: renderSmsIngest },
   recurring: { parent: 'wealth', title: 'Recurring payments', render: renderRecurring },
   investments: { parent: 'wealth', title: 'Investments', render: renderInvestments },
   accounts: { parent: 'wealth', title: 'Accounts', render: (c, a) => renderRecordPage(c, a, 'account') },
@@ -104,8 +106,17 @@ class App {
     this.navBar = document.getElementById('navBar');
 
     window.app = this;
-    window.seedDemoData = () => seedDemoData(this);
+    if (Bridge.isDebug()) {
+      window.seedDemoData = () => seedDemoData(this);
+    }
     window.onSystemBackPressed = () => this.handleSystemBack();
+    window.onNotificationClicked = (reminderId) => {
+      if (this.locked) {
+        this._pendingNotificationId = reminderId;
+        return;
+      }
+      this.handleNotificationClick(reminderId);
+    };
     this.init();
   }
 
@@ -158,22 +169,30 @@ class App {
    * Everything here needs a database that decrypts, which is why none of it is in `init`.
    */
   async resume() {
-    const res = await Bridge.db('get_settings');
-    if (res.status === 'success') this.settings = res.settings;
+    try {
+      const res = await Bridge.db('get_settings');
+      if (res && res.status === 'success') this.settings = res.settings;
 
-    this.currency = this.settings.currency || 'INR';
-    this.locale = this.settings.locale || 'en-IN';
-    setAmountsMasked(this.settings.mask_amounts === '1');
-    this.applyAppearance(this.settings.appearance || 'system', this.settings.accent || 'jade');
-    // Kept outside the database so the next lock screen is drawn in the user's theme
-    // rather than the default one.
-    localStorage.setItem('vv.appearance', this.appearance);
-    localStorage.setItem('vv.accent', this.accent);
+      this.currency = this.settings.currency || 'INR';
+      this.locale = this.settings.locale || 'en-IN';
+      setAmountsMasked(this.settings.mask_amounts === '1');
+      this.applyAppearance(this.settings.appearance || 'system', this.settings.accent || 'jade');
+      // Kept outside the database so the next lock screen is drawn in the user's theme
+      // rather than the default one.
+      localStorage.setItem('vv.appearance', this.appearance);
+      localStorage.setItem('vv.accent', this.accent);
 
-    this.buildNav();
+      this.buildNav();
 
-    if (this.settings.setup_complete !== '1') renderSetup(this);
-    else this.unlock();
+      if (this.settings.setup_complete !== '1') {
+        renderSetup(this);
+      } else {
+        this.unlock();
+      }
+    } catch (err) {
+      console.error('Error during app.resume():', err);
+      this.unlock();
+    }
   }
 
   /**
@@ -328,13 +347,19 @@ class App {
     }
     this.tab = tab;
     this.page = page;
-    if (page) history.pushState({ page }, '');
+    if (page && typeof history !== 'undefined' && history?.pushState) {
+      history.pushState({ page }, '');
+    }
     this.render();
   }
 
-  open(page) {
-    const config = PAGES[page];
-    if (config) this.go(config.parent, page);
+  open(destination) {
+    if (TAB_VIEWS[destination]) {
+      this.go(destination);
+      return;
+    }
+    const config = PAGES[destination];
+    if (config) this.go(config.parent, destination);
   }
 
   openPage(page) {
@@ -489,7 +514,8 @@ class App {
     if (this.locked) return;
     if (this.settings.setup_complete !== '1') return;
 
-    document.querySelectorAll('.scrim, .dialog, .sheet, .menu, .menu-scrim').forEach((node) => node.remove());
+    document.querySelectorAll('.scrim, .dialog, .sheet, .menu, .menu-scrim, .app-tour-scrim, .app-tour-container, .app-tour-spotlight').forEach((node) => node.remove());
+    document.body?.classList?.remove('tour-active');
     this.locked = true;
     this.settings = {};
     renderLock(this);
@@ -501,6 +527,25 @@ class App {
     document.querySelectorAll('.overlay-screen, .scrim, .dialog, .sheet, .menu, .menu-scrim').forEach((node) => node.remove());
     this.render();
     this.catchUp();
+    if (this._pendingNotificationId) {
+      const id = this._pendingNotificationId;
+      this._pendingNotificationId = null;
+      this.handleNotificationClick(id);
+    }
+  }
+
+  handleNotificationClick(reminderId) {
+    if (!reminderId) return;
+    if (reminderId === 'pending-alerts') {
+      this.go('home');
+    } else if (reminderId === 'daily-spend-review') {
+      this.go('home');
+      this.addTransaction();
+    } else if (reminderId === 'cas-refresh') {
+      this.open('cas');
+    } else if (reminderId.startsWith('sip-')) {
+      this.open('sips');
+    }
   }
 
   /**
@@ -546,5 +591,8 @@ class App {
     return this.settings.exclude_investments_from_expenses !== '0';
   }
 }
+
+export { App };
+export default App;
 
 new App();

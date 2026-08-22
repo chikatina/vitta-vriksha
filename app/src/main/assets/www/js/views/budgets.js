@@ -1,12 +1,12 @@
 /*
- * Budgets: where this month's money went, and how each category is tracking against
- * the cap you set for it.
+ * Budgets: where this month's money went, category caps, daily run-rate,
+ * and multi-month Salary vs Investment Outflow trend.
  */
 
 import { Bridge } from '../bridge.js';
 import { icon, h, sheet, toast, confirmDialog, emptyState } from '../ui.js';
-import { formatCurrency, todayISO } from '../formatters.js';
-import { donutChart, bindChartSelect } from '../charts.js';
+import { formatCurrency, formatPercent, formatMonthKey, todayISO } from '../formatters.js';
+import { donutChart, barSeriesChart, bindChartSelect } from '../charts.js';
 import { openCategoryTrend, openSliceSheet } from './drilldown.js';
 
 const ICON_CHOICES = [
@@ -21,22 +21,34 @@ const ICON_CHOICES = [
 ];
 
 const COLOR_CHOICES = [
-  '#0E6B5A', '#10B981', '#14B8A6', '#06B6D4', '#3B82F6', '#6366F1', '#8B5CF6',
-  '#D946EF', '#EC4899', '#FB7185', '#EF4444', '#F97316', '#F59E0B', '#84CC16', '#64748B',
+  '#88A838', '#988818', '#F8C828', '#083828', '#10B981', '#14B8A6', '#06B6D4', '#3B82F6',
+  '#6366F1', '#8B5CF6', '#D946EF', '#EC4899', '#EF4444', '#F97316', '#64748B',
 ];
 
 const TYPES = ['Expense', 'Income', 'Investment'];
 
 export async function renderBudgets(container, app) {
-  const [categoryRes, summaryRes] = await Promise.all([
+  const [categoryRes, summaryRes, trendRes] = await Promise.all([
     Bridge.db('get_categories'),
     Bridge.db('get_summary', { member_id: app.memberFilter }),
+    Bridge.db('get_salary_investment_trend', { member_id: app.memberFilter }),
   ]);
 
   const categories = categoryRes.categories || [];
   const budget = Number(summaryRes.monthly_budget || 0);
   const spentThisMonth = Number(summaryRes.this_month?.expense || 0);
+  const incomeThisMonth = Number(summaryRes.this_month?.income || 0);
+  const investedThisMonth = Number(summaryRes.this_month?.invested || 0);
   const money = (v) => formatCurrency(v, app.currency, app.locale);
+
+  // Daily Safe-to-Spend pacing calculations
+  const now = new Date();
+  const totalDaysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const currentDay = now.getDate();
+  const daysRemaining = Math.max(1, totalDaysInMonth - currentDay + 1);
+  const remainingBudget = Math.max(0, budget - spentThisMonth);
+  const dailySafeSpend = budget > 0 ? Math.round(remainingBudget / daysRemaining) : 0;
+  const isOverBudget = budget > 0 && spentThisMonth > budget;
 
   const expenses = categories
     .filter((c) => c.type === 'Expense' && c.spent_this_month > 0)
@@ -45,28 +57,80 @@ export async function renderBudgets(container, app) {
   const withCaps = categories.filter((c) => Number(c.monthly_budget) > 0);
   const totalSpent = expenses.reduce((s, c) => s + c.spent_this_month, 0);
 
+  // Multi-month Salary vs Investment Outflow Trend data
+  const trendMonths = trendRes.months || [];
+  const trendLabels = trendMonths.map((m) => formatMonthKey(m.month_key).slice(0, 3));
+  const trendSeries = [
+    { name: 'Income (Salary)', color: 'var(--income)', values: trendMonths.map((m) => m.income) },
+    { name: 'Invested', color: 'var(--investment)', values: trendMonths.map((m) => m.invested) },
+    { name: 'Expenses', color: 'var(--expense)', values: trendMonths.map((m) => m.expense) },
+  ];
+
   container.innerHTML = `
-    <div class="card">
-      <div class="row-between" style="margin-bottom:12px">
-        <span class="title">Overall budget</span>
-        <button class="btn btn-text btn-sm" data-set-budget>${budget > 0 ? 'Change' : 'Set'}</button>
+    <div class="card" style="background:linear-gradient(180deg, var(--surface-container-low), var(--surface-container));border:1px solid var(--outline-variant)">
+      <div class="row-between" style="margin-bottom:10px">
+        <span class="title">Overall Monthly Budget</span>
+        <button class="btn btn-text btn-sm" data-set-budget>${budget > 0 ? 'Change limit' : 'Set limit'}</button>
       </div>
+
       ${budget > 0 ? `
-        <div class="row-between" style="margin-bottom:10px">
+        <div class="row-between" style="align-items:baseline;margin-bottom:8px">
           <span class="display" style="font-size:26px">${h(money(spentThisMonth))}</span>
-          <span class="caption">of ${h(money(budget))}</span>
+          <span class="caption">Budget: <strong>${h(money(budget))}</strong></span>
         </div>
-        <div class="progress">
-          <div class="progress-bar ${spentThisMonth > budget ? 'over' : ''}"
-               style="width:${Math.min(100, budget ? (spentThisMonth / budget) * 100 : 0)}%"></div>
+
+        <div class="progress" style="height:10px;margin-bottom:12px">
+          <div class="progress-bar ${isOverBudget ? 'over' : ''}"
+               style="width:${Math.min(100, (spentThisMonth / budget) * 100)}%"></div>
         </div>
-        <div class="caption" style="margin-top:8px">
-          ${spentThisMonth > budget
-            ? `Over by ${h(money(spentThisMonth - budget))}.`
-            : `${h(money(budget - spentThisMonth))} remaining.`}
+
+        <div class="grid-2" style="gap:8px;margin-top:var(--gap-2)">
+          <div class="card-flat" style="padding:10px;background:var(--surface-container-high);border-radius:var(--radius-sm)">
+            <span class="caption" style="font-size:11px;display:block">Daily Safe-to-Spend</span>
+            <div style="font-size:16px;font-weight:700;margin:2px 0" class="${isOverBudget ? 'expense' : 'income'}">
+              ${isOverBudget ? h(money(0)) : h(money(dailySafeSpend))}<span style="font-size:11px;font-weight:400;color:var(--on-surface-variant)">/day</span>
+            </div>
+            <span class="caption" style="font-size:11px">${daysRemaining} days left in ${formatMonthKey(todayISO().slice(0, 7)).split(' ')[0]}</span>
+          </div>
+
+          <div class="card-flat" style="padding:10px;background:var(--surface-container-high);border-radius:var(--radius-sm)">
+            <span class="caption" style="font-size:11px;display:block">Remaining Pool</span>
+            <div style="font-size:16px;font-weight:700;margin:2px 0" class="${isOverBudget ? 'expense' : 'on-surface'}">
+              ${isOverBudget ? `-${h(money(spentThisMonth - budget))}` : h(money(remainingBudget))}
+            </div>
+            <span class="caption" style="font-size:11px">${isOverBudget ? 'Over limit' : `${Math.round(((budget - spentThisMonth) / budget) * 100)}% unspent`}</span>
+          </div>
         </div>`
-      : `<p class="caption">Set a monthly spending limit.</p>`}
+      : `<p class="caption" style="margin-bottom:8px">Set a monthly spending limit to activate daily run-rate pacing and safe spending alerts.</p>`}
     </div>
+
+    ${trendMonths.length && trendMonths.some((m) => m.income > 0 || m.invested > 0 || m.expense > 0) ? `
+      <div class="card">
+        <div class="card-title">
+          <span>Salary vs Investment & Spends</span>
+          <span class="caption">Past 6 months</span>
+        </div>
+
+        <div style="margin-top:8px">
+          ${barSeriesChart(trendLabels, trendSeries, {
+            format: (v) => money(v),
+            height: 165,
+            stacked: false,
+          })}
+        </div>
+
+        <div class="row" style="gap:12px;margin-top:12px;justify-content:center;flex-wrap:wrap">
+          <div class="row" style="gap:6px;font-size:12px">
+            <span class="legend-dot" style="background:var(--income)"></span><span>Salary / Income</span>
+          </div>
+          <div class="row" style="gap:6px;font-size:12px">
+            <span class="legend-dot" style="background:var(--investment)"></span><span>Investments</span>
+          </div>
+          <div class="row" style="gap:6px;font-size:12px">
+            <span class="legend-dot" style="background:var(--expense)"></span><span>Expenses</span>
+          </div>
+        </div>
+      </div>` : ''}
 
     ${expenses.length ? `
     <div class="card">
@@ -87,21 +151,26 @@ export async function renderBudgets(container, app) {
 
     ${withCaps.length ? `
     <div class="section">
-      <div class="section-header"><span class="title">Category limits</span></div>
-      <div class="card" style="display:flex;flex-direction:column;gap:16px">
+      <div class="section-header"><span class="title">Category Limits</span></div>
+      <div class="card" style="display:flex;flex-direction:column;gap:14px">
         ${withCaps.map((c) => {
-          const used = Number(c.monthly_budget) ? (c.spent_this_month / c.monthly_budget) * 100 : 0;
+          const cap = Number(c.monthly_budget) || 1;
+          const usedPct = Math.round((c.spent_this_month / cap) * 100);
+          const isOver = usedPct > 100;
           return `
-            <div class="bar-row">
-              <div class="bar-head">
-                <span class="row" style="gap:8px;min-width:0">
+            <div class="bar-row" style="cursor:pointer" data-edit-cap="${c.id}">
+              <div class="bar-head" style="margin-bottom:4px">
+                <span class="row" style="gap:8px;min-width:0;align-items:center">
                   <span style="color:${h(c.color)};display:flex">${icon(c.icon || 'sell', 'icon-sm')}</span>
-                  <span class="legend-label">${h(c.name)}</span>
+                  <span class="legend-label" style="font-weight:600">${h(c.name)}</span>
+                  ${isOver ? `<span class="badge badge-expense" style="font-size:10px;padding:1px 5px">Over cap</span>` : ''}
                 </span>
-                <span class="legend-value">${h(money(c.spent_this_month))} / ${h(money(c.monthly_budget))}</span>
+                <span class="legend-value" style="font-size:12px">
+                  <strong>${h(money(c.spent_this_month))}</strong> / ${h(money(c.monthly_budget))} (${usedPct}%)
+                </span>
               </div>
-              <div class="bar-track">
-                <div class="bar-fill" style="width:${Math.min(100, used)}%;background:${used > 100 ? 'var(--expense)' : h(c.color)}"></div>
+              <div class="bar-track" style="height:8px">
+                <div class="bar-fill" style="width:${Math.min(100, usedPct)}%;background:${isOver ? 'var(--expense)' : (usedPct > 85 ? 'var(--warning)' : h(c.color))}"></div>
               </div>
             </div>`;
         }).join('')}
@@ -120,7 +189,7 @@ export async function renderBudgets(container, app) {
               <span class="avatar" style="background:${h(c.color)}">${icon(c.icon || 'sell')}</span>
               <span class="list-row-main">
                 <span class="list-row-title">${h(c.name)}</span>
-                <span class="list-row-sub">${h(c.type)}${Number(c.monthly_budget) > 0 ? ` · cap ${h(money(c.monthly_budget))}` : ''}</span>
+                <span class="list-row-sub">${h(c.type)}${Number(c.monthly_budget) > 0 ? ` · cap ${h(money(c.monthly_budget))}` : ' · tap to set cap'}</span>
               </span>
               <span class="list-row-amount">${c.spent_this_month > 0 ? h(money(c.spent_this_month)) : ''}</span>
             </button>`).join('')}
@@ -154,13 +223,13 @@ export async function renderBudgets(container, app) {
     });
   }
 
-  /*
-   * A category row leads to its history, not straight to its settings.
-   *
-   * Tapping a category and being asked to choose an icon was the wrong answer to the
-   * question the tap was asking, which is almost always "why is this so high". Editing is
-   * still one tap further in, at the bottom of the sheet.
-   */
+  container.querySelectorAll('[data-edit-cap]').forEach((row) => {
+    row.addEventListener('click', () => {
+      const category = categories.find((c) => String(c.id) === row.dataset.editCap);
+      if (category) openCategorySheet(app, category);
+    });
+  });
+
   container.querySelectorAll('[data-category]').forEach((row) => {
     row.addEventListener('click', () => {
       const category = categories.find((c) => String(c.id) === row.dataset.category);
@@ -236,9 +305,10 @@ async function openCategorySheet(app, existing) {
     </div>
 
     <div class="field">
-      <label class="field-label" for="catBudget">Monthly cap</label>
+      <label class="field-label" for="catBudget">Monthly cap (budget limit)</label>
       <input class="input numeric" id="catBudget" data-budget type="number" inputmode="decimal"
              min="0" placeholder="No cap" value="${draft.monthly_budget || ''}">
+      <p class="caption" style="margin-top:4px">Sets a spending limit for this category.</p>
     </div>
 
     ${existing ? `<button class="btn btn-danger-text btn-block" data-delete>${icon('delete')}Delete category</button>` : ''}`;

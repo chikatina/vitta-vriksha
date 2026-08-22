@@ -11,7 +11,7 @@
 
 import { Bridge } from '../bridge.js';
 import {
-  icon, h, toast, confirmDialog, selectField, bindSelectFields,
+  icon, h, toast, confirmDialog, selectField, bindSelectFields, sheet, showProgressModal,
 } from '../ui.js';
 import { setAmountsMasked } from '../formatters.js';
 
@@ -19,13 +19,16 @@ const APPEARANCES = [
   { id: 'system', label: 'System', glyph: 'contrast' },
   { id: 'light', label: 'Light', glyph: 'light_mode' },
   { id: 'dark', label: 'Dark', glyph: 'dark_mode' },
+  { id: 'oled', label: 'OLED', glyph: 'dark_mode' },
 ];
 
 const ACCENTS = [
-  { id: 'jade', label: 'Jade', color: '#0E6B5A' },
+  { id: 'olive', label: 'Olive', color: '#88A838' },
+  { id: 'ochre', label: 'Ochre Gold', color: '#F8C828' },
+  { id: 'bronze', label: 'Olive Bronze', color: '#988818' },
+  { id: 'forest', label: 'Deep Forest', color: '#083828' },
+  { id: 'amber', label: 'Warm Amber', color: '#96601C' },
   { id: 'indigo', label: 'Indigo', color: '#4338CA' },
-  { id: 'violet', label: 'Violet', color: '#7C3AED' },
-  { id: 'amber', label: 'Amber', color: '#96601C' },
   { id: 'rose', label: 'Rose', color: '#B32350' },
 ];
 
@@ -41,6 +44,17 @@ const ACCENTS = [
  */
 const CURRENCIES = [
   { code: 'INR', label: 'Indian rupee' },
+];
+
+const REMINDER_TIMES = [
+  { value: '19:30', label: '7:30 PM' },
+  { value: '20:00', label: '8:00 PM' },
+  { value: '20:30', label: '8:30 PM' },
+  { value: '21:00', label: '9:00 PM (Default)' },
+  { value: '21:30', label: '9:30 PM' },
+  { value: '22:00', label: '10:00 PM' },
+  { value: '22:30', label: '10:30 PM' },
+  { value: '23:00', label: '11:00 PM' },
 ];
 
 /**
@@ -122,6 +136,29 @@ export async function renderSettings(container, app) {
     </div>
 
     <div class="card">
+      <div class="card-title">Daily review reminder</div>
+      <p class="caption" style="margin-bottom:12px">
+        A quiet evening nudge to review or record today's expenses.
+      </p>
+      <label class="switch-row" style="padding:10px 0">
+        <span class="list-row-main">
+          <span class="list-row-title">Evening reminder</span>
+          <span class="list-row-sub">Send reminder at scheduled time</span>
+        </span>
+        <input type="checkbox" class="switch" data-toggle="daily_review_reminder_enabled"
+               ${app.settings.daily_review_reminder_enabled !== '0' ? 'checked' : ''}>
+      </label>
+      <div style="margin-top:12px">
+        ${selectField({
+    key: 'daily_review_reminder_time',
+    label: 'Reminder time',
+    value: app.settings.daily_review_reminder_time || '21:00',
+    options: REMINDER_TIMES.map((t) => ({ value: t.value, label: t.label, sub: t.value })),
+  })}
+      </div>
+    </div>
+
+    <div class="card">
       <div class="card-title">Import bank messages</div>
       <p class="caption" style="margin-bottom:14px">
         Scan past SMS alerts to import past transactions.
@@ -159,20 +196,25 @@ export async function renderSettings(container, app) {
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-title">Sample Data</div>
-      <p class="caption" style="margin-bottom:var(--gap-3)">
-        Populate realistic sample accounts, mutual funds, budgets and transactions for demonstration.
-      </p>
-      <button type="button" class="btn btn-tonal btn-block" data-seed-demo>
-        ${icon('auto_fix_high')}Load Sample Data
-      </button>
-    </div>`;
+    ${Bridge.isDebug() ? `
+      <div class="card" data-debug-sample-card>
+        <div class="row-between" style="align-items:center;margin-bottom:6px">
+          <div class="card-title" style="margin-bottom:0">Sample Data</div>
+          <span class="badge" style="background:var(--surface-container-highest);color:var(--on-surface-variant);font-size:11px">Debug Only</span>
+        </div>
+        <p class="caption" style="margin-bottom:var(--gap-3)">
+          Populate realistic sample accounts, mutual funds, budgets and transactions for internal testing and demo screenshots.
+        </p>
+        <button type="button" class="btn btn-tonal btn-block" data-seed-demo>
+          ${icon('science')}Load Sample Data
+        </button>
+      </div>` : ''}`;
 
   bindSelectFields(container);
   bindAppearance(container, app);
   bindMoney(container, app);
   bindToggles(container, app);
+  bindReminders(container, app);
   bindReimport(container, app);
 
   const seedBtn = container.querySelector('[data-seed-demo]');
@@ -257,9 +299,27 @@ function bindToggles(container, app) {
         return;
       }
 
+      if (key === 'daily_review_reminder_enabled') {
+        Bridge.call('reminders', { action: 'sync' }).catch(() => {});
+      }
+
       toast('Saved.', 'success');
     });
   });
+}
+
+function bindReminders(container, app) {
+  const reminderTimeField = container.querySelector('[data-field="daily_review_reminder_time"]');
+  if (reminderTimeField) {
+    reminderTimeField.addEventListener('change', async (event) => {
+      const value = event.target.value;
+      const result = await app.db('update_setting', { key: 'daily_review_reminder_time', value });
+      if (!result) return;
+      app.settings.daily_review_reminder_time = value;
+      Bridge.call('reminders', { action: 'sync' }).catch(() => {});
+      toast('Reminder time updated.', 'success');
+    });
+  }
 }
 
 function bindReimport(container, app) {
@@ -295,7 +355,7 @@ function bindReimport(container, app) {
         <div class="list" style="margin-top:var(--gap-3)">
           <button type="button" class="list-row" data-range="0">
             <span class="avatar avatar-sm" style="background:var(--accent-container);color:var(--on-accent-container)">
-              ${icon('all_inclusive', 'icon-sm')}
+              ${icon('history', 'icon-sm')}
             </span>
             <span class="list-row-main">
               <span class="list-row-title">All time</span>
@@ -315,7 +375,7 @@ function bindReimport(container, app) {
           </button>
           <button type="button" class="list-row" data-range="180">
             <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface)">
-              ${icon('date_range', 'icon-sm')}
+              ${icon('event', 'icon-sm')}
             </span>
             <span class="list-row-main">
               <span class="list-row-title">Last 6 months</span>
@@ -354,25 +414,57 @@ function bindReimport(container, app) {
 
     if (range === null || range === undefined) return;
 
+    const rangeLabel = range === 0 ? 'all time' : `the last ${range} days`;
+    const progress = showProgressModal('Scanning SMS Inbox', {
+      message: `Reading messages from ${rangeLabel}...`,
+      initialPercent: 20,
+      detail: 'Scanning bank alerts and UPI messages',
+    });
+
+    const stepTimer1 = setTimeout(() => {
+      progress.update({
+        percent: 55,
+        message: 'Filtering financial debits and credits...',
+        detail: 'Ignoring non-financial alerts and OTPs',
+      });
+    }, 400);
+
+    const stepTimer2 = setTimeout(() => {
+      progress.update({
+        percent: 85,
+        message: 'Applying categorization & merchant rules...',
+        detail: 'Classifying transactions into categories',
+      });
+    }, 1100);
+
     button.disabled = true;
     button.textContent = 'Reading';
 
-    const result = await Bridge.call('sms', {
-      action: 'reimport',
-      days: range,
-      member_id: app.memberFilter === 'all' ? 1 : Number(app.memberFilter),
-    });
-
-    button.disabled = false;
-    button.innerHTML = `${icon('history')}Import past messages`;
+    let result;
+    try {
+      result = await Bridge.call('sms', {
+        action: 'reimport',
+        days: range,
+        member_id: app.memberFilter === 'all' ? 1 : Number(app.memberFilter),
+      });
+    } catch (err) {
+      result = { status: 'error', message: err.message || 'SMS import failed.' };
+    } finally {
+      clearTimeout(stepTimer1);
+      clearTimeout(stepTimer2);
+      button.disabled = false;
+      button.innerHTML = `${icon('history')}Import past messages`;
+    }
 
     const output = container.querySelector('[data-reimport-result]');
     if (result.status !== 'success') {
+      progress.fail(result.message || 'Import failed.');
       output.textContent = result.message || 'That did not work.';
       return;
     }
 
-    const rangeLabel = range === 0 ? 'all time' : `the last ${range} days`;
+    progress.complete(`Filed ${result.imported} transactions!`, 400);
+
     output.textContent = `Read ${result.read} messages from ${rangeLabel}, filed ${result.imported}. `
       + `${result.skipped} were already recorded, and ${result.unmatched} matched no rule.`;
     if (result.imported) {

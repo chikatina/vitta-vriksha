@@ -1,6 +1,5 @@
-/* Encrypted export and restore. */
-
-import { icon, h, toast, sheet, confirmDialog, pickFile, saveFile } from '../ui.js';
+import { Bridge } from '../bridge.js';
+import { icon, h, toast, sheet, confirmDialog, pickFile, saveFile, showProgressModal } from '../ui.js';
 import { todayISO } from '../formatters.js';
 
 export async function renderBackup(container, app) {
@@ -15,9 +14,10 @@ export async function renderBackup(container, app) {
     <div class="card">
       <div class="card-title">Export</div>
       <p class="caption" style="margin-bottom:16px">
-        Save an encrypted copy of your data file.
+        Save an encrypted copy of your data file to Downloads, or share to another app.
       </p>
       <button class="btn btn-filled btn-block" data-export>${icon('download')}Export backup</button>
+      <button class="btn btn-outlined btn-block" data-share-backup style="margin-top:8px">${icon('share')}Share backup</button>
     </div>
 
     <div class="card">
@@ -34,7 +34,7 @@ export async function renderBackup(container, app) {
         Selectively clear record categories or factory reset the application.
       </p>
       <button class="btn btn-danger-text btn-block" data-open="delete-data">
-        ${icon('delete_forever')}Delete data
+        ${icon('delete')}Delete data
       </button>
     </div>`;
 
@@ -47,11 +47,50 @@ export async function renderBackup(container, app) {
       'At least 8 characters. You will need it to restore.', 'Export');
     if (!password) return;
 
-    const res = await app.db('export_backup', { password });
-    if (!res) return;
+    const progress = showProgressModal('Encrypting Backup', {
+      message: 'Deriving key with PBKDF2 (100,000 iterations)...',
+      initialPercent: 30,
+      detail: 'Encrypting database vault with AES-256-GCM',
+    });
 
-    saveFile(`vitta-vriksha-${todayISO()}.vittavriksha`, res.backup_payload, 'application/octet-stream');
-    toast(`Exported ${res.record_count} records.`, 'success');
+    const res = await app.db('export_backup', { password });
+    if (!res) {
+      progress.fail('Export failed.');
+      return;
+    }
+
+    progress.complete('Backup encrypted!', 300);
+
+    const filename = `vitta-vriksha-${todayISO()}.vittavriksha`;
+    const saveRes = saveFile(filename, res.backup_payload, 'application/octet-stream');
+    if (saveRes && saveRes.success === false) {
+      toast(saveRes.error || 'Could not save export file.', 'error');
+    } else {
+      toast(`Exported ${res.record_count} records to Downloads (${filename})`, 'success');
+    }
+  });
+
+  container.querySelector('[data-share-backup]').addEventListener('click', async () => {
+    const password = await askPassword('Encrypt this backup',
+      'At least 8 characters. You will need it to restore.', 'Share');
+    if (!password) return;
+
+    const progress = showProgressModal('Preparing Backup', {
+      message: 'Encrypting data payload...',
+      initialPercent: 40,
+    });
+
+    const res = await app.db('export_backup', { password });
+    if (!res) {
+      progress.fail('Export failed.');
+      return;
+    }
+
+    progress.complete('Ready to share', 250);
+
+    const filename = `vitta-vriksha-${todayISO()}.vittavriksha`;
+    const base64 = btoa(unescape(encodeURIComponent(res.backup_payload)));
+    Bridge.shareFile(filename, 'application/octet-stream', base64);
   });
 
   container.querySelector('[data-import]').addEventListener('click', async () => {
@@ -60,18 +99,29 @@ export async function renderBackup(container, app) {
       { confirmLabel: 'Choose a file', danger: true });
     if (!confirmed) return;
 
-    const file = await pickFile('.vittavriksha,.json');
+    const file = await pickFile('*/*,.vittavriksha,.json,application/octet-stream,application/json');
     if (!file) return;
 
     const password = await askPassword('Backup password',
       `Enter the password used for ${file.name}.`, 'Restore');
     if (!password) return;
 
+    const progress = showProgressModal('Restoring Backup', {
+      message: 'Decrypting backup with AES-GCM...',
+      initialPercent: 35,
+      detail: 'Rebuilding accounts, transactions and folios',
+    });
+
     const res = await app.db('import_backup', { backup_payload: file.text.trim(), password });
-    if (!res) return;
+    if (!res) {
+      progress.fail('Decryption or restore failed.');
+      return;
+    }
+
+    progress.complete(`Restored ${res.restored} records!`, 400);
 
     toast(`Restored ${res.restored} records.`, 'success');
-    window.location.reload();
+    setTimeout(() => window.location.reload(), 300);
   });
 }
 

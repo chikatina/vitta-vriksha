@@ -119,8 +119,9 @@ require_device() {
 # The launcher component is resolved on device so a rename of MainActivity does not
 # silently break this script.
 launch_component() {
+  local target_id="${1:-$DEBUG_ID}"
   local resolved
-  resolved="$(adb_cmd shell cmd package resolve-activity --brief "$DEBUG_ID" 2>/dev/null \
+  resolved="$(adb_cmd shell cmd package resolve-activity --brief "$target_id" 2>/dev/null \
     | tr -d '\r' | tail -1)"
   if [ -n "$resolved" ] && [ "${resolved#*/}" != "$resolved" ]; then
     printf '%s' "$resolved"
@@ -299,7 +300,73 @@ cmd_release() {
   fi
   say "Building the release APK"
   $GRADLEW assembleRelease "$@"
-  find app/build/outputs/apk/release -name '*.apk' 2>/dev/null | sed "s/^/  /"
+  local apk; apk="$(find app/build/outputs/apk/release -name '*.apk' 2>/dev/null | head -1)"
+  [ -n "$apk" ] && printf '%s ok%s %s (%s)\n' "$GREEN" "$OFF" "$apk" "$(du -h "$apk" | cut -f1)"
+}
+
+cmd_install_release() {
+  require_device
+  cmd_release "$@"
+
+  local apk; apk="$(find app/build/outputs/apk/release -name '*.apk' 2>/dev/null | head -1)"
+  [ -n "$apk" ] || die "No release APK was produced."
+
+  say "Installing release APK on $(adb_cmd shell getprop ro.product.model | tr -d '\r')"
+  # -r reinstalls in place, -d allows downgrade.
+  adb_cmd install -r -d "$apk"
+  printf '%s ok%s %s (release) installed\n' "$GREEN" "$OFF" "$APP_ID"
+}
+
+cmd_launch_release() {
+  require_device
+  local component; component="$(launch_component "$APP_ID")"
+
+  if [ -n "$component" ]; then
+    adb_cmd shell am start -n "$component" >/dev/null
+  else
+    warn "Could not resolve the release launcher activity, falling back to monkey."
+    adb_cmd shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 \
+      || die "Could not launch $APP_ID. Is it installed?"
+  fi
+  printf '%s ok%s %s (release) launched\n' "$GREEN" "$OFF" "$APP_ID"
+}
+
+cmd_run_release() {
+  cmd_install_release "$@"
+  adb_cmd logcat -c || true
+  cmd_launch_release
+  say "Following release logs, press Ctrl+C to stop"
+  cmd_logs_release
+}
+
+cmd_logs_release() {
+  require_device
+  local pid=""
+  local attempt
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    pid="$(adb_cmd shell pidof -s "$APP_ID" 2>/dev/null | tr -d '\r')"
+    [ -n "$pid" ] && break
+    sleep 0.5
+  done
+
+  if [ -z "$pid" ]; then
+    warn "$APP_ID is not running. Showing unfiltered logs instead."
+    adb_cmd logcat
+  else
+    adb_cmd logcat --pid="$pid"
+  fi
+}
+
+cmd_stop_release() {
+  require_device
+  adb_cmd shell am force-stop "$APP_ID"
+  printf '%s ok%s stopped %s (release)\n' "$GREEN" "$OFF" "$APP_ID"
+}
+
+cmd_uninstall_release() {
+  require_device
+  say "Removing release app $APP_ID"
+  adb_cmd uninstall "$APP_ID" || warn "It was not installed."
 }
 
 cmd_bundle() {
@@ -358,9 +425,17 @@ find_node() {
   fi
 }
 
+cmd_lint() {
+  local node; node="$(find_node)"
+  [ -n "$node" ] || die "node not found. Install Node 20 or newer."
+  say "Checking coding and styling standards (AGENTS.md)"
+  "$node" tools/check-style-guidelines.mjs
+}
+
 cmd_test() {
   local node; node="$(find_node)"
   [ -n "$node" ] || die "node not found. Install Node 20 or newer."
+  cmd_lint
   say "Backend tests"
   "$node" --test 'test/*.test.mjs' "$@"
 }
@@ -378,6 +453,23 @@ cmd_clean() {
   $GRADLEW clean
 }
 
+cmd_e2e() {
+  require_device
+  say "Building and installing debug APK for E2E testing"
+  cmd_install
+  local flow="${1:-.maestro/run_all_tests.yaml}"
+  say "Running Maestro E2E Flow: $flow"
+  if command -v maestro >/dev/null 2>&1; then
+    maestro test "$flow"
+  elif [ -x "/d/Software/maestro/bin/maestro.bat" ]; then
+    "/d/Software/maestro/bin/maestro.bat" test "$flow"
+  elif [ -x "/d/Software/maestro/bin/maestro" ]; then
+    "/d/Software/maestro/bin/maestro" test "$flow"
+  else
+    die "Maestro CLI not found. Run ./tools/install-maestro.ps1 to install it."
+  fi
+}
+
 usage() {
   cat <<EOF
 ${BOLD}Vitta Vriksha${OFF}  build and deploy without Android Studio
@@ -393,13 +485,20 @@ ${BOLD}Vitta Vriksha${OFF}  build and deploy without Android Studio
     uninstall       remove the app from the device
 
   ${BOLD}Release${OFF}
-    keystore        create a signing key and keystore.properties
+    run-release     build, install and launch the signed release APK, and follow logs
+    install-release build and install the release APK on connected device
     release         assemble a release APK
     bundle          assemble a release AAB for Play
+    launch-release  launch the release app
+    logs-release    follow release app logs
+    stop-release    force-stop the release app
+    uninstall-release remove the release app from device
+    keystore        create a signing key and keystore.properties
 
-  ${BOLD}Development${OFF}
+  ${BOLD}Development & Testing${OFF}
+    test            run the backend unit tests
+    e2e [flow]      build debug APK and run Maestro E2E test flow
     web [port]      serve the web UI in a browser with a mocked backend
-    test            run the backend tests
     devices         list attached devices
     shot [file]     screenshot, but only when this app is the one in front
     doctor          check the toolchain
@@ -414,22 +513,30 @@ command="${1:-}"
 [ $# -gt 0 ] && shift || true
 
 case "$command" in
-  run)        cmd_run "$@" ;;
-  build)      cmd_build "$@" ;;
-  install)    cmd_install "$@" ;;
-  launch)     cmd_launch ;;
-  logs|log)   cmd_logs ;;
-  stop)       cmd_stop ;;
-  uninstall)  cmd_uninstall ;;
-  release)    cmd_release "$@" ;;
-  bundle)     cmd_bundle "$@" ;;
-  keystore)   cmd_keystore ;;
-  test)       cmd_test "$@" ;;
-  web)        cmd_web "$@" ;;
-  devices)    cmd_devices ;;
-  shot)       cmd_shot "$@" ;;
-  doctor)     cmd_doctor ;;
-  clean)      cmd_clean ;;
-  ""|-h|--help|help) usage ;;
+  run)                cmd_run "$@" ;;
+  build)              cmd_build "$@" ;;
+  install)            cmd_install "$@" ;;
+  launch)             cmd_launch ;;
+  logs|log)           cmd_logs ;;
+  stop)               cmd_stop ;;
+  uninstall)          cmd_uninstall ;;
+  run-release|release-run|deploy-release) cmd_run_release "$@" ;;
+  install-release)    cmd_install_release "$@" ;;
+  launch-release)     cmd_launch_release ;;
+  logs-release)       cmd_logs_release ;;
+  stop-release)       cmd_stop_release ;;
+  uninstall-release)  cmd_uninstall_release ;;
+  release)            cmd_release "$@" ;;
+  bundle)             cmd_bundle "$@" ;;
+  keystore)           cmd_keystore ;;
+  test)               cmd_test "$@" ;;
+  lint|style|check-style) cmd_lint "$@" ;;
+  e2e|maestro)        cmd_e2e "$@" ;;
+  web)                cmd_web "$@" ;;
+  devices)            cmd_devices ;;
+  shot)               cmd_shot "$@" ;;
+  doctor)             cmd_doctor ;;
+  clean)              cmd_clean ;;
+  ""|-h|--help|help)  usage ;;
   *) printf '%sUnknown command: %s%s\n\n' "$RED" "$command" "$OFF" >&2; usage >&2; exit 1 ;;
 esac

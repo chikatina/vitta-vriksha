@@ -198,6 +198,56 @@ function round2(value) {
   return Math.round(value * 100) / 100;
 }
 
+/**
+ * Aggregates multiple loans to track total combined monthly EMI obligation,
+ * weighted interest rate, remaining payoff timeline, and debt breakdown.
+ */
+export function getCombinedLoanSummary(loans = []) {
+  const borrowed = loans.filter((l) => l.direction !== 'lent');
+  const lent = loans.filter((l) => l.direction === 'lent');
+
+  const totalOutstanding = borrowed.reduce((s, l) => s + (Number(l.current_outstanding) || 0), 0);
+  const totalMonthlyEmi = borrowed.reduce((s, l) => s + (Number(l.monthly_emi) || 0), 0);
+  const totalPrincipal = borrowed.reduce((s, l) => s + (Number(l.principal_amount) || 0), 0);
+  const lentTotal = lent.reduce((s, l) => s + (Number(l.current_outstanding) || 0), 0);
+
+  const weightedRate = totalOutstanding > 0
+    ? borrowed.reduce((s, l) => s + ((Number(l.current_outstanding) || 0) * (Number(l.interest_rate) || 0)), 0) / totalOutstanding
+    : 0;
+
+  let maxMonthsLeft = 0;
+  const breakdown = borrowed.map((l) => {
+    const emisLeft = calculateEmisLeft(l.current_outstanding, l.interest_rate, l.monthly_emi, l.tenure_months);
+    if (emisLeft > maxMonthsLeft) maxMonthsLeft = emisLeft;
+    const emiShare = totalMonthlyEmi > 0 ? ((Number(l.monthly_emi) || 0) / totalMonthlyEmi) * 100 : 0;
+    return {
+      id: l.id,
+      name: l.name,
+      loan_type: l.loan_type,
+      current_outstanding: Number(l.current_outstanding) || 0,
+      monthly_emi: Number(l.monthly_emi) || 0,
+      interest_rate: Number(l.interest_rate) || 0,
+      emis_left: emisLeft,
+      emi_share: Math.round(emiShare),
+    };
+  });
+
+  return {
+    borrowed_count: borrowed.length,
+    lent_count: lent.length,
+    total_outstanding: totalOutstanding,
+    total_debt_outstanding: totalOutstanding,
+    total_monthly_emi: totalMonthlyEmi,
+    total_principal: totalPrincipal,
+    lent_total: lentTotal,
+    total_lent_outstanding: lentTotal,
+    weighted_rate: Number(weightedRate.toFixed(2)),
+    weighted_interest_rate: Number(weightedRate.toFixed(2)),
+    max_months_left: maxMonthsLeft,
+    breakdown,
+  };
+}
+
 export async function handleLoanAction(args = {}) {
   try {
     const action = args.action || 'optimize';
@@ -207,6 +257,13 @@ export async function handleLoanAction(args = {}) {
     const extraMonthly = Number(args.extra_monthly ?? 0);
     const extraAnnual = Number(args.extra_annual ?? 0);
     const investReturn = Number(args.invest_return ?? 12);
+
+    if (action === 'combined_summary') {
+      return {
+        status: 'success',
+        ...getCombinedLoanSummary(args.loans || []),
+      };
+    }
 
     if (action === 'emis_left') {
       const emi = Number(args.monthly_emi ?? 0);

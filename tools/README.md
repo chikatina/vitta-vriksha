@@ -105,3 +105,18 @@ Validates Node test suite, runs Gradle `bundleRelease` and `assembleRelease`, an
 ```powershell
 .\tools\build-release.ps1
 ```
+
+## run-e2e.ps1
+
+Builds the **Debug APK** (`assembleDebug`), installs it on the connected device/emulator (`com.chikatistudio.vittavriksha.debug`), launches the debug application, executes Maestro E2E test flows, and syncs captured screenshots.
+
+```powershell
+# Run the master E2E suite on Debug build
+.\tools\run-e2e.ps1
+
+# Run a specific Maestro test flow on Debug build
+.\tools\run-e2e.ps1 -Flow .maestro/03_add_transaction.yaml
+
+# Skip rebuilding APK if already installed
+.\tools\run-e2e.ps1 -SkipBuild
+```

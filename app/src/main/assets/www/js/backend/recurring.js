@@ -30,22 +30,22 @@ import {
  */
 export const CADENCES = [
   {
-    key: 'weekly', label: 'Weekly', days: 7, min: 6, max: 9, perYear: 52, months: 0, cycle: 'Monthly',
+    key: 'weekly', label: 'Weekly', days: 7, min: 5, max: 10, perYear: 52, months: 0, cycle: 'Monthly',
   },
   {
-    key: 'fortnightly', label: 'Every two weeks', days: 14, min: 12, max: 17, perYear: 26, months: 0, cycle: 'Monthly',
+    key: 'fortnightly', label: 'Every two weeks', days: 14, min: 11, max: 18, perYear: 26, months: 0, cycle: 'Monthly',
   },
   {
-    key: 'monthly', label: 'Monthly', days: 30, min: 24, max: 38, perYear: 12, months: 1, cycle: 'Monthly',
+    key: 'monthly', label: 'Monthly', days: 30, min: 20, max: 42, perYear: 12, months: 1, cycle: 'Monthly',
   },
   {
-    key: 'quarterly', label: 'Quarterly', days: 91, min: 78, max: 104, perYear: 4, months: 3, cycle: 'Quarterly',
+    key: 'quarterly', label: 'Quarterly', days: 91, min: 72, max: 112, perYear: 4, months: 3, cycle: 'Quarterly',
   },
   {
-    key: 'half_yearly', label: 'Half-yearly', days: 182, min: 160, max: 205, perYear: 2, months: 6, cycle: 'Half-yearly',
+    key: 'half_yearly', label: 'Half-yearly', days: 182, min: 150, max: 215, perYear: 2, months: 6, cycle: 'Half-yearly',
   },
   {
-    key: 'annual', label: 'Yearly', days: 365, min: 320, max: 410, perYear: 1, months: 12, cycle: 'Annual',
+    key: 'annual', label: 'Yearly', days: 365, min: 310, max: 420, perYear: 1, months: 12, cycle: 'Annual',
   },
 ];
 
@@ -115,10 +115,9 @@ function cadenceFor(gaps) {
   const cadence = CADENCES.find((entry) => typical >= entry.min && typical <= entry.max);
   if (!cadence) return null;
 
-  // Regular enough to be a mandate rather than a habit. Two thirds of the gaps have to
-  // sit inside the cadence window, which lets one missed or double month through.
+  // Regular enough to be a mandate rather than a habit.
   const inside = spacing.filter((gap) => gap >= cadence.min && gap <= cadence.max).length;
-  if (inside / spacing.length < 0.66) return null;
+  if (inside / spacing.length < 0.50) return null;
 
   return { cadence, typical, regularity: inside / spacing.length };
 }
@@ -159,6 +158,17 @@ function annualisedChange(levels) {
   return Math.round((factor - 1) * 1000) / 10;
 }
 
+function cleanDescriptionToMerchant(desc) {
+  if (!desc) return '';
+  let text = String(desc).trim();
+  // Strip common banking mandate and transaction prefixes
+  text = text.replace(/^(ACH|NACH|CMS|INFT|E-MANDATE|UPI-MANDATE|ECS|MANDATE|BILLDESK|RAZORPAY|CCPAY|DEBIT|DR|TO|POS|UPI|IMPS|NEFT|RTGS)[\/:\s*_-]+/gi, '');
+  text = text.replace(/^(ACH|NACH|CMS|INFT|E-MANDATE|UPI-MANDATE|ECS|MANDATE|BILLDESK|RAZORPAY|CCPAY|DEBIT|DR|TO|POS|UPI|IMPS|NEFT|RTGS)[\/:\s*_-]+/gi, '');
+  text = text.replace(/\b(REF|TXN|NO|UTR|ID|DATE|AMT|VAL|INR|RS)[\s:0-9A-Z/_-]+/gi, '');
+  text = text.replace(/\s+/g, ' ').trim();
+  return text.length >= 3 ? text : desc;
+}
+
 /**
  * The commitments hiding in the history.
  *
@@ -175,25 +185,57 @@ export function findRecurring(db, args = {}) {
   const [clause, params] = memberClause(args.member_id, 'AND');
 
   const rows = db.all(
-    'SELECT id, date, amount, category, type, merchant, merchant_key, member_id,'
+    'SELECT id, date, amount, category, type, description, merchant, merchant_key, member_id,'
     + ' COALESCE(is_investment_outflow, 0) AS is_investment_outflow FROM transactions'
     + ` WHERE date >= ? AND type != 'Income' AND type != 'Transfer'`
-    + " AND COALESCE(merchant, '') != ''"
+    + " AND (COALESCE(merchant, '') != '' OR COALESCE(description, '') != '' OR COALESCE(is_investment_outflow, 0) = 1 OR category = 'Mutual Funds' OR category = 'Investments')"
     + `${clause} ORDER BY date ASC, id ASC`,
     [from, ...params],
   );
 
   const groups = new Map();
   for (const row of rows) {
-    const key = row.merchant_key || merchantKey(row.merchant);
+    let name = String(row.merchant || '').trim();
+    if (!name && row.description) {
+      name = cleanDescriptionToMerchant(row.description);
+    }
+    if (!name) name = row.category || 'Investment';
+    const key = row.merchant_key || merchantKey(name);
     if (!key) continue;
+
     const group = groups.get(key) || {
-      key, name: row.merchant, entries: [], investment: 0, categories: new Map(), members: new Map(),
+      key, name, entries: [], investment: 0, categories: new Map(), members: new Map(),
     };
-    group.name = row.merchant || group.name;
+    group.name = name || group.name;
     group.entries.push({ date: String(row.date).slice(0, 10), amount: number(row.amount), id: row.id });
-    if (row.is_investment_outflow) group.investment += 1;
+    if (row.is_investment_outflow || /mutual\s*fund|sip|invest/i.test(row.category)) group.investment += 1;
     group.categories.set(row.category, (group.categories.get(row.category) || 0) + 1);
+    group.members.set(row.member_id, (group.members.get(row.member_id) || 0) + 1);
+    groups.set(key, group);
+  }
+
+  // Also scan folio_transactions for mutual fund SIP investments from CAS/CAMS/KFintech imports
+  const folioRows = db.all(
+    'SELECT id, date, amount, scheme_name, isin, member_id FROM folio_transactions'
+    + ` WHERE date >= ? AND amount > 0${clause}`
+    + ' ORDER BY date ASC, id ASC',
+    [from, ...params],
+  );
+
+  for (const row of folioRows) {
+    const rawName = String(row.scheme_name || '').trim();
+    if (!rawName) continue;
+    const cleanName = rawName.replace(/\s*-\s*(Direct|Regular)?\s*(Plan)?\s*-\s*(Growth|IDCW|Dividend|Bonus).*$/i, '').trim() || rawName;
+    const key = row.isin ? `sip_isin_${row.isin.toLowerCase()}` : merchantKey(cleanName);
+    if (!key) continue;
+
+    const group = groups.get(key) || {
+      key, name: cleanName, entries: [], investment: 0, categories: new Map(), members: new Map(), from_folio: true,
+    };
+    group.name = cleanName || group.name;
+    group.entries.push({ date: String(row.date).slice(0, 10), amount: number(row.amount), id: `folio_${row.id}` });
+    group.investment += 1;
+    group.categories.set('Mutual Funds', (group.categories.get('Mutual Funds') || 0) + 1);
     group.members.set(row.member_id, (group.members.get(row.member_id) || 0) + 1);
     groups.set(key, group);
   }
@@ -215,14 +257,27 @@ export function findRecurring(db, args = {}) {
     if (!rhythm) continue;
 
     const levels = priceLevels(group.entries);
-    // Four different prices in a run of a dozen charges is a shop, not a plan. A real
-    // price rise is rare, and a step-up happens once a year.
-    if (levels.length > 3) continue;
+    // Allow up to 5 price levels for stepped-up plans and long-running SIPs
+    if (levels.length > 5) continue;
 
     const current = levels[levels.length - 1];
     const last = group.entries[group.entries.length - 1];
     const commonest = (map) => [...map.entries()].sort((a, b) => b[1] - a[1])[0];
-    const kind = group.investment * 2 >= group.entries.length ? 'sip' : 'subscription';
+    const commonCat = commonest(group.categories)?.[0] || '';
+    const combinedDesc = `${group.name} ${commonCat}`;
+
+    let kind = 'subscription';
+    const sipRegex = /mutual\s*fund|sip\b|\bmf\b|\bamc\b|uti\b|nippon|mirae|quant\b|parag\s*parikh|ppfas|motilal|zerodha\s*coin|groww|kuvera|cams|kfintech|bse\s*star|iccl|nse\s*mf|mf\s*central|clearing\s*corp|billdesk.*mf|camspay|asset\s*management|fund\s*house|dsp\b|hdfc\s*mf|sbi\s*mf|icici\s*pru|kotak\s*mf|axis\s*mf|tata\s*mf|bandhan|canara\s*robeco|sundaram|hsbc\s*mf|invesco|franklin|pgim|edelweiss|white\s*oak|navi\s*mf|360\s*one|mahindra\s*manulife|samco|trust\s*mf|bajaj\s*finserv\s*mf|helios|zerodha\s*fund|funds/i;
+    const isInvestCat = /mutual\s*fund|invest|sip|stocks|demat/i.test(commonCat);
+
+    if (group.from_folio || group.investment * 2 >= group.entries.length || isInvestCat || sipRegex.test(combinedDesc)) {
+      kind = 'sip';
+    } else if (/emi\b|loan\b|install?ments?|instl|equated\s*monthly|nach|ecs|mandate|ach|lending|bajaj\s*fin|hdb\s*fin|idfc\s*first|tata\s*cap|cholamandalam|muthoot|manappuram|dhfl|iifl|home\s*loan|car\s*loan|auto\s*loan|personal\s*loan|hero\s*fin|piramal|fullerton|smfg|kotak\s*prime|mahindra\s*fin|axis\s*fin|credila|avanse|incred|kreditbee|moneyview|chits|chit\s*fund/i.test(combinedDesc)) {
+      kind = 'loan';
+    } else if (/credit\s*card|card\s*payment|card\s*emi|sbi\s*card|onecard|scapia|slice/i.test(combinedDesc)) {
+      kind = 'card';
+    }
+
     const dayOfMonth = median(group.entries
       .map((entry) => (parseISO(entry.date) || { getDate: () => 1 }).getDate()));
 
@@ -242,7 +297,7 @@ export function findRecurring(db, args = {}) {
       last_seen: last.date,
       next_due: nextDue(last.date, rhythm.cadence),
       day_of_month: Math.max(1, Math.min(28, Math.round(dayOfMonth))),
-      category: commonest(group.categories)?.[0] || '',
+      category: commonCat || '',
       member_id: commonest(group.members)?.[0] ?? null,
       yearly: Math.round(current.amount * rhythm.cadence.perYear * 100) / 100,
       levels,
@@ -287,7 +342,7 @@ export function findRecurring(db, args = {}) {
     tracked: found.filter((entry) => entry.tracked),
     dismissed: found.filter((entry) => entry.dismissed && !entry.tracked),
     yearly_untracked: untracked.reduce((sum, entry) => sum + entry.yearly, 0),
-    scanned: rows.length,
+    scanned: rows.length + folioRows.length,
   };
 }
 
@@ -297,12 +352,15 @@ function trackedIndex(db, memberId) {
   const index = new Map();
 
   for (const row of db.all(`SELECT * FROM sips${clause}`, params)) {
-    const key = row.linked_merchant_key || merchantKey(row.scheme_name);
-    if (key) {
-      index.set(key, {
-        kind: 'sip', id: row.id, name: row.scheme_name, amount: number(row.monthly_amount),
-      });
-    }
+    const rawName = String(row.scheme_name || '').trim();
+    const cleanName = rawName.replace(/\s*-\s*(Direct|Regular)?\s*(Plan)?\s*-\s*(Growth|IDCW|Dividend|Bonus).*$/i, '').trim() || rawName;
+    const key = row.linked_merchant_key || merchantKey(rawName);
+    const sipData = {
+      kind: 'sip', id: row.id, name: row.scheme_name, amount: number(row.monthly_amount),
+    };
+    if (key) index.set(key, sipData);
+    const cleanKey = merchantKey(cleanName);
+    if (cleanKey && !index.has(cleanKey)) index.set(cleanKey, sipData);
   }
   for (const row of db.all(`SELECT * FROM subscriptions${clause}`, params)) {
     const key = row.linked_merchant_key || merchantKey(row.name);
@@ -312,6 +370,57 @@ function trackedIndex(db, memberId) {
       });
     }
   }
+
+  // Loans: single loan or multiple loans clubbed under the same linked_merchant_key
+  const loanRows = db.all(
+    `SELECT * FROM loans${clause}${clause ? ' AND' : ' WHERE'} COALESCE(direction, 'borrowed') != 'lent'`,
+    params,
+  );
+  const loanGroups = new Map();
+  for (const row of loanRows) {
+    const key = row.linked_merchant_key || merchantKey(row.name) || (row.lender ? merchantKey(row.lender) : '');
+    if (!key) continue;
+    if (!loanGroups.has(key)) loanGroups.set(key, []);
+    loanGroups.get(key).push(row);
+  }
+  for (const [key, rows] of loanGroups.entries()) {
+    if (rows.length === 1) {
+      const row = rows[0];
+      index.set(key, {
+        kind: 'loan',
+        id: row.id,
+        name: row.name,
+        amount: number(row.monthly_emi),
+        loan_type: row.loan_type,
+        lender: row.lender,
+        clubbed: false,
+      });
+    } else {
+      const totalEmi = rows.reduce((sum, r) => sum + number(r.monthly_emi), 0);
+      const names = rows.map((r) => r.name).join(' + ');
+      index.set(key, {
+        kind: 'loan',
+        id: rows[0].id,
+        name: rows[0].lender ? `${rows[0].lender} Loans` : names,
+        amount: Math.round(totalEmi * 100) / 100,
+        clubbed: true,
+        loans: rows.map((r) => ({
+          id: r.id, name: r.name, emi: number(r.monthly_emi), loan_type: r.loan_type,
+        })),
+      });
+    }
+  }
+
+  // Credit Cards
+  for (const row of db.all(`SELECT * FROM credit_cards${clause}`, params)) {
+    const key = row.linked_merchant_key || merchantKey(row.card_name) || merchantKey(row.bank);
+    if (key) {
+      index.set(key, {
+        kind: 'card', id: row.id, name: row.card_name || `${row.bank} Card`, amount: number(row.current_balance),
+      });
+    }
+  }
+
   return index;
 }
 
@@ -319,12 +428,14 @@ function trackedIndex(db, memberId) {
 
 /**
  * Files a detected commitment as a real record.
- *
- * The levels come across too, so a plan that has already been through two price rises
- * arrives with those rises on its history rather than as a figure with no past.
+ * Supports Subscriptions, Investment SIPs, Loan EMIs (single, new, or clubbed loans), and Credit Cards.
  */
 export function trackRecurring(db, args = {}) {
-  const kind = args.kind === 'sip' ? 'sip' : 'subscription';
+  const rawKind = String(args.kind || 'subscription').toLowerCase();
+  const kind = (rawKind === 'sip' || rawKind === 'loan' || rawKind === 'card' || rawKind === 'emi' || rawKind === 'loan_emi')
+    ? (rawKind === 'emi' || rawKind === 'loan_emi' ? 'loan' : rawKind)
+    : 'subscription';
+
   const name = String(args.name ?? '').trim();
   const amount = number(args.amount);
   const key = String(args.merchant_key ?? '').trim() || merchantKey(name);
@@ -334,7 +445,8 @@ export function trackRecurring(db, args = {}) {
 
   const memberId = resolveMember(db, args.member_id);
   const changes = Array.isArray(args.changes) ? args.changes : [];
-  let recordId;
+  let recordId = 0;
+  let clubbedCount = 0;
 
   if (kind === 'sip') {
     recordId = db.run(
@@ -346,7 +458,93 @@ export function trackRecurring(db, args = {}) {
         number(args.step_up_percent), String(args.start_date || args.first_seen || today()),
         Number.parseInt(args.step_up_month ?? 0, 10) || 0, key],
     ).lastInsertRowid;
+  } else if (kind === 'loan') {
+    const debitDay = Math.max(1, Math.min(28, Number.parseInt(args.day_of_month ?? 5, 10) || 5));
+    const clubbedLoans = Array.isArray(args.clubbed_loans) ? args.clubbed_loans : [];
+
+    if (clubbedLoans.length > 0) {
+      // Multiple clubbed loans from the same lender sharing this single mandate
+      db.transaction(() => {
+        for (const cl of clubbedLoans) {
+          const clEmi = number(cl.emi || cl.monthly_emi || cl.amount);
+          if (cl.id) {
+            // Existing loan linked
+            db.run(
+              'UPDATE loans SET linked_merchant_key = ?, monthly_emi = COALESCE(NULLIF(?, 0), monthly_emi), debit_day = ? WHERE id = ?',
+              [key, clEmi || null, debitDay, cl.id],
+            );
+            if (!recordId) recordId = cl.id;
+          } else {
+            // New sub-loan in clubbed group
+            const clName = String(cl.name || `${name} Sub-Loan`).trim();
+            const clType = String(cl.loan_type || args.loan_type || (/home/i.test(clName) ? 'Home' : 'Personal'));
+            const clRate = number(cl.interest_rate || args.interest_rate || 8.5);
+            const clTenure = Number.parseInt(cl.tenure_months || args.tenure_months || 240, 10) || 240;
+            let clPrincipal = number(cl.principal_amount || cl.principal);
+            if (!clPrincipal && clEmi > 0) {
+              const r = clRate / 12 / 100;
+              if (r > 0) {
+                clPrincipal = Math.round(clEmi * ((Math.pow(1 + r, clTenure) - 1) / (r * Math.pow(1 + r, clTenure))));
+              } else {
+                clPrincipal = Math.round(clEmi * clTenure);
+              }
+            }
+            const clOutstanding = number(cl.current_outstanding || cl.outstanding || clPrincipal);
+            const newId = db.run(
+              'INSERT INTO loans (member_id, name, loan_type, principal_amount, current_outstanding, interest_rate, tenure_months, start_date, monthly_emi, notes, direction, linked_merchant_key, debit_day, lender, is_active)'
+              + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'borrowed', ?, ?, ?, 1)",
+              [memberId, clName, clType, clPrincipal, clOutstanding, clRate, clTenure,
+                String(cl.start_date || args.first_seen || today()), clEmi, String(cl.notes || 'Clubbed loan mandate'),
+                key, debitDay, String(args.lender || name)],
+            ).lastInsertRowid;
+            if (!recordId) recordId = newId;
+          }
+          clubbedCount += 1;
+        }
+      });
+    } else if (args.loan_id) {
+      // Link to a specific single existing loan
+      const existingLoan = db.get('SELECT id FROM loans WHERE id = ?', [Number(args.loan_id)]);
+      if (existingLoan) {
+        recordId = existingLoan.id;
+        db.run(
+          'UPDATE loans SET linked_merchant_key = ?, monthly_emi = ?, debit_day = ? WHERE id = ?',
+          [key, amount, debitDay, recordId],
+        );
+      }
+    } else {
+      // Create new loan
+      const loanType = String(args.loan_type || 'Home Loan');
+      const principal = number(args.principal_amount || amount * 60);
+      const outstanding = number(args.current_outstanding || principal);
+      const rate = number(args.interest_rate || 8.5);
+      const tenure = Number.parseInt(args.tenure_months || 240, 10) || 240;
+      const lender = String(args.lender || name);
+
+      recordId = db.run(
+        'INSERT INTO loans (member_id, name, loan_type, principal_amount, current_outstanding, interest_rate, tenure_months, start_date, monthly_emi, notes, direction, linked_merchant_key, debit_day, lender, is_active)'
+        + " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'borrowed', ?, ?, ?, 1)",
+        [memberId, name, loanType, principal, outstanding, rate, tenure,
+          String(args.start_date || args.first_seen || today()), amount, String(args.notes || ''),
+          key, debitDay, lender],
+      ).lastInsertRowid;
+    }
+  } else if (kind === 'card') {
+    if (args.card_id) {
+      recordId = Number(args.card_id);
+      db.run('UPDATE credit_cards SET linked_merchant_key = ? WHERE id = ?', [key, recordId]);
+    } else {
+      const cardName = String(args.card_name || name);
+      const bank = String(args.bank || args.lender || 'Bank');
+      const last4 = String(args.last_4 || '').slice(-4);
+      recordId = db.run(
+        'INSERT INTO credit_cards (member_id, card_name, bank, last_4, total_limit, current_balance, linked_merchant_key)'
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [memberId, cardName, bank, last4, number(args.total_limit || 100000), amount, key],
+      ).lastInsertRowid;
+    }
   } else {
+    // Subscription
     const cycle = CYCLE_MONTHS[args.billing_cycle] ? args.billing_cycle : 'Monthly';
     recordId = db.run(
       'INSERT INTO subscriptions (member_id, name, cost, billing_cycle, next_billing_date,'
@@ -370,7 +568,7 @@ export function trackRecurring(db, args = {}) {
     );
   }
 
-  return { kind, record_id: recordId, changes_recorded: changes.length };
+  return { status: 'success', kind, record_id: recordId, changes_recorded: changes.length, clubbed_count: clubbedCount };
 }
 
 /** The member a write belongs to, without assuming the household starts at one. */
@@ -413,7 +611,8 @@ export function dismissRecurring(db, args = {}) {
  * streaming plan rises and a mandate does not.
  */
 export function applyPriceChange(db, args = {}) {
-  const kind = args.kind === 'sip' ? 'sip' : 'subscription';
+  const rawKind = String(args.kind || 'subscription').toLowerCase();
+  const kind = (rawKind === 'sip' || rawKind === 'loan' || rawKind === 'card') ? rawKind : 'subscription';
   const id = Number.parseInt(args.record_id, 10);
   const amount = number(args.amount);
   const date = String(args.date || today());
@@ -421,8 +620,8 @@ export function applyPriceChange(db, args = {}) {
   if (!Number.isFinite(id) || id <= 0) return fail('BAD_REQUEST', 'Which record was not given.');
   if (!(amount > 0)) return fail('AMOUNT_INVALID', 'A new price must be above zero.');
 
-  const table = kind === 'sip' ? 'sips' : 'subscriptions';
-  const column = kind === 'sip' ? 'monthly_amount' : 'cost';
+  const table = kind === 'sip' ? 'sips' : (kind === 'loan' ? 'loans' : (kind === 'card' ? 'credit_cards' : 'subscriptions'));
+  const column = kind === 'sip' ? 'monthly_amount' : (kind === 'loan' ? 'monthly_emi' : (kind === 'card' ? 'current_balance' : 'cost'));
   const row = db.get(`SELECT * FROM ${table} WHERE id = ?`, [id]);
   if (!row) return fail('BAD_REQUEST', 'That record no longer exists.');
 
@@ -452,7 +651,8 @@ export function applyPriceChange(db, args = {}) {
 
 /** Everything recorded about what one commitment has cost over time. */
 export function getPriceHistory(db, args = {}) {
-  const kind = args.kind === 'sip' ? 'sip' : 'subscription';
+  const rawKind = String(args.kind || 'subscription').toLowerCase();
+  const kind = (rawKind === 'sip' || rawKind === 'loan' || rawKind === 'card') ? rawKind : 'subscription';
   const id = Number.parseInt(args.record_id, 10);
   if (!Number.isFinite(id)) return fail('BAD_REQUEST', 'Which record was not given.');
 

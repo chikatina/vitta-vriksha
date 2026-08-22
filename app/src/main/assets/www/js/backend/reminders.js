@@ -1,14 +1,18 @@
 /*
  * What is about to need attention.
  *
- * Three sources: a statement that has gone stale, an instalment about to be debited, and
- * a dated event the user asked to be reminded about. Deciding which ones are due is
- * arithmetic on dates and belongs here; raising a notification at the right moment needs
- * an alarm that outlives the app, so that part is handed to the shell.
+ * Four sources: a statement that has gone stale, an instalment about to be debited,
+ * a dated event the user asked to be reminded about, and a daily evening review check-in
+ * to review daily expenses (especially when SMS tracking is not active). Deciding which
+ * ones are due is arithmetic on dates and belongs here; raising a notification at the
+ * right moment needs an alarm that outlives the app, so that part is handed to the shell.
  */
 
 import { getDatabase, initDb } from './database.js';
-import { cancelReminder, scheduleReminder } from './native.js';
+import {
+  cancelReminder, checkPermission, isSmsTrackingEnabled, scheduleReminder,
+} from './native.js';
+import { isUnlocked, vaultExists } from './vault.js';
 
 /** How old a statement gets before it is worth re-importing. */
 const CAS_STALE_DAYS = 30;
@@ -16,7 +20,7 @@ const CAS_STALE_DAYS = 30;
 /** How close an instalment has to be before it is worth mentioning. */
 const SIP_NOTICE_DAYS = 3;
 
-/** The hour of the day a scheduled notification fires. */
+/** The default hour of the day a morning scheduled notification fires. */
 const NOTIFY_HOUR = 9;
 
 function todayParts() {
@@ -45,8 +49,17 @@ function isoToday() {
   return `${year}-${pad(month)}-${pad(day)}`;
 }
 
+function isoDate(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 /** Everything currently due, newest concern first. */
 export async function checkReminders() {
+  if (vaultExists() && !isUnlocked()) {
+    return { status: 'success', total_reminders: 0, reminders: [] };
+  }
+
   const db = await getDatabase();
   initDb(db);
 
@@ -110,12 +123,38 @@ export async function checkReminders() {
     });
   }
 
-  return { status: 'success', total_reminders: reminders.length, reminders };
-}
+  // Daily spend review reminder:
+  // When SMS tracking is not active (or explicitly enabled in settings), schedule an evening
+  // check-in reminder to help users review and record daily expenses.
+  const reviewEnabled = db.get("SELECT value FROM app_settings WHERE key = 'daily_review_reminder_enabled'");
+  const isReviewOn = reviewEnabled ? reviewEnabled.value === '1' : true;
+  const smsActive = checkPermission('SMS') && isSmsTrackingEnabled();
 
-function isoDate(date) {
-  const pad = (value) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  if (isReviewOn && (!smsActive || reviewEnabled?.value === '1')) {
+    const reviewTime = db.get("SELECT value FROM app_settings WHERE key = 'daily_review_reminder_time'");
+    const timeStr = (reviewTime && reviewTime.value) || '21:00';
+    const [hourStr, minStr] = timeStr.split(':');
+    const hour = Number.parseInt(hourStr || '21', 10);
+    const minute = Number.parseInt(minStr || '0', 10);
+
+    const now = new Date();
+    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0);
+    if (target.getTime() <= now.getTime()) {
+      target.setDate(target.getDate() + 1);
+    }
+
+    reminders.push({
+      id: 'daily-spend-review',
+      type: 'DAILY_REVIEW',
+      title: 'Evening spend review',
+      message: "Take a moment to review or record today's expenses.",
+      urgent: false,
+      due: isoDate(target),
+      targetEpochMs: target.getTime(),
+    });
+  }
+
+  return { status: 'success', total_reminders: reminders.length, reminders };
 }
 
 /**
@@ -132,11 +171,15 @@ export async function syncReminders() {
 
   for (const reminder of reminders) {
     cancelReminder(reminder.id);
-    const due = toDate(reminder.due);
-    if (!due) continue;
-    due.setHours(NOTIFY_HOUR, 0, 0, 0);
-    if (due.getTime() <= now) continue;
-    if (scheduleReminder(reminder.id, due.getTime(), reminder.title, reminder.message)) {
+    let triggerTime = reminder.targetEpochMs;
+    if (!triggerTime) {
+      const due = toDate(reminder.due);
+      if (!due) continue;
+      due.setHours(NOTIFY_HOUR, 0, 0, 0);
+      triggerTime = due.getTime();
+    }
+    if (triggerTime <= now) continue;
+    if (scheduleReminder(reminder.id, triggerTime, reminder.title, reminder.message)) {
       scheduled += 1;
     }
   }
@@ -151,3 +194,4 @@ export async function handleReminderAction(args = {}) {
     return { status: 'error', message: error.message };
   }
 }
+

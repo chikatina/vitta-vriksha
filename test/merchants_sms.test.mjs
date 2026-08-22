@@ -102,6 +102,26 @@ describe('sms.js SMS classifier and dispatcher', () => {
     assert.equal(credit.type, 'Income');
     assert.equal(credit.date, '2026-08-01');
 
+    // Missing / malformed date in SMS falls back to receivedAt timestamp
+    const mayTimestamp = new Date('2026-05-18T10:30:00Z').getTime();
+    const stanchartSms = 'Your a/c no XXXXXXX2219 is debited for Rs. 1,458,977.00 and credited to a/c no.XXXXXXXX8386 on  . (NEFT Ref no  2605-102304109300 ) - StanChart';
+    const parsedWithReceivedAt = await parseSmsText(stanchartSms, 'StanChart', mayTimestamp);
+    assert.equal(parsedWithReceivedAt.amount, 1458977);
+    assert.equal(parsedWithReceivedAt.type, 'Expense');
+    assert.equal(parsedWithReceivedAt.date, '2026-05-18');
+    assert.equal(parsedWithReceivedAt.merchant, '');
+    assert.equal(extractMerchant(stanchartSms), '');
+    assert.equal(notATransaction(stanchartSms), '');
+
+    // ACH Dividend credit with colon delimiter in verb and ACH* token
+    const divSms = 'ICICI Bank Account XX486 credited:Rs. 25.00 on 10-Jul-26. Info ACH*TATAPOWERDIV10072026*245. Available Balance is Rs. 13,807.86.';
+    const parsedDiv = await parseSmsText(divSms, 'ICICIB');
+    assert.equal(parsedDiv.amount, 25);
+    assert.equal(parsedDiv.type, 'Income');
+    assert.equal(parsedDiv.category, 'Interest & Dividends');
+    assert.equal(parsedDiv.merchant, 'TATAPOWER');
+    assert.equal(parsedDiv.date, '2026-07-10');
+
     // Mandate setup and reminders return non-transaction
     const mandateAlert = await parseSmsText('Dear Customer, Mandate with UMRN HDFC1234 for Rs. 5000 has been registered towards HDFC MF.');
     assert.equal(mandateAlert.not_a_transaction, 'mandate-setup');
@@ -176,12 +196,42 @@ describe('sms.js SMS classifier and dispatcher', () => {
     const review = await handleSmsAction({ action: 'review', days: 30, filter: 'all' });
     assert.equal(review.status, 'success');
 
-    // Ignore alert
+    // Ignore alert and ignore_batch
     const ignoreRes = await handleSmsAction({
       action: 'ignore_alert',
       body: 'Your OTP is 1234',
     });
     assert.equal(ignoreRes.status, 'success');
+
+    const batchRes = await handleSmsAction({
+      action: 'ignore_batch',
+      bodies: ['OTP 1', 'OTP 2'],
+    });
+    assert.equal(batchRes.status, 'success');
+    assert.equal(batchRes.ignored, 2);
+
+    // Verify OTP messages are excluded from pending review list
+    globalThis.window = {
+      AndroidBridge: {
+        readSmsInbox: () => JSON.stringify([
+          { sender: 'HDFCBK', body: 'Your OTP for txn is 998877. Do not share.', received_at: Date.now() },
+          { sender: 'HDFCBK', body: 'Rs 450 debited at SWIGGY', received_at: Date.now() },
+        ]),
+      },
+    };
+
+    const pendingReview = await handleSmsAction({ action: 'review', filter: 'pending' });
+    assert.equal(pendingReview.status, 'success');
+    assert.equal(pendingReview.counts.pending, 1);
+    assert.equal(pendingReview.counts.ignored, 1);
+    assert.equal(pendingReview.items.length, 1);
+    assert.equal(pendingReview.items[0].body.includes('SWIGGY'), true);
+
+    const allReview = await handleSmsAction({ action: 'review', filter: 'all' });
+    assert.equal(allReview.counts.ignored, 1);
+    assert.equal(allReview.items.some((i) => i.state === 'ignored' && (i.reason === 'otp' || i.reason === 'ignored-rule' || i.reason === 'ignored')), true);
+
+    delete globalThis.window;
 
     // Merchant rules & forget
     const merchantRules = await handleSmsAction({ action: 'get_merchant_rules' });
@@ -294,4 +344,180 @@ describe('sms.js SMS classifier and dispatcher', () => {
 
     delete globalThis.window;
   });
+
+  it('allows overriding category for just ONE message/transaction without modifying all matching ones', async () => {
+    // 1. Insert two transactions from Amazon
+    const tx1 = await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        amount: 500,
+        category: 'Shopping',
+        merchant: 'Amazon',
+        date: '2026-08-10',
+        apply_to_all: true,
+      },
+    });
+    const tx2 = await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        amount: 1500,
+        category: 'Shopping',
+        merchant: 'Amazon',
+        date: '2026-08-11',
+        apply_to_all: true,
+      },
+    });
+
+    const txsBefore = (await handleDbAction({ action: 'get_transactions' })).transactions;
+    const t1Before = txsBefore.find((t) => t.id === tx1.transaction_id);
+    const t2Before = txsBefore.find((t) => t.id === tx2.transaction_id);
+    assert.equal(t1Before.category, 'Shopping');
+    assert.equal(t2Before.category, 'Shopping');
+
+    // 2. Override category on ONLY tx1 (e.g. Amazon book or gift) with apply_to_all: false
+    const updateRes = await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        id: tx1.transaction_id,
+        amount: 500,
+        category: 'Books & Education',
+        merchant: 'Amazon',
+        date: '2026-08-10',
+        apply_to_all: false,
+        override_single: true,
+      },
+    });
+    assert.equal(updateRes.status, 'success');
+    assert.equal(updateRes.also_categorised, 0);
+
+    // 3. Verify tx1 is updated to Books & Education while tx2 stays Shopping!
+    const txsAfter = (await handleDbAction({ action: 'get_transactions' })).transactions;
+    const t1After = txsAfter.find((t) => t.id === tx1.transaction_id);
+    const t2After = txsAfter.find((t) => t.id === tx2.transaction_id);
+    assert.equal(t1After.category, 'Books & Education');
+    assert.equal(t2After.category, 'Shopping');
+
+    // 4. Now test reclassify_alert with apply_to_all: false
+    const reclassifyRes = await handleSmsAction({
+      action: 'reclassify_alert',
+      transaction_id: tx1.transaction_id,
+      category: 'Gifts & Donations',
+      merchant: 'Amazon',
+      type: 'Expense',
+      apply_to_all: false,
+      override_single: true,
+    });
+    assert.equal(reclassifyRes.status, 'success');
+    assert.equal(reclassifyRes.also_categorised, 0);
+
+    const txsAfterReclass = (await handleDbAction({ action: 'get_transactions' })).transactions;
+    const t1Reclass = txsAfterReclass.find((t) => t.id === tx1.transaction_id);
+    const t2Reclass = txsAfterReclass.find((t) => t.id === tx2.transaction_id);
+    assert.equal(t1Reclass.category, 'Gifts & Donations');
+    assert.equal(t2Reclass.category, 'Shopping');
+  });
+
+  it('classifies Credit Card bill payments as Transfer (Moved) rather than Expense (Spend)', async () => {
+    // 1. Bank debit for credit card payment
+    const debitCc = await parseSmsText('INR 15,400.00 debited from A/c xx1234 on 15-Aug-2026 for Credit Card Payment to HDFC Bank Card ending 5678.');
+    assert.equal(debitCc.amount, 15400);
+    assert.equal(debitCc.type, 'Transfer');
+    assert.equal(debitCc.category, 'Credit Card');
+
+    // 2. Bank debit via CRED
+    const credDebit = await parseSmsText('Rs 8,500.00 debited from A/c xx9876 on 10-Aug. Info: ACH D- CRED / CC PAYMENT.');
+    assert.equal(credDebit.amount, 8500);
+    assert.equal(credDebit.type, 'Transfer');
+    assert.equal(credDebit.category, 'Credit Card');
+
+    // 3. Bank debit for SBI Card
+    const sbiDebit = await parseSmsText('Debited INR 12,000 from A/c xx4321 on 12-Aug-2026 towards SBI Card payment.');
+    assert.equal(sbiDebit.amount, 12000);
+    assert.equal(sbiDebit.type, 'Transfer');
+    assert.equal(sbiDebit.category, 'Credit Card');
+
+    // 4. Card credit acknowledgement
+    const cardCredit = await parseSmsText('Payment of Rs 15,400.00 was credited to your HDFC Bank Credit Card xx5678.');
+    assert.equal(cardCredit.amount, 15400);
+    assert.equal(cardCredit.type, 'Transfer');
+    assert.equal(cardCredit.category, 'Credit Card');
+  });
+
+  it('filters out spam, marketing, betting, telecom and security alerts as non-transactions', () => {
+    // 1. Pre-approved loans and instant cash spam
+    assert.equal(notATransaction('Get instant personal loan up to Rs 500000 at lowest interest rate. Apply now: http://bit.ly/xyz'), 'promo');
+    assert.equal(notATransaction('Pre-approved loan of INR 2,00,000 disbursed in 5 mins! Check loan eligibility: https://loan.app'), 'promo');
+    assert.equal(notATransaction('Congratulations! You are eligible for quick loan of Rs. 75,000. Click here to avail.'), 'promo');
+
+    // 2. Credit Card promo & Limit upgrades
+    assert.equal(notATransaction('Get your lifetime free credit card with Rs 5000 gift voucher. Apply now.'), 'promo');
+    assert.equal(notATransaction('Exclusive offer! Increase your credit limit to Rs 3,50,000 today. Click here to upgrade.'), 'promo');
+
+    // 3. Discount codes, shopping sales, deals
+    assert.equal(notATransaction('Flat 50% off on all orders! Use code MEGA50 at checkout. Hurry, valid till midnight.'), 'promo');
+    assert.equal(notATransaction('Your 500 reward points are expiring tomorrow. Redeem points now at store.'), 'promo');
+
+    // 4. Gaming & Betting spam
+    assert.equal(notATransaction('Play Rummy and win real cash up to Rs 10,000 daily! Download app now.'), 'promo');
+    assert.equal(notATransaction('Sure shot stock tips: Earn Rs 5,000 daily from home. Join Telegram.'), 'promo');
+
+    // 5. Telecom data exhaustion and recharge prompts
+    assert.equal(notATransaction('100% of daily data limit consumed. Recharge now with Rs 29 pack for 2GB extra data.'), 'promo');
+    assert.equal(notATransaction('Your data pack is exhausted. Recharge now to continue browsing.'), 'reminder');
+
+    // 6. Non-financial security, KYC, login notices
+    assert.equal(notATransaction('Your KYC verification is pending. Link PAN with Aadhaar to avoid service disruption.'), 'promo');
+    assert.equal(notATransaction('New login detected from Chrome Windows on your NetBanking. If not you, reset password.'), 'promo');
+
+    // 7. Bounced & Returned checks
+    assert.equal(notATransaction('Cheque number 123456 for Rs 15,000 was returned due to insufficient funds.'), 'promo');
+  });
+
+  it('excludes unclear zero-amount and spam messages from pending waiting list', async () => {
+    // Non-transaction / unclear text
+    const unclearText = 'Dear Customer, your CIBIL score has updated. Check free credit report now on www.cred.club';
+    const parsed = await parseSmsText(unclearText);
+    assert.equal(parsed.amount, 0);
+
+    const spamText = 'Get pre-approved loan of INR 5,00,000. Apply now: http://example.com';
+    const parsedSpam = await parseSmsText(spamText);
+    assert.equal(parsedSpam.not_a_transaction, 'promo');
+  });
+
+  it('supports classify_batch to file multiple transactions in one transaction', async () => {
+    const batchItems = [
+      {
+        body: 'Rs 450 debited at SWIGGY on 20-Aug-2026',
+        amount: 450,
+        category: 'Dining',
+        type: 'Expense',
+        merchant: 'SWIGGY',
+        date: '2026-08-20',
+        apply_to_all: true,
+      },
+      {
+        body: 'Rs 120 paid to UBER on 21-Aug-2026',
+        amount: 120,
+        category: 'Transport & Fuel',
+        type: 'Expense',
+        merchant: 'UBER',
+        date: '2026-08-21',
+        apply_to_all: true,
+      },
+    ];
+
+    const res = await handleSmsAction({
+      action: 'classify_batch',
+      items: batchItems,
+      member_id: 1,
+    });
+
+    assert.equal(res.status, 'success');
+    assert.equal(res.filed, 2);
+
+    const txRes = await handleDbAction({ action: 'get_transactions', page: 1, limit: 10 });
+    assert.equal(txRes.status, 'success');
+    assert.equal(txRes.transactions.length, 2);
+  });
 });
+
