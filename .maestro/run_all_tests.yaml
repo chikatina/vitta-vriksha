@@ -8,4 +8,6 @@ appId: com.chikatistudio.vittavriksha.debug
 - runFlow: 05_more_pages.yaml
 - runFlow: 06_sticky_headers.yaml
 - runFlow: 07_store_screenshots.yaml
+- runFlow: 08_test_export_backup_keyboard.yaml
+- runFlow: 09_test_sms_rule_tester.yaml
 

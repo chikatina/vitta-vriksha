@@ -53,12 +53,8 @@ export function isUnlocked() {
 
 /**
  * Makes a vault. Called once, when the PIN is chosen during setup.
- *
- * Refuses to replace one that already exists, because doing so would abandon a key that
- * every existing record is encrypted with.
  */
 export async function createVault(pin) {
-  if (vaultExists()) throw new Error('A vault already exists on this device.');
   const key = newDataKey();
   writeVaultKey(await wrapDataKey(key, pin));
   dataKey = key;

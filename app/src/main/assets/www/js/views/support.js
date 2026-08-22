@@ -24,7 +24,7 @@ export async function renderSupport(container, app) {
     container.innerHTML = `
       <div class="card-accent">
         <div class="row" style="gap:12px">
-          ${icon('support_agent', 'icon-lg')}
+          ${icon('help', 'icon-lg')}
           <span class="banner-main">
             <span class="title">How can we help?</span>
             <span class="caption" style="color:inherit;opacity:0.9">
@@ -54,7 +54,7 @@ export async function renderSupport(container, app) {
         <div class="card-flat" style="margin-bottom:var(--gap-3);background:var(--surface-container-highest)">
           <div class="row-between" style="align-items:center">
             <div style="display:flex;align-items:center;gap:8px">
-              ${icon('mail', 'icon-sm')}
+              ${icon('help', 'icon-sm')}
               <span style="font-weight:600;font-size:14px;color:var(--on-surface)">${SUPPORT_EMAIL}</span>
             </div>
             <button type="button" class="btn btn-outlined" data-copy-email style="padding:4px 10px;font-size:12px;min-height:30px">
@@ -64,7 +64,7 @@ export async function renderSupport(container, app) {
         </div>
 
         <button type="button" class="btn btn-filled btn-block" data-compose-email>
-          ${icon('send')}Send Email (${SUPPORT_EMAIL})
+          ${icon('arrow_forward')}Send Email (${SUPPORT_EMAIL})
         </button>
       </div>
 

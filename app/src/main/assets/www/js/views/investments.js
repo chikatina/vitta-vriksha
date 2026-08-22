@@ -3,9 +3,10 @@
 import { Bridge } from '../bridge.js';
 import {
   icon, h, toast, sheet, emptyState, errorBlock, selectField, bindSelectFields,
+  taxDisclaimerCard, pickFile, saveFile, showProgressModal,
 } from '../ui.js';
 import {
-  formatBucketLabel, formatBucketTitle, formatCurrency, formatDate, describePeriod,
+  formatBucketLabel, formatBucketTitle, formatCurrency, formatDate, describePeriod, todayISO,
 } from '../formatters.js';
 import {
   barSeriesChart, lineSeriesChart, donutChart, bindChartSelect, sparkline,
@@ -115,6 +116,17 @@ export async function renderInvestments(container, app) {
         <div class="caption" style="margin-top:8px">
           ${totals.unpriced} ${totals.unpriced === 1 ? 'holding has' : 'holdings have'} no buy price recorded. Tap to enter cost.
         </div>` : ''}
+      <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
+        <button class="btn btn-sm btn-filled" data-record-trade style="font-size:12px;padding:6px 12px">
+          ${icon('add', 'icon-sm')} Record Trade
+        </button>
+        <button class="btn btn-sm btn-tonal" data-import-csv style="font-size:12px;padding:6px 12px">
+          ${icon('upload_file', 'icon-sm')} Import CSV
+        </button>
+        <button class="btn btn-sm btn-outlined" data-open-tax style="font-size:12px;padding:6px 12px">
+          ${icon('receipt_long', 'icon-sm')} Tax &amp; Capital Gains
+        </button>
+      </div>
     </div>
 
     ${all.length ? '<div data-allocation></div>' : ''}
@@ -276,13 +288,22 @@ export async function renderInvestments(container, app) {
     });
   });
 
-  const portfolioField = container.querySelector('#portfolioFilter');
-  if (portfolioField) {
-    portfolioField.addEventListener('change', () => {
-      view.portfolio = portfolioField.value;
-      paintList();
-    });
-  }
+    const portfolioField = container.querySelector('#portfolioFilter');
+    if (portfolioField) {
+      portfolioField.addEventListener('change', () => {
+        view.portfolio = portfolioField.value;
+        paintList();
+      });
+    }
+
+    const recordBtn = container.querySelector('[data-record-trade]');
+    if (recordBtn) recordBtn.addEventListener('click', () => openRecordTradeModal(container, app));
+
+    const importBtn = container.querySelector('[data-import-csv]');
+    if (importBtn) importBtn.addEventListener('click', () => openImportCsvModal(container, app));
+
+    const taxBtn = container.querySelector('[data-open-tax]');
+    if (taxBtn) taxBtn.addEventListener('click', () => openCapitalGainsModal(container, app));
 
   paintList();
 }
@@ -734,6 +755,25 @@ async function editCost(container, app, holding) {
       ${fact('Valued as of', h(holding.last_updated || '-'))}
     </div>
 
+    ${history.active_tax_lots && history.active_tax_lots.length ? `
+      <div class="section-header" style="margin-top:16px"><span class="title">Active Tax Lots (${history.active_tax_lots.length})</span></div>
+      <div class="list" style="margin-top:6px">
+        ${history.active_tax_lots.map((lot) => `
+          <div class="list-row" style="align-items:center">
+            <span class="list-row-main">
+              <span class="list-row-title">${units(lot.remainingUnits)} units @ ${money(lot.buyPrice)}</span>
+              <span class="list-row-sub">Bought ${h(lot.buyDate)} · Held ${lot.daysHeld} days</span>
+            </span>
+            <span style="text-align:right">
+              <span class="badge" style="${lot.isLtcg ? 'background:var(--accent-container);color:var(--on-accent-container)' : 'background:var(--surface-container-highest);color:var(--on-surface-variant)'};font-size:11px;font-weight:700;padding:2px 8px;border-radius:var(--radius-full)">
+                ${lot.isLtcg ? `LTCG (${lot.daysHeld}d)` : `STCG (LTCG in ${lot.daysToLtcg}d)`}
+              </span>
+            </span>
+          </div>`).join('')}
+      </div>
+      ${taxDisclaimerCard({ compact: true })}
+    ` : ''}
+
     <!-- History Header with Interactive Cards/Chart Toggle -->
     <div class="row-between" style="margin-top:16px;align-items:center">
       <div class="section-header" style="margin:0"><span class="title">History (${lines.length})</span></div>
@@ -755,7 +795,7 @@ async function editCost(container, app, holding) {
       ${lines.length ? `
         <div class="list" style="margin-top:8px">
           ${lines.slice(0, 60).map((line) => `
-            <div class="list-row" style="padding:10px 0">
+            <div class="list-row">
               <span class="list-row-main">
                 <span class="list-row-title">${h(line.description || line.kind || 'Movement')}</span>
                 <span class="list-row-sub">${h(line.date)}${line.nav ? ` · NAV ${money(line.nav)}` : ''}</span>
@@ -826,3 +866,297 @@ async function editCost(container, app, holding) {
 
   if (saved) renderInvestments(container, app);
 }
+
+/**
+ * Modal to record a stock or mutual fund buy/sell trade.
+ */
+async function openRecordTradeModal(container, app) {
+  const formHtml = `
+    <div class="field">
+      <label class="field-label" for="tradeSymbol">Stock Symbol / Scheme Name *</label>
+      <input class="input" id="tradeSymbol" placeholder="e.g. INFY, RELIANCE, or Parag Parikh Flexi Cap" required autocomplete="off">
+    </div>
+    <div class="field">
+      <label class="field-label" for="tradeIsin">ISIN (Optional)</label>
+      <input class="input" id="tradeIsin" placeholder="e.g. INE009A01021" autocomplete="off">
+    </div>
+    <div class="row-between" style="gap:10px;align-items:flex-end">
+      ${selectField({
+        key: 'tradeType',
+        id: 'tradeType',
+        label: 'Trade Type',
+        half: true,
+        value: 'BUY',
+        options: [
+          { value: 'BUY', label: 'BUY' },
+          { value: 'SELL', label: 'SELL' },
+        ],
+      })}
+      <div class="field" style="flex:1;min-width:0">
+        <label class="field-label" for="tradeDate">Trade Date</label>
+        <input class="input" id="tradeDate" type="date" value="${todayISO()}">
+      </div>
+    </div>
+    <div class="row-between" style="gap:10px">
+      <div class="field" style="flex:1">
+        <label class="field-label" for="tradeQty">Quantity / Units *</label>
+        <input class="input numeric" id="tradeQty" type="number" step="0.001" placeholder="10" required>
+      </div>
+      <div class="field" style="flex:1">
+        <label class="field-label" for="tradePrice">Price / Execution Rate *</label>
+        <input class="input numeric" id="tradePrice" type="number" step="0.01" placeholder="1500.00" required>
+      </div>
+    </div>
+    <div class="row-between" style="gap:10px">
+      <div class="field" style="flex:1">
+        <label class="field-label" for="tradeBroker">Broker / Account</label>
+        <input class="input" id="tradeBroker" placeholder="Zerodha, Groww, Demat">
+      </div>
+      <div class="field" style="flex:1">
+        <label class="field-label" for="tradeExchange">Exchange</label>
+        <input class="input" id="tradeExchange" value="NSE">
+      </div>
+    </div>
+    <div class="field">
+      <label class="field-label" for="tradeNotes">Notes (Optional)</label>
+      <input class="input" id="tradeNotes" placeholder="Order ID or notes">
+    </div>`;
+
+  await sheet('Record Trade', formHtml, {
+    actions: `
+      <button class="btn btn-filled btn-block" data-submit-trade>${icon('check')} Save Trade</button>
+      <button class="btn btn-outlined btn-block" data-cancel style="margin-top:8px">Cancel</button>`,
+    onMount(node, close) {
+      bindSelectFields(node);
+      node.querySelector('[data-cancel]').addEventListener('click', () => close(null));
+      node.querySelector('[data-submit-trade]').addEventListener('click', async () => {
+        const symbol = node.querySelector('#tradeSymbol').value.trim();
+        const isin = node.querySelector('#tradeIsin').value.trim().toUpperCase();
+        const tradeType = node.querySelector('#tradeType').value;
+        const tradeDate = node.querySelector('#tradeDate').value;
+        const quantity = Number(node.querySelector('#tradeQty').value);
+        const price = Number(node.querySelector('#tradePrice').value);
+        const broker = node.querySelector('#tradeBroker').value.trim();
+        const exchange = node.querySelector('#tradeExchange').value.trim().toUpperCase() || 'NSE';
+        const notes = node.querySelector('#tradeNotes').value.trim();
+
+        if (!symbol && !isin) {
+          toast('Please enter a Stock Symbol or ISIN.', 'error');
+          return;
+        }
+        if (quantity <= 0 || price <= 0 || Number.isNaN(quantity) || Number.isNaN(price)) {
+          toast('Please enter valid Quantity and Price.', 'error');
+          return;
+        }
+
+        const res = await Bridge.db('add_stock_transaction', {
+          member_id: app.memberFilter === 'all' ? 1 : Number(app.memberFilter),
+          symbol: symbol || isin,
+          isin,
+          trade_type: tradeType,
+          trade_date: tradeDate,
+          quantity,
+          price,
+          broker,
+          exchange,
+          notes,
+        });
+
+        if (res.status !== 'success') {
+          toast(res.message || 'Could not record trade.', 'error');
+          return;
+        }
+
+        toast('Trade recorded successfully.', 'success');
+        close(true);
+        renderInvestments(container, app);
+      });
+    },
+  });
+}
+
+/**
+ * Modal to import a broker tradebook CSV file.
+ */
+async function openImportCsvModal(container, app) {
+  const picked = await pickFile('.csv,text/csv,text/plain');
+  if (!picked) return;
+
+  const progress = showProgressModal('Importing Broker Trades', {
+    message: `Reading ${picked.name}...`,
+    initialPercent: 25,
+    detail: 'Parsing tradebook CSV format',
+  });
+
+  const stepTimer1 = setTimeout(() => {
+    progress.update({
+      percent: 60,
+      message: 'Allocating trade lots and FIFO holding periods...',
+      detail: 'Matching buy and sell orders',
+    });
+  }, 400);
+
+  const stepTimer2 = setTimeout(() => {
+    progress.update({
+      percent: 90,
+      message: 'Writing stock transactions to vault...',
+      detail: 'Saving demat transactions',
+    });
+  }, 1000);
+
+  let res;
+  try {
+    res = await Bridge.db('import_stock_transactions', {
+      member_id: app.memberFilter === 'all' ? 1 : Number(app.memberFilter),
+      csv_text: picked.text,
+      broker: picked.name.split('.')[0] || 'Broker',
+    });
+  } catch (err) {
+    res = { status: 'error', message: err.message || 'Could not import tradebook CSV.' };
+  } finally {
+    clearTimeout(stepTimer1);
+    clearTimeout(stepTimer2);
+  }
+
+  if (res.status !== 'success') {
+    progress.fail(res.message || 'Could not import tradebook CSV.');
+    toast(res.message || 'Could not import tradebook CSV.', 'error');
+    return;
+  }
+
+  progress.complete(`Imported ${res.imported_count} trades!`, 400);
+  toast(`Imported ${res.imported_count} trade${res.imported_count === 1 ? '' : 's'} (${res.skipped_count} skipped/duplicates).`, 'success');
+  renderInvestments(container, app);
+}
+
+/**
+ * Full Capital Gains & Indian Income Tax (ITR) filing modal with bold disclaimer and Schedule 112A export.
+ */
+async function openCapitalGainsModal(container, app) {
+  const report = await Bridge.db('get_capital_gains_report', {
+    member_id: app.memberFilter === 'all' ? 1 : Number(app.memberFilter),
+  });
+
+  if (report.status !== 'success') {
+    toast(report.message || 'Could not compute capital gains report.', 'error');
+    return;
+  }
+
+  const money = (val) => formatCurrency(val, app.currency, app.locale);
+  const years = report.financialYears || [];
+  let selectedFy = years[0] || 'FY2024-25';
+  let fyData = report.financialYearReports ? report.financialYearReports[selectedFy] : null;
+
+  const buildModalContent = () => {
+    fyData = report.financialYearReports ? report.financialYearReports[selectedFy] : null;
+
+    return `
+      ${taxDisclaimerCard({ compact: false })}
+
+      ${years.length > 1 ? `
+        <div class="row-between" style="align-items:center;margin:12px 0">
+          <span class="caption" style="font-weight:600">Financial Year</span>
+          <div class="chip-scroller" style="padding:0">
+            ${years.map((fy) => `
+              <button class="chip" data-fy-btn="${fy}" aria-selected="${fy === selectedFy}">${fy}</button>
+            `).join('')}
+          </div>
+        </div>` : ''}
+
+      ${fyData ? `
+        <div class="card-flat" style="background:var(--surface-container-high);padding:14px;border-radius:var(--radius);margin-top:10px">
+          <div class="row-between">
+            <span class="caption">Realised Gains for ${h(selectedFy)}</span>
+            <span class="caption" style="font-weight:700;color:var(--on-surface)">Net: ${money(fyData.netGain)}</span>
+          </div>
+
+          <div class="row-between" style="padding:6px 0;margin-top:6px;border-top:1px solid var(--outline)">
+            <span class="caption">Short-Term (Sec 111A, &le;1 yr)</span>
+            <span class="caption numeric" style="font-weight:600">${money(fyData.stcgEquityBe + fyData.stcgEquityAe)}</span>
+          </div>
+          ${fyData.stcgEquityAe ? `
+            <div class="caption" style="font-size:11px;color:var(--on-surface-variant);padding-left:8px">
+              · Post-23-Jul-2024 (@20%): ${money(fyData.stcgEquityAe)}
+            </div>` : ''}
+          ${fyData.stcgEquityBe ? `
+            <div class="caption" style="font-size:11px;color:var(--on-surface-variant);padding-left:8px">
+              · Pre-23-Jul-2024 (@15%): ${money(fyData.stcgEquityBe)}
+            </div>` : ''}
+
+          <div class="row-between" style="padding:6px 0;margin-top:4px">
+            <span class="caption">Long-Term (Sec 112A, &gt;1 yr)</span>
+            <span class="caption numeric" style="font-weight:600">${money(fyData.ltcgEquityBe + fyData.ltcgEquityAe)}</span>
+          </div>
+          <div class="caption" style="font-size:11px;color:var(--on-surface-variant);padding-left:8px">
+            · Annual Exemption: ${money(fyData.ltcgExemption)}
+          </div>
+          <div class="row-between" style="padding:4px 0;padding-left:8px">
+            <span class="caption" style="font-size:11px">Taxable LTCG (after exemption):</span>
+            <span class="caption numeric" style="font-size:11px;font-weight:600">${money(fyData.taxableLtcg)}</span>
+          </div>
+
+          ${fyData.debtGains ? `
+            <div class="row-between" style="padding:6px 0">
+              <span class="caption">Debt / Slab Rate Gains</span>
+              <span class="caption numeric" style="font-weight:600">${money(fyData.debtGains)}</span>
+            </div>` : ''}
+
+          <div class="row-between" style="padding:8px 0 0;margin-top:8px;border-top:1px solid var(--outline)">
+            <span class="caption" style="font-weight:700">Estimated Capital Gains Tax</span>
+            <span class="caption numeric" style="font-weight:700;color:var(--primary)">${money(fyData.estimatedTax)}</span>
+          </div>
+        </div>
+
+        <!-- 5-Quarter Advance Tax Distribution -->
+        <div class="section-header" style="margin-top:14px"><span class="title">Advance Tax 5-Quarter Distribution (Schedule CG Sec F)</span></div>
+        <div class="list" style="margin-top:6px">
+          ${fyData.quarterlyGains.map((qVal, qIdx) => `
+            <div class="list-row">
+              <span class="list-row-main"><span class="list-row-sub">${['Upto 15 Jun (15%)', '16 Jun to 15 Sep (45%)', '16 Sep to 15 Dec (75%)', '16 Dec to 15 Mar (100%)', '16 Mar to 31 Mar (100%)'][qIdx]}</span></span>
+              <span class="list-row-amount numeric">${money(qVal)}</span>
+            </div>`).join('')}
+        </div>
+
+        <button class="btn btn-tonal btn-block" data-download-112a style="margin-top:16px">
+          ${icon('download')} Export Schedule 112A CSV
+        </button>` : `
+        <div class="card-flat" style="margin-top:14px">
+          <div class="caption">No trade redemptions or realized capital gains recorded in ${h(selectedFy)}.</div>
+        </div>`}`;
+  };
+
+  await sheet('Capital Gains & Tax Filings', buildModalContent(), {
+    autofocus: false,
+    actions: `
+      <button class="btn btn-outlined btn-block" data-close-tax>Close</button>`,
+    onMount(node, close) {
+      node.querySelector('[data-close-tax]').addEventListener('click', () => close(null));
+
+      const bindEvents = () => {
+        node.querySelectorAll('[data-fy-btn]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            selectedFy = btn.dataset.fyBtn;
+            node.querySelector('.sheet-body').innerHTML = buildModalContent();
+            bindEvents();
+          });
+        });
+
+        const dlBtn = node.querySelector('[data-download-112a]');
+        if (dlBtn && fyData && fyData.schedule112aCsv) {
+          dlBtn.addEventListener('click', () => {
+            const filename = `schedule-112a-${selectedFy}.csv`;
+            const res = saveFile(filename, fyData.schedule112aCsv, 'text/csv');
+            if (res && res.success === false) {
+              toast(res.error || 'Could not save Schedule 112A file.', 'error');
+            } else {
+              toast(`Saved ${filename} to Downloads`, 'success');
+            }
+          });
+        }
+      };
+
+      bindEvents();
+    },
+  });
+}
+

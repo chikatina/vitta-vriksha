@@ -462,7 +462,7 @@ export const WIDGETS = {
   monthly_breakdown: {
     label: 'Monthly breakdown',
     description: 'Full month with savings rate and budget progress',
-    icon: 'analytics',
+    icon: 'query_stats',
     options: [WINDOW_OPTION],
     needs: (options) => [periodNeed(options), 'summary'],
     render(data, app, options) {
@@ -541,7 +541,12 @@ export const WIDGETS = {
       const bank = Number(summary.asset_totals?.Bank || 0);
       const wallet = Number(summary.asset_totals?.Wallet || 0);
       const liabilities = Number(summary.total_liabilities || 0);
-      if (!bank && !wallet && !liabilities) return '';
+      const debtSummary = summary.debt_summary || {};
+      const cardBal = Number(debtSummary.credit_card_balance || 0);
+      const availLimit = Number(debtSummary.available_credit_limit || 0);
+      const totalLimit = Number(debtSummary.total_credit_limit || 0);
+
+      if (!bank && !wallet && !liabilities && !totalLimit) return '';
 
       const liquid = bank + wallet;
 
@@ -556,12 +561,65 @@ export const WIDGETS = {
           <div>
             <div class="caption">Liabilities</div>
             <div class="title numeric expense">${h(money(app, liabilities))}</div>
+            ${cardBal ? `<div class="caption">Cards: ${h(money(app, cardBal))}</div>` : ''}
           </div>
         </div>
-        <div class="row-between" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--outline-variant)">
+        ${totalLimit > 0 ? `
+          <div class="row-between" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--outline-variant)">
+            <span class="caption">Available credit</span>
+            <span class="title numeric income">${h(money(app, availLimit))} <span style="font-size:11px;color:var(--on-surface-variant)">/ ${h(money(app, totalLimit))}</span></span>
+          </div>` : ''}
+        <div class="row-between" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--outline-variant)">
           <span class="caption">Net liquid</span>
           <span class="title numeric ${liquid - liabilities >= 0 ? 'income' : 'expense'}">${h(money(app, liquid - liabilities))}</span>
         </div>`);
+    },
+  },
+
+  debt_summary: {
+    label: 'Debt & Credit Cards',
+    description: 'Credit card limits, available credit, dues and loans',
+    icon: 'credit_card',
+    needs: () => ['summary', 'debt_summary'],
+    render(data, app) {
+      const ds = data.debt_summary || data.summary?.debt_summary || {};
+      const totalLimit = Number(ds.total_credit_limit || 0);
+      const availLimit = Number(ds.available_credit_limit || 0);
+      const cardBal = Number(ds.credit_card_balance || 0);
+      const loanBal = Number(ds.loan_balance || 0);
+      const totalDebt = Number(ds.total_debt || (cardBal + loanBal));
+      const monthlyObligations = Number(ds.monthly_debt_obligations || 0);
+      const util = Number(ds.overall_utilization_pct || (totalLimit > 0 ? (cardBal / totalLimit) * 100 : 0));
+
+      if (!totalDebt && !totalLimit && !monthlyObligations) return '';
+
+      const utilClass = util > 50 ? 'expense' : (util > 30 ? 'warning' : 'income');
+
+      return card('Credit & Debt', `
+        <div class="grid-2" style="margin-bottom:10px">
+          <div>
+            <div class="caption">Total Debt</div>
+            <div class="title numeric expense">${h(money(app, totalDebt))}</div>
+            ${cardBal ? `<div class="caption">Cards: ${h(money(app, cardBal))}</div>` : ''}
+            ${loanBal ? `<div class="caption">Loans: ${h(money(app, loanBal))}</div>` : ''}
+          </div>
+          <div>
+            <div class="caption">Monthly Obligations</div>
+            <div class="title numeric">${h(money(app, monthlyObligations))}</div>
+            ${ds.loan_monthly_emis ? `<div class="caption">EMIs: ${h(money(app, ds.loan_monthly_emis))}</div>` : ''}
+            ${ds.card_min_dues ? `<div class="caption">Min dues: ${h(money(app, ds.card_min_dues))}</div>` : ''}
+          </div>
+        </div>
+        ${totalLimit > 0 ? `
+          <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--outline-variant)">
+            <div class="row-between" style="margin-bottom:4px">
+              <span class="caption">Card Limit: ${h(money(app, availLimit))} avl of ${h(money(app, totalLimit))}</span>
+              <span class="caption numeric ${utilClass}">${Math.round(util)}% used</span>
+            </div>
+            <div class="progress">
+              <div class="progress-bar ${util > 50 ? 'over' : ''}" style="width:${Math.min(100, Math.max(0, util))}%"></div>
+            </div>
+          </div>` : ''}`);
     },
   },
 
@@ -606,7 +664,7 @@ export const WIDGETS = {
   category_card: {
     label: 'Category spotlight',
     description: 'Pin a category to the dashboard with trend',
-    icon: 'bookmark',
+    icon: 'label',
     repeatable: true,
     options: [
       {
@@ -698,8 +756,8 @@ export const WIDGETS = {
       const statusColor = isDeficit ? 'var(--expense)' : (isTight ? 'var(--warning, #F59E0B)' : 'var(--income)');
 
       return card('Safe-to-Spend Allowance', `
-        <div class="row-between" style="align-items:flex-start;margin-bottom:12px">
-          <div>
+        <div class="row-between" style="align-items:flex-start;margin-bottom:12px;flex-wrap:wrap;gap:6px">
+          <div style="flex:1;min-width:140px">
             <div class="display" style="font-size:24px;color:${statusColor}">
               ${h(money(app, safe.safe_to_spend_daily))}<span style="font-size:13px;font-weight:500;color:var(--on-surface-variant)"> / day</span>
             </div>
@@ -707,8 +765,8 @@ export const WIDGETS = {
               ${h(money(app, safe.safe_to_spend_weekly))} / week · ${h(money(app, safe.safe_to_spend_total))} left this month
             </div>
           </div>
-          <span class="badge" style="background:${isDeficit ? 'var(--expense-container)' : (isTight ? 'var(--surface-container-highest)' : 'var(--income-container)')};color:${statusColor}">
-            ${isDeficit ? 'Deficit Warning' : (isTight ? 'Tight Budget' : 'Safe to Spend')}
+          <span class="badge" style="flex-shrink:0;background:${isDeficit ? 'var(--expense-container)' : (isTight ? 'var(--surface-container-highest)' : 'var(--income-container)')};color:${statusColor}">
+            ${isDeficit ? 'Deficit' : (isTight ? 'Tight Budget' : 'Safe to Spend')}
           </span>
         </div>
 
@@ -753,7 +811,7 @@ export const WIDGETS = {
         if (!res.current_total_spend && !res.average_3m_total_spend) return '';
         return card('Spending Trends', `
           <div class="row" style="gap:10px;align-items:center;padding:4px 0">
-            <span class="icon" style="color:var(--income)">check_circle</span>
+            <span style="color:var(--income);display:flex">${icon('check_circle')}</span>
             <div>
               <div style="font-weight:600;font-size:14px;color:var(--on-surface)">Spending is on track</div>
               <div class="caption">No abnormal category spikes detected compared to your 3-month average.</div>
@@ -764,10 +822,10 @@ export const WIDGETS = {
       const catList = categories || [];
       const iconFor = (name) => catList.find((c) => c.name === name)?.icon || 'sell';
 
-      return card('⚠️ Spending Alerts & Trends', `
+      return card('Spending Alerts & Trends', `
         ${isTotalSpike ? `
           <div class="card-flat" style="background:var(--expense-container);color:var(--expense);padding:10px 12px;border-radius:var(--radius);margin-bottom:10px;display:flex;align-items:center;gap:8px">
-            <span class="icon">trending_up</span>
+            <span style="display:flex">${icon('trending_up')}</span>
             <div style="font-size:13px;font-weight:600">
               Total monthly spend is <strong>${res.total_ratio}×</strong> higher than 3-month avg (+${h(money(app, res.total_excess))})
             </div>
@@ -1363,7 +1421,7 @@ function comparison(percent) {
 
 /** What a brand new install sees. */
 export const DEFAULT_LAYOUT = [
-  'net_worth', 'safe_to_spend', 'spending_trends', 'month_summary', 'monthly_breakdown', 'budget', 'income_expense',
+  'net_worth', 'safe_to_spend', 'spending_trends', 'month_summary', 'monthly_breakdown', 'debt_summary', 'budget', 'income_expense',
   'top_categories', 'upcoming', 'recurring_found', 'recent',
 ];
 
@@ -1450,6 +1508,7 @@ export async function loadWidgetData(app, layout) {
     const [kind, ...rest] = need.split(':');
 
     if (kind === 'summary') return [need, await Bridge.db('get_summary', { member_id: member })];
+    if (kind === 'debt_summary') return [need, await Bridge.db('get_debt_summary', { member_id: member })];
     if (kind === 'safe_to_spend') return [need, await Bridge.db('get_safe_to_spend', { member_id: member })];
     if (kind === 'anomalies') return [need, await Bridge.db('get_spending_anomalies', { member_id: member })];
     if (kind === 'categories') {

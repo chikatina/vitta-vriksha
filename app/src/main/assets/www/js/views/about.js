@@ -15,12 +15,19 @@ const CREDITS = [
 export async function renderAbout(container, app) {
   // The reference database is updated on its own schedule, so which one is bundled is
   // worth being able to see rather than having to work out from the build date.
-  const reference = await Bridge.call('cas', { action: 'versions' }).catch(() => null);
+  const [reference, versionInfo] = await Promise.all([
+    Bridge.call('cas', { action: 'versions' }).catch(() => null),
+    Bridge.call('database', { action: 'get_version_info' }).catch(() => null),
+  ]);
+  const verStr = versionInfo?.app_version
+    ? `Version ${versionInfo.app_version} (Build ${versionInfo.app_version_code || 8})`
+    : 'Version 1.0.4 (Build 8)';
+
   container.innerHTML = `
     <div class="card" style="text-align:center">
       <div class="lock-mark" style="margin:0 auto 16px">${brandMark()}</div>
       <div class="headline">Vitta Vriksha</div>
-      <div class="caption">Version 1.0.3</div>
+      <div class="caption">${h(verStr)}</div>
       <p class="caption" style="margin-top:12px">
         A personal finance tracker for Indian households that keeps everything on the device
         it runs on.
@@ -75,7 +82,7 @@ export async function renderAbout(container, app) {
         Built by Chikati Studio. For help, feedback or inquiries, contact us at:
       </p>
       <button type="button" class="btn btn-filled btn-block" data-contact-support>
-        ${icon('mail')}help@chikatistudio.com
+        ${icon('help')}help@chikatistudio.com
       </button>
     </div>`;
 

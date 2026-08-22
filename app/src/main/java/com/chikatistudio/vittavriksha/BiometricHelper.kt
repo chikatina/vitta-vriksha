@@ -27,12 +27,19 @@ class BiometricHelper(private val activity: AppCompatActivity) {
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     super.onAuthenticationError(errorCode, errString)
-                    onError(errString.toString())
+                    if (errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
+                        errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+                        errorCode == BiometricPrompt.ERROR_CANCELED) {
+                        onError("CANCELED")
+                    } else {
+                        onError(errString.toString())
+                    }
                 }
 
                 override fun onAuthenticationFailed() {
                     super.onAuthenticationFailed()
-                    onError("Authentication failed. Please try again.")
+                    // Non-fatal unrecognised attempt: Android BiometricPrompt remains active for retry.
+                    // Terminal failure or cancellation will be delivered through onAuthenticationError.
                 }
             }
         )

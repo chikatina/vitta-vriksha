@@ -1,7 +1,7 @@
 /* First run setup and the PIN lock screen. */
 
 import { Bridge } from '../bridge.js';
-import { confirmDialog, icon, h, toast } from '../ui.js';
+import { confirmDialog, icon, h, toast, sheet } from '../ui.js';
 import { brandMark } from '../brand-mark.js';
 
 const PIN_LENGTH = 4;
@@ -92,6 +92,12 @@ function wireKeypad(node, { onComplete, onBioTap }) {
 /* ------------------------------------------------------------------- lock */
 
 export function renderLock(app) {
+  // Ensure all tour elements, scrims and spotlights are completely destroyed upon entering lock screen
+  if (typeof document !== 'undefined' && document.querySelectorAll) {
+    document.querySelectorAll('.app-tour-scrim, .app-tour-container, .app-tour-spotlight').forEach((el) => el.remove());
+    document.body?.classList?.remove('tour-active');
+  }
+
   const bioAvailable = Bridge.isBiometricAvailable();
   const bioEnabled = bioAvailable && (localStorage.getItem('biometric_enabled') === '1' || Boolean(localStorage.getItem('bio_vault_pin')));
 
@@ -110,50 +116,147 @@ export function renderLock(app) {
       <button class="btn btn-text" data-forgot>Forgot your PIN?</button>
     </div>`);
 
-  const triggerBiometrics = () => {
-    if (!bioEnabled) return;
+  let isPrompting = false;
+  let isUnlocking = false;
+  let lastPromptTime = 0;
+
+  const cleanupListeners = () => {
+    if (typeof document !== 'undefined' && document.removeEventListener) {
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
+    }
+    if (typeof window !== 'undefined' && window.removeEventListener) {
+      window.removeEventListener('focus', onFocusOrVisible);
+    }
+  };
+
+  const triggerBiometrics = (manual = false) => {
+    if (!bioEnabled || isUnlocking) return;
+    if (isPrompting && !manual) return;
+    const now = Date.now();
+    if (!manual && now - lastPromptTime < 1200) return;
+
+    isPrompting = true;
+    lastPromptTime = now;
+
     window.onBiometricAuthResult = async (success, message) => {
+      isPrompting = false;
+      if (!node.isConnected) return;
+
       if (success) {
+        isUnlocking = true;
+        cleanupListeners();
+
         const storedPin = localStorage.getItem('bio_vault_pin');
         if (storedPin) {
-          const res = await Bridge.db('unlock_vault', { pin: storedPin });
-          if (res.status === 'success') {
-            await app.resume();
+          try {
+            const res = await Bridge.db('unlock_vault', { pin: storedPin });
+            if (res && res.status === 'success') {
+              await app.resume();
+              document.querySelectorAll('.overlay-screen').forEach((el) => el.remove());
+              return;
+            } else {
+              isUnlocking = false;
+              const errorHost = node.querySelector('[data-error]');
+              if (errorHost) {
+                if (res?.locked_for_ms) {
+                  errorHost.textContent = `${res.message} ${res.hint || ''}`.trim();
+                } else {
+                  errorHost.textContent = 'Biometric credentials out of sync. Please enter your PIN.';
+                }
+              }
+              const dotHost = node.querySelector('.pin-dots');
+              if (dotHost) {
+                dotHost.classList.add('shake');
+                setTimeout(() => dotHost.classList.remove('shake'), 420);
+              }
+              return;
+            }
+          } catch (err) {
+            console.error('Error during biometric unlock_vault:', err);
+            isUnlocking = false;
+            const errorHost = node.querySelector('[data-error]');
+            if (errorHost) errorHost.textContent = 'Unlock error. Please enter your PIN.';
             return;
           }
+        } else {
+          isUnlocking = false;
+          const errorHost = node.querySelector('[data-error]');
+          if (errorHost) {
+            errorHost.textContent = 'Biometric PIN missing. Please enter your PIN.';
+          }
+          const dotHost = node.querySelector('.pin-dots');
+          if (dotHost) {
+            dotHost.classList.add('shake');
+            setTimeout(() => dotHost.classList.remove('shake'), 420);
+          }
+          return;
         }
       }
-      if (message && typeof message === 'string') {
-        const errorHost = node.querySelector('[data-error]');
-        if (errorHost) errorHost.textContent = message;
+
+      const errorHost = node.querySelector('[data-error]');
+      if (errorHost) {
+        if (message && typeof message === 'string' && message !== 'CANCELED' && !message.toLowerCase().includes('cancel')) {
+          errorHost.textContent = message;
+        } else {
+          errorHost.textContent = '';
+        }
       }
     };
+
     Bridge.triggerBiometricAuth();
   };
 
+  // Automatically trigger biometrics whenever app regains focus or visibility while locked
+  const onFocusOrVisible = () => {
+    if (node.isConnected && bioEnabled && !isUnlocking && !isPrompting && (typeof document === 'undefined' || document.visibilityState === 'visible')) {
+      const now = Date.now();
+      if (now - lastPromptTime > 1500) {
+        setTimeout(() => {
+          if (node.isConnected && !isUnlocking && !isPrompting) triggerBiometrics(false);
+        }, 200);
+      }
+    }
+  };
+
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', onFocusOrVisible);
+  }
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('focus', onFocusOrVisible);
+  }
+
   wireKeypad(node, {
     async onComplete(pin) {
+      isUnlocking = true;
       const res = await Bridge.db('unlock_vault', { pin });
-      if (res.status === 'success') {
-        if (localStorage.getItem('biometric_enabled') === '1') {
+      if (res && res.status === 'success') {
+        if (localStorage.getItem('biometric_enabled') === '1' || Boolean(localStorage.getItem('bio_vault_pin'))) {
           localStorage.setItem('bio_vault_pin', pin);
         }
+        cleanupListeners();
         await app.resume();
+        document.querySelectorAll('.overlay-screen').forEach((el) => el.remove());
         return true;
       }
 
-      if (res.locked_for_ms) return `${res.message} ${res.hint || ''}`.trim();
-      const left = res.failed_attempts ? ` (${res.failed_attempts} wrong so far)` : '';
+      isUnlocking = false;
+      if (res && res.locked_for_ms) return `${res.message} ${res.hint || ''}`.trim();
+      const left = res?.failed_attempts ? ` (${res.failed_attempts} wrong so far)` : '';
       return `That is not your PIN.${left}`;
     },
     onBioTap() {
-      triggerBiometrics();
+      isPrompting = false;
+      const errorHost = node.querySelector('[data-error]');
+      if (errorHost) errorHost.textContent = '';
+      triggerBiometrics(true);
     },
   });
 
-  // Auto-prompt fingerprint on mount like Zerodha Kite
+  // Always automatically open biometric check on lock screen when enabled
   if (bioEnabled) {
-    setTimeout(() => triggerBiometrics(), 150);
+    setTimeout(() => {
+      if (node.isConnected && !isUnlocking) triggerBiometrics(false);
+    }, 280);
   }
 
   node.querySelector('[data-forgot]').addEventListener('click', () => forgetPin(app));
@@ -287,6 +390,13 @@ export function renderSetup(app) {
     // Through `resume` rather than straight to `unlock`, so the currency, the locale and
     // the theme are read the same way they are on every later start.
     await app.resume();
+
+    const smsGranted = Bridge.checkPermission('SMS');
+    if (smsGranted) {
+      app.open('sms_ingest', { initialSetup: true });
+    } else {
+      app.open('home');
+    }
   };
 
   const STEPS = {
@@ -320,11 +430,12 @@ export function renderSetup(app) {
 
     /* ---------------------------------------------------------------- pin */
     2() {
+      const isConfirm = Boolean(chosenPin);
       const node = overlay(shell(2, `
         <div class="setup-hero">${icon('lock')}</div>
-        <h1 class="headline">${chosenPin ? 'Enter it once more' : 'Choose a PIN'}</h1>
+        <h1 class="headline">${isConfirm ? 'Enter it once more' : 'Choose a PIN'}</h1>
         <p class="caption" style="max-width:32ch">
-          ${chosenPin
+          ${isConfirm
     ? 'So we know it was not a slip.'
     : 'Four digits. This is what your records are locked with, so there is no way '
       + 'into them without it and no way to reset it.'}
@@ -346,8 +457,8 @@ export function renderSetup(app) {
           }
           if (pin !== chosenPin) {
             chosenPin = '';
-            paint();
-            return true;
+            setTimeout(() => { paint(); }, 600);
+            return 'PINs did not match. Please choose a PIN again.';
           }
 
           /*
@@ -356,14 +467,21 @@ export function renderSetup(app) {
            * One call, not two. It makes the key, records the PIN, and saves, so there is
            * no window in which a database exists that no key can seal.
            */
-          const res = await Bridge.db('create_vault', { new_pin: pin });
-          if (res.status !== 'success') {
+          try {
+            const res = await Bridge.db('create_vault', { new_pin: pin });
+            if (!res || res.status !== 'success') {
+              chosenPin = '';
+              setTimeout(() => { paint(); }, 600);
+              return (res && res.message) || 'That PIN was not accepted.';
+            }
+            app.settings.pin_is_set = '1';
+            next();
+            return true;
+          } catch (err) {
             chosenPin = '';
-            return res.message || 'That PIN was not accepted.';
+            setTimeout(() => { paint(); }, 600);
+            return err?.message || 'Failed to create vault.';
           }
-          app.settings.pin_is_set = '1';
-          next();
-          return true;
         },
       });
 
@@ -381,17 +499,29 @@ export function renderSetup(app) {
     /* -------------------------------------------------------- permissions */
     3() {
       const onDevice = Bridge.isAndroid();
+      const hasBio = Bridge.isBiometricAvailable();
 
-      const node = overlay(shell(3, hero('bolt', 'Let it do some of the typing',
-        'Both are optional, and the app works fully without them. You can change your mind '
-        + 'any time in More, Security.'), `
+      const node = overlay(shell(3, `
+        <div class="setup-hero" style="width:72px;height:72px;margin-bottom:var(--gap-2)">${icon('bolt')}</div>
+        <h1 class="headline" style="margin-bottom:var(--gap-1)">Quick access & permissions</h1>
+        <p class="body muted" style="max-width:34ch;font-size:12px;margin-bottom:var(--gap-2)">
+          Optional features to automate your ledger and speed up access. You can change any of these later in Security.
+        </p>`, `
         <button class="btn btn-filled btn-block" data-next>Continue</button>`));
 
       node.querySelector('.setup-content').insertAdjacentHTML('beforeend', `
-        <div class="list" style="width:100%;text-align:left" data-permissions></div>
-        ${onDevice ? '' : `<p class="caption">Permissions can only be granted on a device.</p>`}`);
+        <div class="card-flat" style="width:100%;padding:var(--gap-2) var(--gap-4);border-radius:var(--radius-lg);margin-top:var(--gap-2);box-sizing:border-box;background:var(--surface-container-high);text-align:left">
+          <div class="list" style="width:100%;background:transparent;box-shadow:none" data-permissions></div>
+        </div>
+        ${onDevice ? '' : `<p class="caption" style="margin-top:6px">Permissions can only be granted on a device.</p>`}`);
 
       const PERMISSIONS = [
+        ...(hasBio ? [{
+          key: 'BIOMETRICS',
+          glyph: 'fingerprint',
+          title: 'Fingerprint unlock',
+          body: 'Unlock your records instantly with your biometric scanner.',
+        }] : []),
         {
           key: 'SMS',
           glyph: 'sms',
@@ -411,24 +541,72 @@ export function renderSetup(app) {
 
       const paintPermissions = () => {
         host.innerHTML = PERMISSIONS.map((permission) => {
+          if (permission.key === 'BIOMETRICS') {
+            const bioOn = localStorage.getItem('biometric_enabled') === '1';
+            return `
+              <div class="list-row" style="align-items:flex-start;padding:12px 0;background:transparent">
+                <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface-variant);flex-shrink:0">
+                  ${icon(permission.glyph)}
+                </span>
+                <span class="list-row-main" style="margin-left:8px">
+                  <span class="list-row-title" style="font-size:13px">${h(permission.title)}</span>
+                  <span class="caption" style="font-size:11.5px;line-height:1.35">${h(permission.body)}</span>
+                </span>
+                <button class="btn btn-sm ${bioOn ? 'btn-filled' : 'btn-tonal'}" data-toggle-bio style="flex-shrink:0;margin-left:8px">
+                  ${bioOn ? `${icon('check', 'icon-sm')}On` : 'Enable'}
+                </button>
+              </div>`;
+          }
+
           const granted = Bridge.checkPermission(permission.key);
           const blocked = !granted && Bridge.permissionIsBlocked(permission.key);
 
           return `
-            <div class="list-row" style="align-items:flex-start">
-              <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface-variant)">
+            <div class="list-row" style="align-items:flex-start;padding:12px 0;background:transparent">
+              <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface-variant);flex-shrink:0">
                 ${icon(permission.glyph)}
               </span>
-              <span class="list-row-main">
-                <span class="list-row-title">${h(permission.title)}</span>
-                <span class="caption">${h(permission.body)}</span>
+              <span class="list-row-main" style="margin-left:8px">
+                <span class="list-row-title" style="font-size:13px">${h(permission.title)}</span>
+                <span class="caption" style="font-size:11.5px;line-height:1.35">${h(permission.body)}</span>
               </span>
               ${granted
-                ? `<span class="badge badge-income">${icon('check', 'icon-sm')}On</span>`
-                : `<button class="btn btn-sm btn-tonal" data-grant="${permission.key}"
-                           ${onDevice ? '' : 'disabled'}>${blocked ? 'Settings' : 'Allow'}</button>`}
+                ? `<span class="badge badge-income" style="flex-shrink:0;margin-left:8px">${icon('check', 'icon-sm')}On</span>`
+                : `<button class="btn btn-sm btn-tonal" data-grant="${permission.key}" style="flex-shrink:0;margin-left:8px"
+                            ${onDevice ? '' : 'disabled'}>${blocked ? 'Settings' : 'Allow'}</button>`}
             </div>`;
         }).join('');
+
+        const bioBtn = host.querySelector('[data-toggle-bio]');
+        if (bioBtn) {
+          bioBtn.addEventListener('click', async () => {
+            const current = localStorage.getItem('biometric_enabled') === '1';
+            if (current) {
+              localStorage.removeItem('biometric_enabled');
+              localStorage.removeItem('bio_vault_pin');
+              toast('Fingerprint unlock disabled.', 'info');
+              paintPermissions();
+            } else {
+              const pin = chosenPin || localStorage.getItem('bio_vault_pin');
+              toast('Scan your fingerprint to verify...', 'info');
+              const auth = await Bridge.verifyBiometric();
+              if (auth.success) {
+                localStorage.setItem('biometric_enabled', '1');
+                if (pin) localStorage.setItem('bio_vault_pin', pin);
+                toast('Fingerprint unlock verified and enabled!', 'success');
+              } else {
+                localStorage.removeItem('biometric_enabled');
+                localStorage.removeItem('bio_vault_pin');
+                if (auth.message && auth.message !== 'CANCELED' && !auth.message.toLowerCase().includes('cancel')) {
+                  toast(auth.message, 'error');
+                } else {
+                  toast('Fingerprint verification cancelled.', 'info');
+                }
+              }
+              paintPermissions();
+            }
+          });
+        }
 
         host.querySelectorAll('[data-grant]').forEach((btn) => {
           btn.addEventListener('click', async () => {
@@ -490,4 +668,42 @@ export function renderSetup(app) {
   };
 
   paint();
+}
+
+function promptBiometricEnrollment(pin) {
+  return sheet('Enable Fingerprint Unlock', `
+    <div style="text-align:center;padding:var(--gap-3) 0">
+      <div class="setup-hero" style="margin:0 auto var(--gap-3)">${icon('fingerprint')}</div>
+      <p class="body" style="margin-bottom:var(--gap-2)">
+        Unlock your records instantly with your fingerprint rather than typing your 4-digit PIN every time.
+      </p>
+      <p class="caption">
+        Your PIN remains the master key for vault recovery and database decryption.
+      </p>
+    </div>`, {
+    actions: `
+      <button class="btn btn-outlined" data-skip>Maybe later</button>
+      <button class="btn btn-filled" data-enable>${icon('check')}Enable fingerprint</button>`,
+    onMount(node, close) {
+      node.querySelector('[data-skip]').addEventListener('click', () => close(false));
+      node.querySelector('[data-enable]').addEventListener('click', async () => {
+        close(false);
+        toast('Scan your fingerprint to verify...', 'info');
+        const auth = await Bridge.verifyBiometric();
+        if (auth.success) {
+          localStorage.setItem('biometric_enabled', '1');
+          localStorage.setItem('bio_vault_pin', pin);
+          toast('Fingerprint unlock verified and enabled', 'success');
+        } else {
+          localStorage.removeItem('biometric_enabled');
+          localStorage.removeItem('bio_vault_pin');
+          if (auth.message && auth.message !== 'CANCELED' && !auth.message.toLowerCase().includes('cancel')) {
+            toast(auth.message, 'error');
+          } else {
+            toast('Fingerprint verification cancelled.', 'info');
+          }
+        }
+      });
+    },
+  });
 }

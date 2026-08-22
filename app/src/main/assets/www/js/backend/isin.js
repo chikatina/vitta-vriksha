@@ -23,6 +23,7 @@ const DATABASE_URL = new URL('../../vendor/isin/isin.db', import.meta.url);
 
 let loading = null;
 let reference = null;
+const isinNameCache = new Map();
 
 /**
  * Loads the reference database and registers it with the parser.
@@ -47,12 +48,14 @@ export async function loadIsinDatabase() {
         version: versionOf(database),
         provider: new SqlIsinDb({ query: (sql, params) => database.all(sql, params) }),
       };
+      isinNameCache.clear();
       setIsinProvider(reference.provider);
       return reference;
     } catch (error) {
       // Not fatal. A statement still parses; it just arrives without the codes.
       console.warn('The scheme reference database could not be loaded.', error);
       reference = null;
+      isinNameCache.clear();
       return null;
     } finally {
       loading = null;
@@ -77,15 +80,25 @@ export async function loadIsinDatabase() {
 export function nameForIsin(isin) {
   const code = String(isin || '').trim().toUpperCase();
   if (!code || !reference) return '';
+  if (isinNameCache.has(code)) return isinNameCache.get(code);
 
   try {
     const scheme = reference.database.get('SELECT name FROM scheme WHERE isin = ?', [code]);
-    if (scheme && scheme.name) return String(scheme.name).trim();
+    if (scheme && scheme.name) {
+      const name = String(scheme.name).trim();
+      isinNameCache.set(code, name);
+      return name;
+    }
     const security = reference.database.get('SELECT name FROM isin WHERE isin = ?', [code]);
-    if (security && security.name) return String(security.name).trim();
+    if (security && security.name) {
+      const name = String(security.name).trim();
+      isinNameCache.set(code, name);
+      return name;
+    }
   } catch {
     // A reference database from another build may not have these tables. Not fatal.
   }
+  isinNameCache.set(code, '');
   return '';
 }
 

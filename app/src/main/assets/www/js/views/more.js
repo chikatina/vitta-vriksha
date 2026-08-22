@@ -1,8 +1,7 @@
-/* More: everything that is configuration rather than money. */
-
 import { Bridge } from '../bridge.js';
 import { icon } from '../ui.js';
 import { navRow, bindNavRows } from './shared.js';
+import { openOnboardingTour } from './onboarding-tour.js';
 
 export async function renderMore(container, app) {
   const smsGranted = Bridge.checkPermission('SMS');
@@ -40,7 +39,7 @@ export async function renderMore(container, app) {
         ${navRow('rules', 'sms', 'Bank SMS tracking',
           smsSub,
           smsGranted ? '' : 'Set up')}
-        ${navRow('delete-data', 'delete_forever', 'Delete data', 'Erase specific records or reset app')}
+        ${navRow('delete-data', 'delete', 'Delete data', 'Erase specific records or reset app')}
       </div>
     </div>
 
@@ -50,7 +49,7 @@ export async function renderMore(container, app) {
         ${navRow('settings', 'tune', 'Settings', 'Theme, currency & preferences')}
         ${navRow('security', 'lock', 'Security', 'PIN & permissions')}
         ${navRow('guide', 'menu_book', 'Guide & FAQ', 'App guide and FAQ')}
-        ${navRow('support', 'support_agent', 'Help & Support', 'Contact us at help@chikatistudio.com')}
+        ${navRow('support', 'help', 'Help & Support', 'Contact us at help@chikatistudio.com')}
         ${navRow('about', 'info', 'About', 'Version & licenses')}
       </div>
     </div>`;

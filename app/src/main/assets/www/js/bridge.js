@@ -14,12 +14,16 @@
 import { db, invoke } from './backend/index.js';
 import {
   checkPermission, isAndroid, isBiometricAvailable, openAppSettings, permissionIsBlocked,
-  requestPermission, shareFile, triggerBiometricAuth, openEmail, isSmsTrackingEnabled, setSmsTrackingEnabled,
+  requestPermission, saveFile, shareFile, triggerBiometricAuth, verifyBiometric, openEmail, isSmsTrackingEnabled, setSmsTrackingEnabled,
+  isDebug,
 } from './backend/native.js';
 
 export const Bridge = {
   /** Whether the Android shell is present. Screens use this to hide what it provides. */
   isAndroid,
+
+  /** Whether the app is running in a debug / developer testing environment. */
+  isDebug,
 
   /** Runs an action against one of the backend modules. */
   call(moduleName, args = {}) {
@@ -30,11 +34,13 @@ export const Bridge = {
   db,
 
   triggerBiometricAuth,
+  verifyBiometric,
   isBiometricAvailable,
   checkPermission,
   permissionIsBlocked,
   openAppSettings,
   requestPermission,
+  saveFile,
   shareFile,
   openEmail,
   isSmsTrackingEnabled,

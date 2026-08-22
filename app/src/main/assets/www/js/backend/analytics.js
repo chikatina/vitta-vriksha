@@ -41,11 +41,12 @@ export function flowClause(db, flow) {
   const clauses = {
     // A transfer is the same money in a different pocket, so it is spending in no window.
     spend: excludeInvestments
-      ? "type != 'Income' AND type != 'Transfer' AND COALESCE(is_investment_outflow, 0) = 0"
-      : "type != 'Income' AND type != 'Transfer'",
-    income: "type = 'Income'",
-    invest: 'COALESCE(is_investment_outflow, 0) = 1',
-    all: "type != 'Transfer'",
+      ? "type != 'Income' AND type != 'Transfer' AND type != 'Investment' AND category != 'Transfer' AND category != 'Credit Card' AND category != 'Investment Outflow' AND COALESCE(is_investment_outflow, 0) = 0"
+      : "type != 'Income' AND type != 'Transfer' AND category != 'Transfer' AND category != 'Credit Card'",
+    income: "type = 'Income' AND category != 'Transfer' AND category != 'Credit Card'",
+    invest: "type != 'Transfer' AND category != 'Transfer' AND category != 'Credit Card' AND (type = 'Investment' OR COALESCE(is_investment_outflow, 0) = 1 OR category = 'Investment Outflow')",
+    transfer: "type = 'Transfer' OR category = 'Transfer' OR category = 'Credit Card'",
+    all: "type != 'Transfer' AND category != 'Transfer' AND category != 'Credit Card'",
   };
   return clauses[flow] || clauses.all;
 }
@@ -105,10 +106,17 @@ export function flowTotals(db, { from, to, memberId, category }) {
     from, to, memberId, category, flow: 'all',
   })) {
     const value = number(row.total);
+    if (row.type === 'Transfer' || row.category === 'Transfer' || row.category === 'Credit Card') {
+      continue;
+    }
     totals.count += number(row.times);
-    if (row.type === 'Income') totals.income += value;
-    else if (row.is_investment_outflow && excludeInvestments) totals.invested += value;
-    else totals.expense += value;
+    if (row.type === 'Income') {
+      totals.income += value;
+    } else if (excludeInvestments && (row.type === 'Investment' || row.is_investment_outflow || row.category === 'Investment Outflow')) {
+      totals.invested += value;
+    } else {
+      totals.expense += value;
+    }
   }
   totals.net = totals.income - totals.expense - totals.invested;
   return totals;
@@ -194,9 +202,9 @@ const METRICS = {
       const invested = blank();
       for (const row of rows) {
         const slot = index.get(row.bucket);
-        if (slot === undefined || row.type === 'Transfer') continue;
+        if (slot === undefined || row.type === 'Transfer' || row.category === 'Transfer' || row.category === 'Credit Card') continue;
         if (row.type === 'Income') income[slot] += number(row.total);
-        else if (row.is_investment_outflow && excludeInvestments) invested[slot] += number(row.total);
+        else if (excludeInvestments && (row.type === 'Investment' || row.is_investment_outflow || row.category === 'Investment Outflow')) invested[slot] += number(row.total);
         else expense[slot] += number(row.total);
       }
       const series = [
@@ -232,7 +240,7 @@ const METRICS = {
       const net = blank();
       for (const row of rows) {
         const slot = index.get(row.bucket);
-        if (slot === undefined || row.type === 'Transfer') continue;
+        if (slot === undefined || row.type === 'Transfer' || row.category === 'Transfer' || row.category === 'Credit Card') continue;
         if (row.type === 'Income') net[slot] += number(row.total);
         else net[slot] -= number(row.total);
       }
@@ -244,21 +252,51 @@ const METRICS = {
     label: 'Share of income kept',
     source: 'transactions',
     unit: 'percent',
-    build({ rows, blank, index }) {
+    build({ rows, blank, index, db }) {
+      const excludeInvestments = isExcludingInvestments(db);
       const income = blank();
       const out = blank();
       for (const row of rows) {
         const slot = index.get(row.bucket);
-        if (slot === undefined || row.type === 'Transfer') continue;
+        if (slot === undefined || row.type === 'Transfer' || row.category === 'Transfer' || row.category === 'Credit Card') continue;
         if (row.type === 'Income') income[slot] += number(row.total);
-        else out[slot] += number(row.total);
+        else if (!excludeInvestments || (!row.is_investment_outflow && row.type !== 'Investment' && row.category !== 'Investment Outflow')) out[slot] += number(row.total);
       }
       // A period with nothing coming in has no rate rather than a rate of zero, and
       // drawing it as zero would say the household spent everything it earned.
+      // Clamp rate between -100% and 100% so large one-off capital expenses or EMIs do not distort chart Y-axis
       const values = income.map((earned, i) => (earned > 0
-        ? ((earned - out[i]) / earned) * 100
+        ? Math.max(-100, Math.min(100, ((earned - out[i]) / earned) * 100))
         : 0));
       return { series: [{ key: 'rate', label: 'Kept', role: 'accent', values }] };
+    },
+  },
+
+  monthly_debt: {
+    label: 'Debt & card payments',
+    source: 'transactions',
+    stacked: true,
+    build({ rows, blank, index }) {
+      const loanEmi = blank();
+      const cardPayments = blank();
+      for (const row of rows) {
+        const slot = index.get(row.bucket);
+        if (slot === undefined) continue;
+        const cat = String(row.category || '').toLowerCase();
+        const isLoan = cat.includes('loan') || cat.includes('emi') || row.category === 'Loans & EMI';
+        const isCard = row.category === 'Credit Card' || row.type === 'Transfer' || cat.includes('credit card');
+        if (isLoan) {
+          loanEmi[slot] += number(row.total);
+        } else if (isCard) {
+          cardPayments[slot] += number(row.total);
+        }
+      }
+      return {
+        series: [
+          { key: 'loans', label: 'Loan EMIs', color: 'var(--expense)', values: loanEmi },
+          { key: 'cards', label: 'Card payments', color: '#3B82F6', values: cardPayments },
+        ],
+      };
     },
   },
 
@@ -454,7 +492,13 @@ const METRICS = {
 };
 
 function isSpend(row, excludeInvestments = true) {
-  return row.type !== 'Income' && row.type !== 'Transfer' && (!excludeInvestments || !row.is_investment_outflow);
+  if (row.type === 'Income' || row.type === 'Transfer' || row.category === 'Transfer' || row.category === 'Credit Card') {
+    return false;
+  }
+  if (excludeInvestments && (row.type === 'Investment' || row.is_investment_outflow || row.category === 'Investment Outflow')) {
+    return false;
+  }
+  return true;
 }
 
 /** The catalogue, for a UI that offers the user a choice of chart. */
@@ -482,22 +526,23 @@ function carryInto(db, spec, { from, memberId }) {
   const excludeInvestments = isExcludingInvestments(db);
   const [clause, params] = memberClause(memberId, 'AND');
   const rows = db.all(
-    'SELECT type, COALESCE(is_investment_outflow, 0) AS is_investment_outflow, SUM(amount) AS total'
+    'SELECT type, category, COALESCE(is_investment_outflow, 0) AS is_investment_outflow, SUM(amount) AS total'
     + ` FROM transactions WHERE date < ?${clause}`
-    + ' GROUP BY type, is_investment_outflow',
+    + ' GROUP BY type, category, is_investment_outflow',
     [from, ...params],
   );
 
   let running = 0;
   for (const row of rows) {
     const total = number(row.total);
-    if (row.type === 'Transfer') continue;
+    if (row.type === 'Transfer' || row.category === 'Transfer' || row.category === 'Credit Card') continue;
+    const isInvest = row.is_investment_outflow || row.type === 'Investment' || row.category === 'Investment Outflow';
     if (spec.cumulative === 'invested') {
-      if (row.is_investment_outflow) running += total;
+      if (isInvest) running += total;
       continue;
     }
     if (row.type === 'Income') running += total;
-    else if (!row.is_investment_outflow || !excludeInvestments) running -= total;
+    else if (!isInvest || !excludeInvestments) running -= total;
   }
   return running;
 }
@@ -690,7 +735,7 @@ export function getBreakdown(db, args) {
   const spec = DIMENSIONS[dimension];
   if (!spec) return fail('DIMENSION_UNKNOWN', `Nothing is grouped by ${dimension}.`);
 
-  const validFlows = new Set(['spend', 'income', 'invest', 'all']);
+  const validFlows = new Set(['spend', 'income', 'invest', 'transfer', 'all']);
   const flow = validFlows.has(args.flow) ? String(args.flow) : 'spend';
   const range = resolveRange(args);
   if (range.error) return range.error;
@@ -807,6 +852,28 @@ export function getPeriodSummary(db, args) {
   const days = spanDays(range.from, range.to);
   const change = (now, before) => (before > 0 ? ((now - before) / before) * 100 : null);
 
+  const transferRows = transactionRows(db, {
+    from: range.from, to: range.to, memberId, category: args.category, flow: 'transfer',
+  });
+  const transferred = transferRows.reduce((sum, row) => sum + number(row.total), 0);
+
+  const budgetRow = db.get("SELECT value FROM app_settings WHERE key = 'monthly_budget'");
+  const monthlyBudget = budgetRow ? number(budgetRow.value) : 0;
+
+  const allPeriodRows = transactionRows(db, {
+    from: range.from, to: range.to, memberId, category: args.category, flow: 'all',
+  });
+  let periodLoanPayments = 0;
+  let periodCardPayments = 0;
+  for (const r of allPeriodRows) {
+    const cat = String(r.category || '').toLowerCase();
+    if (cat.includes('loan') || cat.includes('emi') || r.category === 'Loans & EMI') {
+      periodLoanPayments += number(r.total);
+    } else if (r.category === 'Credit Card' || cat.includes('credit card')) {
+      periodCardPayments += number(r.total);
+    }
+  }
+
   return {
     from: range.from,
     to: range.to,
@@ -816,10 +883,15 @@ export function getPeriodSummary(db, args) {
     income: totals.income,
     expense: totals.expense,
     invested: totals.invested,
+    transferred,
+    monthly_budget: monthlyBudget,
+    debt_obligations: periodLoanPayments + periodCardPayments,
+    loan_payments: periodLoanPayments,
+    card_payments: periodCardPayments,
     net: totals.net,
     count: totals.count,
     average_daily: totals.expense / days,
-    savings_rate: totals.income > 0 ? (totals.net / totals.income) * 100 : null,
+    savings_rate: totals.income > 0 ? Math.round((totals.net / totals.income) * 100) : (totals.expense > 0 ? -100 : null),
     top_category: topCategory ? { name: topCategory[0], total: topCategory[1] } : null,
     busiest_day: busiest ? { date: busiest[0], total: busiest[1] } : null,
     biggest: biggest || null,

@@ -35,6 +35,7 @@ const FLOW_TABS = [
   { value: 'spend', label: 'Out' },
   { value: 'income', label: 'In' },
   { value: 'invest', label: 'Invested' },
+  { value: 'transfer', label: 'Moved' },
 ];
 
 /**
@@ -49,6 +50,7 @@ const CHARTS = {
     { metric: 'spend_total', label: 'Total', type: 'bars' },
     { metric: 'spend_by_category', label: 'Category', type: 'bars' },
     { metric: 'spend_by_merchant', label: 'Shop', type: 'bars' },
+    { metric: 'monthly_debt', label: 'Debt & EMIs', type: 'stacked' },
     { metric: 'spend_by_member', label: 'Person', type: 'bars', family: true },
     { metric: 'income_expense', label: 'In and out', type: 'bars' },
     { metric: 'savings_rate', label: 'Kept %', type: 'line' },
@@ -60,10 +62,14 @@ const CHARTS = {
     { metric: 'cumulative_savings', label: 'Running total', type: 'line' },
   ],
   invest: [
+    { metric: 'investment_growth', label: 'Put in', type: 'line' },
     { metric: 'invest_flows', label: 'Bought and sold', type: 'bars' },
     { metric: 'invest_by_scheme', label: 'Scheme', type: 'bars' },
-    { metric: 'investment_growth', label: 'Put in', type: 'line' },
     { metric: 'invest_cumulative', label: 'Net into funds', type: 'line' },
+  ],
+  transfer: [
+    { metric: 'spend_by_category', label: 'Category', type: 'bars' },
+    { metric: 'spend_by_merchant', label: 'Counterparty', type: 'bars' },
   ],
 };
 
@@ -314,11 +320,89 @@ async function paintBody(host, app) {
   const isPercent = series.unit === 'percent';
   const format = (value) => (isPercent ? formatPercent(value, 0) : money(app, value));
 
+  const isCurrentPeriod = insightsView.offset === 0 && selectedIndex === buckets.length - 1;
+  const isCurrentMonth = insightsView.granularity === 'month' && isCurrentPeriod;
+  const today = new Date();
+  const daysPassed = isCurrentMonth ? Math.min(today.getDate(), summary.days || 30) : (summary.days || 30);
+  const daysInMonth = summary.days || 30;
+
+  const income = Number(summary.income || 0);
+  const expense = Number(summary.expense || 0);
+  const invested = Number(summary.invested || 0);
+  const transferred = Number(summary.transferred || 0);
+  const netKept = Number(summary.net || 0);
+  const monthlyBudget = Number(summary.monthly_budget || app.monthlyBudget || 0);
+  const previousIncome = Number(summary.previous?.income || 0);
+
   const headline = {
-    spend: { value: summary.expense, label: 'Spent', className: 'expense', change: summary.change.expense, worse: true },
-    income: { value: summary.income, label: 'Received', className: 'income', change: summary.change.income, worse: false },
-    invest: { value: summary.invested, label: 'Invested', className: '', change: summary.change.invested, worse: false },
-  }[insightsView.flow];
+    spend: { value: summary.expense, label: 'Spent', className: 'expense', change: summary.change?.expense, worse: true },
+    income: { value: summary.income, label: 'Received', className: 'income', change: summary.change?.income, worse: false },
+    invest: { value: summary.invested, label: 'Invested', className: '', change: summary.change?.invested, worse: false },
+    transfer: { value: summary.transferred || (breakdown.status === 'success' ? breakdown.total : 0), label: 'Moved (Transfers)', className: 'transfer', change: null, worse: false },
+  }[insightsView.flow] || { value: summary.expense, label: 'Spent', className: 'expense', change: summary.change?.expense, worse: true };
+
+  const rawSavingsRate = summary.savings_rate !== null && summary.savings_rate !== undefined
+    ? Number(summary.savings_rate)
+    : (income > 0 ? ((income - expense) / income) * 100 : null);
+  const savingsRate = rawSavingsRate !== null ? Math.round(rawSavingsRate) : null;
+
+  let healthBadge = '';
+  if (isCurrentMonth && income === 0 && (expense > 0 || invested > 0)) {
+    // Current month in progress, salary typically arrives at month end
+    if (monthlyBudget > 0) {
+      const budgetPacingPct = Math.round((expense / monthlyBudget) * 100);
+      const expectedPacing = (daysPassed / daysInMonth);
+      if (expense <= monthlyBudget * expectedPacing * 1.08) {
+        healthBadge = `<span class="badge badge-income" style="flex-shrink:0">${icon('schedule', 'icon-sm')} On Track (${budgetPacingPct}% of Budget)</span>`;
+      } else if (expense <= monthlyBudget) {
+        healthBadge = `<span class="badge badge-warning" style="flex-shrink:0">${icon('schedule', 'icon-sm')} Pacing High (${budgetPacingPct}% of Budget)</span>`;
+      } else {
+        healthBadge = `<span class="badge badge-expense" style="flex-shrink:0">${icon('warning', 'icon-sm')} Over Budget (+${money(app, expense - monthlyBudget)})</span>`;
+      }
+    } else if (previousIncome > 0) {
+      const incomePacingPct = Math.round((expense / previousIncome) * 100);
+      const expectedPacing = (daysPassed / daysInMonth);
+      if (expense <= previousIncome * expectedPacing * 1.08) {
+        healthBadge = `<span class="badge badge-income" style="flex-shrink:0">${icon('schedule', 'icon-sm')} On Track · Salary Pending</span>`;
+      } else if (expense <= previousIncome) {
+        healthBadge = `<span class="badge badge-warning" style="flex-shrink:0">${icon('schedule', 'icon-sm')} Salary Pending (${incomePacingPct}% Spent)</span>`;
+      } else {
+        healthBadge = `<span class="badge badge-expense" style="flex-shrink:0">${icon('warning', 'icon-sm')} Over Prior Salary (+${money(app, expense - previousIncome)})</span>`;
+      }
+    } else {
+      healthBadge = `<span class="badge badge-neutral" style="flex-shrink:0">${icon('schedule', 'icon-sm')} Month in Progress (Day ${daysPassed}/${daysInMonth})</span>`;
+    }
+  } else if (savingsRate !== null) {
+    if (savingsRate >= 40) {
+      healthBadge = `<span class="badge badge-income" style="font-weight:700;flex-shrink:0">${icon('verified_user', 'icon-sm')} Excellent (${savingsRate}% Kept)</span>`;
+    } else if (savingsRate >= 20) {
+      healthBadge = `<span class="badge badge-income" style="flex-shrink:0">${icon('check_circle', 'icon-sm')} Healthy (${savingsRate}% Kept)</span>`;
+    } else if (savingsRate >= 0) {
+      healthBadge = `<span class="badge badge-warning" style="flex-shrink:0">${icon('schedule', 'icon-sm')} Tight (${savingsRate}% Kept)</span>`;
+    } else if (isCurrentMonth && daysPassed < daysInMonth - 3 && previousIncome > income) {
+      healthBadge = `<span class="badge badge-warning" style="flex-shrink:0">${icon('schedule', 'icon-sm')} Salary Pending</span>`;
+    } else {
+      const totalOutflow = expense + invested;
+      const excess = totalOutflow - income;
+      if (income > 0) {
+        const overRatio = totalOutflow / income;
+        if (overRatio <= 2.0) {
+          const overPct = Math.round((overRatio - 1) * 100);
+          healthBadge = `<span class="badge badge-expense" style="flex-shrink:0">${icon('warning', 'icon-sm')} Deficit (${overPct}% Over)</span>`;
+        } else {
+          // Large outflow (e.g. EMI or big purchase): show clear rupee excess rather than absurd 1000%
+          healthBadge = `<span class="badge badge-expense" style="flex-shrink:0">${icon('warning', 'icon-sm')} Deficit (+${money(app, excess)})</span>`;
+        }
+      } else {
+        healthBadge = `<span class="badge badge-expense" style="flex-shrink:0">${icon('warning', 'icon-sm')} Outflow (${money(app, totalOutflow)})</span>`;
+      }
+    }
+  }
+
+  const effectiveIncome = income > 0 ? income : (isCurrentMonth && previousIncome > 0 ? previousIncome : 0);
+  const expPct = effectiveIncome > 0 ? Math.min(100, Math.round((expense / effectiveIncome) * 100)) : (expense > 0 ? 100 : 0);
+  const invPct = effectiveIncome > 0 ? Math.min(Math.max(0, 100 - expPct), Math.round((invested / effectiveIncome) * 100)) : 0;
+  const keptPct = Math.max(0, 100 - expPct - invPct);
 
   host.innerHTML = `
     <div class="period-nav">
@@ -331,33 +415,80 @@ async function paintBody(host, app) {
               ${insightsView.offset === 0 && selectedIndex === buckets.length - 1 ? 'disabled' : ''}>${icon('chevron_right')}</button>
     </div>
 
-    <div class="card">
-      <span class="overline">${h(headline.label)} in ${h(describePeriod(selected, insightsView.granularity))}</span>
-      <div class="display ${headline.className}">${h(money(app, headline.value))}</div>
-      <div class="row" style="gap:10px;margin-top:6px;flex-wrap:wrap">
+    <div class="card" style="border:1px solid var(--outline-variant);background:linear-gradient(180deg, var(--surface-container-low), var(--surface-container))">
+      <div class="row-between" style="align-items:center;margin-bottom:var(--gap-1);flex-wrap:wrap;gap:6px">
+        <span class="overline" style="margin-bottom:0">${h(headline.label)} · ${h(formatBucketTitle(selected, insightsView.granularity))}</span>
+        ${healthBadge}
+      </div>
+
+      <div class="display ${headline.className}" style="font-size:28px;margin-bottom:var(--gap-1)">${h(money(app, headline.value))}</div>
+
+      <div class="row" style="gap:10px;margin-bottom:var(--gap-3);flex-wrap:wrap">
         ${changeChip(headline.change, headline.worse)}
         <span class="caption">${summary.count} ${summary.count === 1 ? 'entry' : 'entries'}</span>
-        <span class="caption">${h(money(app, summary.average_daily))} a day</span>
+        <span class="caption">${h(money(app, summary.average_daily))} / day</span>
       </div>
-      <div class="fact-grid" style="margin-top:14px">
-        <div class="fact">
-          <span class="fact-label">Kept</span>
-          <span class="fact-value ${summary.net >= 0 ? 'income' : 'expense'}">${h(money(app, summary.net))}</span>
+
+      ${effectiveIncome > 0 ? `
+        <div style="margin:var(--gap-3) 0 var(--gap-2)">
+          <div class="row-between" style="font-size:11px;font-weight:600;margin-bottom:4px;color:var(--on-surface-variant)">
+            <span>${income === 0 && isCurrentMonth ? 'Projected Allocation (vs Prior Salary)' : 'Cashflow Allocation'}</span>
+            <span>Spends ${expPct}% ${invPct > 0 ? `· Invest ${invPct}% ` : ''}· Kept ${keptPct}%</span>
+          </div>
+          <div class="waterfall-bar">
+            <div class="wf-expense" style="width:${expPct}%" title="Expenses ${expPct}%"></div>
+            ${invPct > 0 ? `<div class="wf-invest" style="width:${invPct}%" title="Investments ${invPct}%"></div>` : ''}
+            <div class="wf-kept" style="width:${keptPct}%" title="Kept ${keptPct}%"></div>
+          </div>
+        </div>` : ''}
+
+      <div class="grid-2" style="gap:8px;margin-top:var(--gap-3)">
+        <div class="card-flat" style="padding:10px;background:var(--surface-container-high);border-radius:var(--radius-sm)">
+          <span class="caption" style="font-size:11px;display:block">Net Kept (Savings)</span>
+          <span class="stat-value ${income > 0 ? (netKept >= 0 ? 'income' : 'expense') : (isCurrentMonth ? '' : 'expense')}" style="font-size:16px;font-weight:700">
+            ${income > 0 || !isCurrentMonth ? `${netKept >= 0 ? '+' : ''}${h(money(app, netKept))}` : `${h(money(app, -expense - invested))}`}
+          </span>
+          <span class="caption" style="font-size:11px;display:block;margin-top:2px">
+            ${income > 0
+              ? (netKept >= 0
+                ? `${savingsRate}% of income`
+                : ((expense + invested) <= 2 * income
+                  ? `${Math.round(((expense + invested - income) / income) * 100)}% over income`
+                  : `+${h(money(app, expense + invested - income))} over income`))
+              : (isCurrentMonth && previousIncome > 0
+                ? `Projected +${h(money(app, previousIncome - expense - invested))} after salary`
+                : (isCurrentMonth ? 'Month in progress · Salary pending' : 'No income recorded'))}
+          </span>
         </div>
-        <div class="fact">
-          <span class="fact-label">Kept of income</span>
-          <span class="fact-value">${summary.savings_rate === null ? '-' : h(formatPercent(summary.savings_rate))}</span>
+
+        <div class="card-flat" style="padding:10px;background:var(--surface-container-high);border-radius:var(--radius-sm)">
+          <span class="caption" style="font-size:11px;display:block">Inflow vs Outflow</span>
+          <div class="row" style="gap:4px;align-items:baseline;margin-top:2px">
+            <span class="income" style="font-weight:700;font-size:13px">${income > 0 ? h(money(app, income)) : (isCurrentMonth && previousIncome > 0 ? `Pending (~${h(money(app, previousIncome))})` : h(money(app, 0)))}</span>
+            <span class="caption">/</span>
+            <span class="expense" style="font-weight:700;font-size:13px">${h(money(app, expense + invested))}</span>
+          </div>
+          <span class="caption" style="font-size:11px;display:block;margin-top:2px">
+            ${invested > 0 ? `${h(money(app, invested))} invested` : (transferred > 0 ? `${h(money(app, transferred))} moved (excluded)` : 'Total cashflow')}
+          </span>
         </div>
-        <div class="fact">
-          <span class="fact-label">Biggest category</span>
-          <span class="fact-value">${h(summary.top_category ? summary.top_category.name : '-')}</span>
+
+        <div class="card-flat" style="padding:10px;background:var(--surface-container-high);border-radius:var(--radius-sm)">
+          <span class="caption" style="font-size:11px;display:block">Top Expense Category</span>
+          <span class="list-row-title" style="font-size:13px;display:block;margin-top:2px">
+            ${h(summary.top_category ? summary.top_category.name : '-')}
+          </span>
         </div>
-        <div class="fact">
-          <span class="fact-label">Heaviest day</span>
-          <span class="fact-value">${h(summary.busiest_day ? formatRelativeDate(summary.busiest_day.date) : '-')}</span>
+
+        <div class="card-flat" style="padding:10px;background:var(--surface-container-high);border-radius:var(--radius-sm)">
+          <span class="caption" style="font-size:11px;display:block">Peak Spend Day</span>
+          <span class="list-row-title" style="font-size:13px;display:block;margin-top:2px">
+            ${h(summary.busiest_day ? formatRelativeDate(summary.busiest_day.date) : '-')}
+          </span>
         </div>
       </div>
-      <button class="btn btn-tonal btn-block row-between" data-detail style="margin-top:16px;padding:12px 14px;border-radius:var(--radius-sm);justify-content:space-between;width:100%;text-align:left">
+
+      <button class="btn btn-tonal btn-block row-between" data-detail style="margin-top:14px;padding:12px 14px;border-radius:var(--radius-sm);justify-content:space-between;width:100%;text-align:left">
         <span class="row" style="gap:10px;align-items:center">
           ${icon('pie_chart', 'icon-md')}
           <span>

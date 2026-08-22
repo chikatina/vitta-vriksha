@@ -11,8 +11,10 @@
  */
 
 import {
-  currentCurrency, getDatabase, initDb, learnMerchant, resolveMemberId,
+  autoUpdateCreditCardFromSms, currentCurrency, getDatabase, initDb, learnMerchant,
+  parseAccountDetailsFromText, resolveAccountAndCardFromSms, resolveMemberId,
 } from './database.js';
+import { memberClause } from './periods.js';
 import { readSmsInbox, takePendingAlerts } from './native.js';
 import {
   categoryForMerchant, extractMerchant, merchantKey, notATransaction,
@@ -21,7 +23,7 @@ import { fail } from './errors.js';
 
 const DEFAULT_AMOUNT_RE = /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i;
 const FALLBACK_AMOUNT_RE = /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i;
-const ACCOUNT_RE = /(?:a\/c|card|acct|\*+)\s*([0-9]{4})/i;
+const ACCOUNT_RE = /(?:card|a\/c|acct|account|wallet|vpa)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s]*([0-9]{4})\b/i;
 
 const DATE_PATTERNS = [
   /\bon\s+(\d{1,2})[-/]([A-Za-z]{3}|\d{1,2})[-/](\d{2,4})\b/i,
@@ -55,6 +57,17 @@ function extractDate(text) {
     return `${y}-${m}-${d}`;
   }
   return null;
+}
+
+export function isoFromMillis(millis) {
+  if (!millis) return null;
+  if (typeof millis === 'string' && /^\d{4}-\d{2}-\d{2}/.test(millis)) {
+    return millis.slice(0, 10);
+  }
+  const date = new Date(Number(millis));
+  if (Number.isNaN(date.getTime())) return null;
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 function today() {
@@ -115,6 +128,7 @@ function triggerMatches(trigger, text) {
  */
 const INCOME_CATEGORIES = new Set(['Salary', 'Freelance', 'Interest & Dividends', 'Refunds & Cashback']);
 const INVESTMENT_CATEGORIES = new Set(['Investment Outflow', 'Investment', 'Investments']);
+const TRANSFER_CATEGORIES = new Set(['Transfer', 'Credit Card', 'Investment Outflow']);
 
 /*
  * Does this category belong on a row of this kind.
@@ -128,7 +142,9 @@ function categoryFits(category, type) {
   if (!category) return false;
   if (type === 'Income') return INCOME_CATEGORIES.has(category);
   if (type === 'Investment') return INVESTMENT_CATEGORIES.has(category);
-  return !INCOME_CATEGORIES.has(category) && !INVESTMENT_CATEGORIES.has(category);
+  if (type === 'Transfer') return TRANSFER_CATEGORIES.has(category);
+  if (type === 'Ignore') return category === 'Ignore';
+  return !INCOME_CATEGORIES.has(category) && !INVESTMENT_CATEGORIES.has(category) && !TRANSFER_CATEGORIES.has(category);
 }
 
 /** Whether what is known about the vendor may stand as this row's category. */
@@ -137,20 +153,52 @@ function usable(known, type) {
   return known.source === 'learned' || categoryFits(known.category, type);
 }
 
-function knownCategory(db, key, merchant, text) {
+function knownCategory(db, key, merchant, text, merchantMap = null) {
   if (key) {
-    const learned = db.get(
-      'SELECT category_name, transaction_type FROM merchant_rules WHERE merchant_key = ?', [key],
-    );
-    if (learned) {
-      return { category: learned.category_name, type: learned.transaction_type || '', source: 'learned' };
+    if (merchantMap) {
+      const learned = merchantMap.get(key);
+      if (learned) return learned;
+    } else {
+      const learned = db.get(
+        'SELECT category_name, transaction_type FROM merchant_rules WHERE merchant_key = ?', [key],
+      );
+      if (learned) {
+        return { category: learned.category_name, type: learned.transaction_type || '', source: 'learned' };
+      }
     }
   }
   const found = categoryForMerchant(merchant, text);
   let type = '';
   if (found === 'Investment Outflow') type = 'Investment';
+  else if (found === 'Loans & EMI') type = 'Expense';
+  else if (found === 'Credit Card' || found === 'Transfer') type = 'Transfer';
   else if (INCOME_CATEGORIES.has(found)) type = 'Income';
   return { category: found, type, source: found ? 'dictionary' : '' };
+}
+
+/** Pre-loads rules, merchant dictionaries, accounts, and cards in-memory for instant batch SMS classification. */
+export function buildClassificationContext(db, memberId = null) {
+  initDb(db);
+  const rules = db.all("SELECT * FROM sms_rules WHERE is_active = 1 ORDER BY CASE WHEN transaction_type = 'Ignore' THEN 0 ELSE 1 END, id ASC");
+  const merchantRows = db.all('SELECT merchant_key, category_name, transaction_type FROM merchant_rules');
+  const merchantMap = new Map();
+  for (const m of merchantRows) {
+    if (m.merchant_key) {
+      merchantMap.set(m.merchant_key, { category: m.category_name, type: m.transaction_type || '', source: 'learned' });
+    }
+  }
+  const [clause, params] = memberClause(memberId, 'WHERE');
+  const cachedAccounts = db.all(`SELECT id, name, category, institution, account_number, debit_card_last_4 FROM asset_accounts${clause}`, params);
+  const cachedCards = db.all(`SELECT id, card_name, bank, last_4, total_limit, available_limit, current_balance FROM credit_cards${clause}`, params);
+
+  return {
+    db,
+    memberId,
+    rules,
+    merchantMap,
+    cachedAccounts,
+    cachedCards,
+  };
 }
 
 /** Extracts note or remark or reference info from SMS text. */
@@ -165,19 +213,56 @@ export function extractDescription(text) {
 }
 
 /** Classifies one message against the stored rules and everything known about the vendor. */
-export async function parseSmsText(text, sender = '') {
-  const db = await getDatabase();
-  initDb(db);
+export async function parseSmsText(text, sender = '', receivedAt = null, context = null) {
+  const db = context?.db || (await getDatabase());
+  if (!context) initDb(db);
 
-  const rules = db.all("SELECT * FROM sms_rules WHERE is_active = 1 ORDER BY CASE WHEN transaction_type = 'Ignore' THEN 0 ELSE 1 END, id DESC");
+  const rules = context?.rules || db.all("SELECT * FROM sms_rules WHERE is_active = 1 ORDER BY CASE WHEN transaction_type = 'Ignore' THEN 0 ELSE 1 END, id ASC");
   const lower = String(text).toLowerCase();
   const merchant = extractMerchant(text);
   const key = merchantKey(merchant);
-  const known = knownCategory(db, key, merchant, text);
+  const known = knownCategory(db, key, merchant, text, context?.merchantMap);
+  const accountInfo = parseAccountDetailsFromText(text, sender);
+  const resolvedAccount = resolveAccountAndCardFromSms(db, text, sender, {
+    memberId: context?.memberId,
+    cachedAccounts: context?.cachedAccounts,
+    cachedCards: context?.cachedCards,
+  });
   const accountMatch = ACCOUNT_RE.exec(text);
+  const accountLast4 = accountInfo.last4 || (accountMatch ? accountMatch[1] : '');
   const senderText = String(sender).toLowerCase();
-  const dateFromSms = extractDate(text) || today();
+  const dateFromSms = extractDate(text) || (receivedAt ? isoFromMillis(receivedAt) : null) || today();
   const descriptionFromSms = extractDescription(text);
+
+  // Check learned merchant ignore rules first
+  if (known.type === 'Ignore' || known.category === 'Ignore') {
+    return {
+      status: 'classified',
+      matched_rule: 'Ignored Merchant Rule',
+      not_a_transaction: 'ignored-rule',
+      amount: 0,
+      type: 'Ignore',
+      category: 'Ignore',
+      category_source: 'rule',
+      merchant: merchant || '',
+      merchant_key: key,
+      account_last4: accountLast4,
+      account_issuer: accountInfo.issuer,
+      is_food_card: accountInfo.isFoodCard,
+      is_credit_card: accountInfo.isCreditCard,
+      card_variant: accountInfo.cardVariant,
+      available_limit: accountInfo.available_limit,
+      total_limit: accountInfo.total_limit,
+      current_outstanding: accountInfo.current_outstanding,
+      min_due: accountInfo.min_due,
+      account_id: resolvedAccount.account_id,
+      card_id: resolvedAccount.card_id,
+      sender,
+      description: descriptionFromSms,
+      raw_sms: text,
+      date: dateFromSms,
+    };
+  }
 
   // User-defined Ignore rules take top priority over built-in classifier
   for (const rule of rules) {
@@ -197,7 +282,17 @@ export async function parseSmsText(text, sender = '') {
       category_source: 'rule',
       merchant: merchant || '',
       merchant_key: key,
-      account_last4: accountMatch ? accountMatch[1] : '',
+      account_last4: accountLast4,
+      account_issuer: accountInfo.issuer,
+      is_food_card: accountInfo.isFoodCard,
+      is_credit_card: accountInfo.isCreditCard,
+      card_variant: accountInfo.cardVariant,
+      available_limit: accountInfo.available_limit,
+      total_limit: accountInfo.total_limit,
+      current_outstanding: accountInfo.current_outstanding,
+      min_due: accountInfo.min_due,
+      account_id: resolvedAccount.account_id,
+      card_id: resolvedAccount.card_id,
       sender,
       description: descriptionFromSms,
       raw_sms: text,
@@ -223,11 +318,21 @@ export async function parseSmsText(text, sender = '') {
       matched_rule: notMoney === 'card-payment' ? 'Credit card payment' : 'Own transfer',
       amount: moved ? toAmount(moved[1]) : 0,
       type: 'Transfer',
-      category: 'Transfer',
+      category: notMoney === 'card-payment' ? 'Credit Card' : 'Transfer',
       category_source: 'rule',
-      merchant,
-      merchant_key: key,
-      account_last4: accountMatch ? accountMatch[1] : '',
+      merchant: merchant || (notMoney === 'card-payment' ? 'Credit Card Payment' : ''),
+      merchant_key: key || (notMoney === 'card-payment' ? 'credit card payment' : ''),
+      account_last4: accountLast4,
+      account_issuer: accountInfo.issuer,
+      is_food_card: accountInfo.isFoodCard,
+      is_credit_card: accountInfo.isCreditCard,
+      card_variant: accountInfo.cardVariant,
+      available_limit: accountInfo.available_limit,
+      total_limit: accountInfo.total_limit,
+      current_outstanding: accountInfo.current_outstanding,
+      min_due: accountInfo.min_due,
+      account_id: resolvedAccount.account_id,
+      card_id: resolvedAccount.card_id,
       sender,
       description: descriptionFromSms,
       raw_sms: text,
@@ -246,7 +351,17 @@ export async function parseSmsText(text, sender = '') {
       category_source: '',
       merchant: merchant || '',
       merchant_key: key,
-      account_last4: accountMatch ? accountMatch[1] : '',
+      account_last4: accountLast4,
+      account_issuer: accountInfo.issuer,
+      is_food_card: accountInfo.isFoodCard,
+      is_credit_card: accountInfo.isCreditCard,
+      card_variant: accountInfo.cardVariant,
+      available_limit: accountInfo.available_limit,
+      total_limit: accountInfo.total_limit,
+      current_outstanding: accountInfo.current_outstanding,
+      min_due: accountInfo.min_due,
+      account_id: resolvedAccount.account_id,
+      card_id: resolvedAccount.card_id,
       sender,
       description: descriptionFromSms,
       raw_sms: text,
@@ -276,7 +391,17 @@ export async function parseSmsText(text, sender = '') {
         category_source: 'rule',
         merchant: merchant || '',
         merchant_key: key,
-        account_last4: accountMatch ? accountMatch[1] : '',
+        account_last4: accountLast4,
+        account_issuer: accountInfo.issuer,
+        is_food_card: accountInfo.isFoodCard,
+        is_credit_card: accountInfo.isCreditCard,
+        card_variant: accountInfo.cardVariant,
+        available_limit: accountInfo.available_limit,
+        total_limit: accountInfo.total_limit,
+        current_outstanding: accountInfo.current_outstanding,
+        min_due: accountInfo.min_due,
+        account_id: resolvedAccount.account_id,
+        card_id: resolvedAccount.card_id,
         sender,
         description: descriptionFromSms,
         raw_sms: text,
@@ -286,18 +411,33 @@ export async function parseSmsText(text, sender = '') {
 
     // A rule names the bank's wording. What was actually bought is the vendor's business,
     // so anything known about the vendor outranks the rule's standing guess.
-    const resolvedType = known.type || (known.category === 'Investment Outflow' ? 'Investment' : rule.transaction_type);
-    const resolvedCategory = usable(known, resolvedType) ? known.category : rule.category_name;
+    const isTransferRule = rule.transaction_type === 'Transfer';
+    const resolvedType = (known.source === 'learned' && known.type)
+      ? known.type
+      : (isTransferRule ? 'Transfer' : (known.type || (known.category === 'Investment Outflow' ? 'Investment' : rule.transaction_type)));
+    const resolvedCategory = (known.source === 'learned' && categoryFits(known.category, resolvedType))
+      ? known.category
+      : (isTransferRule ? rule.category_name : (usable(known, resolvedType) ? known.category : rule.category_name));
     return {
       status: 'classified',
       matched_rule: rule.rule_name,
       amount: match ? toAmount(match[1]) : 0,
       type: resolvedType,
       category: resolvedCategory,
-      category_source: usable(known, resolvedType) ? known.source : 'rule',
+      category_source: (known.source === 'learned' || (!isTransferRule && usable(known, resolvedType))) ? known.source : 'rule',
       merchant,
       merchant_key: key,
-      account_last4: accountMatch ? accountMatch[1] : '',
+      account_last4: accountLast4,
+      account_issuer: accountInfo.issuer,
+      is_food_card: accountInfo.isFoodCard,
+      is_credit_card: accountInfo.isCreditCard,
+      card_variant: accountInfo.cardVariant,
+      available_limit: accountInfo.available_limit,
+      total_limit: accountInfo.total_limit,
+      current_outstanding: accountInfo.current_outstanding,
+      min_due: accountInfo.min_due,
+      account_id: resolvedAccount.account_id,
+      card_id: resolvedAccount.card_id,
       sender,
       description: descriptionFromSms,
       raw_sms: text,
@@ -319,11 +459,127 @@ export async function parseSmsText(text, sender = '') {
     category_source: known.source || 'guess',
     merchant,
     merchant_key: key,
-    account_last4: accountMatch ? accountMatch[1] : '',
+    account_last4: accountLast4,
+    account_issuer: accountInfo.issuer,
+    is_food_card: accountInfo.isFoodCard,
+    is_credit_card: accountInfo.isCreditCard,
+    card_variant: accountInfo.cardVariant,
+    available_limit: accountInfo.available_limit,
+    total_limit: accountInfo.total_limit,
+    current_outstanding: accountInfo.current_outstanding,
+    min_due: accountInfo.min_due,
+    account_id: resolvedAccount.account_id,
+    card_id: resolvedAccount.card_id,
     sender,
     description: descriptionFromSms,
     raw_sms: text,
     date: dateFromSms,
+  };
+}
+
+async function importInbox(db, { days = 0, memberId = 1 } = {}) {
+  const currency = currentCurrency(db);
+  const messages = readSmsInbox(days);
+
+  const seen = new Set(
+    db.all("SELECT raw_sms FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != ''")
+      .map((row) => row.raw_sms),
+  );
+
+  const ctx = buildClassificationContext(db, memberId);
+  const txByDateAmount = new Map();
+  for (const row of db.all('SELECT id, date, amount, raw_sms FROM transactions WHERE amount > 0')) {
+    const key = `${row.date}:${row.amount}`;
+    if (!txByDateAmount.has(key)) txByDateAmount.set(key, []);
+    txByDateAmount.get(key).push(row);
+  }
+
+  let imported = 0;
+  let skipped = 0;
+  let unmatched = 0;
+  let duplicates = 0;
+
+  // Classify first, write after. Reading a rule for every message inside a write
+  // transaction would hold it open for the length of the whole inbox.
+  const rows = [];
+  const staged = new Set();
+
+  for (const message of messages) {
+    const body = message.body ?? '';
+    if (seen.has(body)) {
+      skipped += 1;
+      continue;
+    }
+
+    // eslint-disable-next-line no-await-in-loop
+    const classified = await parseSmsText(body, message.sender ?? '', message.received_at ?? null, ctx);
+    if (classified.matched_rule === 'Default Classifier' || !(classified.amount > 0)) {
+      unmatched += 1;
+      continue;
+    }
+
+    // Two messages for one payment must not become two transactions. This is left for
+    // review rather than dropped, because a genuine second purchase of the same amount on
+    // the same day looks identical from here and only the user can tell them apart.
+    const date = isoFromMillis(message.received_at) || classified.date;
+    const stageKey = `${date}:${classified.amount}`;
+
+    if (duplicateOfFast(txByDateAmount, { date, amount: classified.amount, body }) || staged.has(stageKey)) {
+      duplicates += 1;
+      continue;
+    }
+
+    rows.push({ body, classified, receivedAt: message.received_at, sender: message.sender ?? '' });
+    seen.add(body);
+    staged.add(stageKey);
+  }
+
+  db.transaction(() => {
+    for (const { body, classified, receivedAt, sender } of rows) {
+      const isInvest = classified.type === 'Investment' || classified.category === 'Investment Outflow' ? 1 : 0;
+      let accountId = classified.account_id ?? null;
+      let cardId = classified.card_id ?? null;
+      if (!accountId && !cardId) {
+        const resolved = resolveAccountAndCardFromSms(db, body, sender, {
+          memberId,
+          cachedAccounts: ctx.cachedAccounts,
+          cachedCards: ctx.cachedCards,
+        });
+        accountId = resolved.account_id;
+        cardId = resolved.card_id;
+      }
+      if (cardId) {
+        autoUpdateCreditCardFromSms(db, body, sender, cardId);
+      }
+      db.run(
+        'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category,'
+        + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, created_at)'
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          memberId,
+          accountId,
+          cardId,
+          isoFromMillis(receivedAt) || classified.date,
+          classified.amount,
+          currency,
+          classified.type,
+          classified.category,
+          classified.merchant,
+          classified.merchant_key ?? '',
+          classified.description || '',
+          isInvest,
+          body,
+          new Date().toISOString(),
+        ],
+      );
+      imported += 1;
+    }
+  });
+
+  markSynced(db);
+  await db.schedulePersist();
+  return {
+    status: 'success', read: messages.length, imported, skipped, unmatched, duplicates, days,
   };
 }
 
@@ -423,6 +679,14 @@ async function reimportInbox(db, args) {
       .map((row) => row.raw_sms),
   );
 
+  const ctx = buildClassificationContext(db, memberId);
+  const txByDateAmount = new Map();
+  for (const row of db.all('SELECT id, date, amount, raw_sms FROM transactions WHERE amount > 0')) {
+    const key = `${row.date}:${row.amount}`;
+    if (!txByDateAmount.has(key)) txByDateAmount.set(key, []);
+    txByDateAmount.get(key).push(row);
+  }
+
   let imported = 0;
   let skipped = 0;
   let unmatched = 0;
@@ -441,7 +705,7 @@ async function reimportInbox(db, args) {
     }
 
     // eslint-disable-next-line no-await-in-loop
-    const classified = await parseSmsText(body, message.sender ?? '');
+    const classified = await parseSmsText(body, message.sender ?? '', message.received_at ?? null, ctx);
     if (classified.matched_rule === 'Default Classifier' || !(classified.amount > 0)) {
       unmatched += 1;
       continue;
@@ -453,25 +717,41 @@ async function reimportInbox(db, args) {
     const date = isoFromMillis(message.received_at) || classified.date;
     const stageKey = `${date}:${classified.amount}`;
 
-    if (duplicateOf(db, { date, amount: classified.amount, body }) || staged.has(stageKey)) {
+    if (duplicateOfFast(txByDateAmount, { date, amount: classified.amount, body }) || staged.has(stageKey)) {
       duplicates += 1;
       continue;
     }
 
-    rows.push({ body, classified, receivedAt: message.received_at });
+    rows.push({ body, classified, receivedAt: message.received_at, sender: message.sender ?? '' });
     seen.add(body);
     staged.add(stageKey);
   }
 
   db.transaction(() => {
-    for (const { body, classified, receivedAt } of rows) {
+    for (const { body, classified, receivedAt, sender } of rows) {
       const isInvest = classified.type === 'Investment' || classified.category === 'Investment Outflow' ? 1 : 0;
+      let accountId = classified.account_id ?? null;
+      let cardId = classified.card_id ?? null;
+      if (!accountId && !cardId) {
+        const resolved = resolveAccountAndCardFromSms(db, body, sender, {
+          memberId,
+          cachedAccounts: ctx.cachedAccounts,
+          cachedCards: ctx.cachedCards,
+        });
+        accountId = resolved.account_id;
+        cardId = resolved.card_id;
+      }
+      if (cardId) {
+        autoUpdateCreditCardFromSms(db, body, sender, cardId);
+      }
       db.run(
-        'INSERT INTO transactions (member_id, date, amount, currency, type, category,'
+        'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category,'
         + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, created_at)'
-        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           memberId,
+          accountId,
+          cardId,
           isoFromMillis(receivedAt) || classified.date,
           classified.amount,
           currency,
@@ -496,14 +776,6 @@ async function reimportInbox(db, args) {
   return {
     status: 'success', read: messages.length, imported, skipped, unmatched, duplicates, days,
   };
-}
-
-function isoFromMillis(millis) {
-  if (!millis) return null;
-  const date = new Date(Number(millis));
-  if (Number.isNaN(date.getTime())) return null;
-  const pad = (value) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 /**
@@ -536,12 +808,22 @@ function duplicateOf(db, { date, amount, body }) {
   return match || null;
 }
 
+function duplicateOfFast(txByDateAmount, { date, amount, body }) {
+  if (!date || !(amount > 0) || !txByDateAmount) return null;
+  const list = txByDateAmount.get(`${date}:${amount}`);
+  if (!list || !list.length) return null;
+  const found = list.find((row) => !row.raw_sms || row.raw_sms !== (body || ''));
+  return found || null;
+}
+
 async function reviewAlerts(db, args) {
   const isAll = args.days === 'all' || args.days === 0 || args.days === '0';
   const days = isAll ? 0 : Number.parseInt(args.days ?? 0, 10);
   const want = String(args.filter ?? 'pending');
   const messages = readSmsInbox(days);
   if (!messages.length) return { status: 'success', items: [], read: 0, counts: {} };
+
+  const ctx = buildClassificationContext(db, args.member_id);
 
   // One pass over what is already recorded, keyed by the message it came from, so
   // deciding the state of a few hundred alerts does not mean a query each.
@@ -553,6 +835,13 @@ async function reviewAlerts(db, args) {
     if (!filed.has(row.raw_sms)) filed.set(row.raw_sms, row);
   }
   const ignored = new Set(db.all('SELECT body FROM ignored_alerts').map((row) => row.body));
+
+  const txByDateAmount = new Map();
+  for (const row of db.all('SELECT id, date, amount, raw_sms FROM transactions WHERE amount > 0')) {
+    const key = `${row.date}:${row.amount}`;
+    if (!txByDateAmount.has(key)) txByDateAmount.set(key, []);
+    txByDateAmount.get(key).push(row);
+  }
 
   const items = [];
   const counts = { filed: 0, pending: 0, ignored: 0 };
@@ -588,7 +877,7 @@ async function reviewAlerts(db, args) {
 
     if (ignored.has(body)) {
       counts.ignored += 1;
-      if (want === 'all') {
+      if (want === 'all' || want === 'ignored') {
         items.push({
           state: 'ignored', body, sender: message.sender ?? '', date, amount: 0, reason: 'ignored',
         });
@@ -597,18 +886,41 @@ async function reviewAlerts(db, args) {
     }
 
     // eslint-disable-next-line no-await-in-loop
-    const classified = await parseSmsText(body, message.sender ?? '');
+    const classified = await parseSmsText(body, message.sender ?? '', message.received_at ?? null, ctx);
+    
+    // Check if message is ignored by a rule or identified as non-transaction (OTP, promo, reminder, mandate, etc.)
+    // or has no financial amount (amount missing/unclear/zero)
+    const isIgnored = classified.type === 'Ignore'
+      || classified.category === 'Ignore'
+      || classified.matched_rule === 'Ignored Merchant Rule'
+      || (classified.not_a_transaction && classified.not_a_transaction !== 'card-payment' && classified.not_a_transaction !== 'self-transfer')
+      || (!classified.amount || classified.amount <= 0);
+
+    if (isIgnored) {
+      counts.ignored += 1;
+      if (want === 'ignored' || want === 'all') {
+        items.push({
+          state: 'ignored',
+          body,
+          sender: message.sender ?? '',
+          date: date || classified.date,
+          amount: classified.amount || 0,
+          reason: classified.not_a_transaction || (!classified.amount ? 'amount-missing' : 'ignored'),
+        });
+      }
+      continue;
+    }
+
     const wouldFile = !classified.not_a_transaction
       && classified.matched_rule !== 'Default Classifier'
       && classified.amount > 0;
 
-    // Something a rule handles but that was never imported still counts as waiting:
-    // the user has not run an import, or ran one before the rule existed.
+    // Only genuine actionable transaction messages with valid positive amounts land in the pending waiting list
     counts.pending += 1;
     if (want === 'pending' || want === 'all') {
       const fallback = FALLBACK_AMOUNT_RE.exec(body);
       const twin = wouldFile
-        ? duplicateOf(db, { date: date || classified.date, amount: classified.amount, body })
+        ? duplicateOfFast(txByDateAmount, { date: date || classified.date, amount: classified.amount, body })
         : null;
       items.push({
         state: 'pending',
@@ -618,7 +930,7 @@ async function reviewAlerts(db, args) {
         duplicate_of: twin ? twin.id : 0,
         reason: twin ? 'possible-duplicate'
           : (wouldFile ? 'ready'
-            : classified.not_a_transaction || (classified.amount > 0 ? 'no-rule' : 'no-amount')),
+            : 'no-rule'),
         // What the app would guess if forced, so the common case is one tap not a form.
         amount: classified.amount || (fallback ? toAmount(fallback[1]) : 0),
         merchant: classified.merchant || '',
@@ -653,6 +965,9 @@ async function markDuplicate(db, args) {
     db.run('DELETE FROM transactions WHERE raw_sms = ?', [body]);
     db.run('INSERT OR REPLACE INTO ignored_alerts (body, ignored_at) VALUES (?, ?)',
       [body, new Date().toISOString()]);
+    if (args.create_rule && args.merchant) {
+      learnMerchant(db, args.merchant, 'Ignore', 'Ignore');
+    }
   });
 
   await db.schedulePersist();
@@ -673,13 +988,14 @@ async function reclassifyAlert(db, args) {
   const description = args.description !== undefined ? String(args.description).trim() : (row.description || '');
   let learned = { merchant_key: '', applied: 0 };
 
+  const shouldApplyToAll = args.apply_to_all === true;
   db.transaction(() => {
     db.run(
       'UPDATE transactions SET type = ?, category = ?, merchant = ?, merchant_key = ?,'
       + ' description = ?, is_investment_outflow = ? WHERE id = ?',
       [type, category, merchant, merchantKey(merchant), description, type === 'Investment' ? 1 : 0, id],
     );
-    if (merchant) learned = learnMerchant(db, merchant, category, type);
+    if (merchant && shouldApplyToAll) learned = learnMerchant(db, merchant, category, type);
   });
 
   await db.schedulePersist();
@@ -719,16 +1035,28 @@ async function classifyAlert(db, args) {
   const twin = duplicateOf(db, { date: args.date || today(), amount, body });
   let learned = { merchant_key: '', applied: 0 };
 
+  let accountId = args.account_id !== undefined && args.account_id !== null ? Number(args.account_id) : null;
+  let cardId = args.card_id !== undefined && args.card_id !== null ? Number(args.card_id) : null;
+  if (!accountId && !cardId && body) {
+    const resolved = resolveAccountAndCardFromSms(db, body, args.sender ?? '', { memberId });
+    accountId = resolved.account_id;
+    cardId = resolved.card_id;
+  }
+  if (cardId && body) {
+    autoUpdateCreditCardFromSms(db, body, args.sender ?? '', cardId);
+  }
+
   const isInvest = type === 'Investment' || category === 'Investment Outflow' ? 1 : 0;
+  const shouldApplyToAll = args.apply_to_all !== false && !args.override_single;
   db.transaction(() => {
     db.run(
-      'INSERT INTO transactions (member_id, date, amount, currency, type, category,'
+      'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category,'
       + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, created_at)'
-      + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [memberId, args.date || today(), amount, currency, type, category, merchant,
+      + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [memberId, accountId, cardId, args.date || today(), amount, currency, type, category, merchant,
         merchantKey(merchant), description, isInvest, body, new Date().toISOString()],
     );
-    if (merchant) learned = learnMerchant(db, merchant, category, type);
+    if (merchant && shouldApplyToAll) learned = learnMerchant(db, merchant, category, type);
   });
 
   await db.schedulePersist();
@@ -741,13 +1069,67 @@ async function classifyAlert(db, args) {
   };
 }
 
+/** Batch files multiple reviewed alerts in a single SQLite transaction. */
+async function classifyBatch(db, args) {
+  const items = Array.isArray(args.items) ? args.items : [];
+  if (!items.length) return { status: 'success', filed: 0 };
+
+  const memberId = resolveMemberId(db, args.member_id);
+  const currency = currentCurrency(db);
+  const ctx = buildClassificationContext(db, memberId);
+
+  let filed = 0;
+  db.transaction(() => {
+    for (const item of items) {
+      const body = String(item.body ?? '');
+      const amount = Number(item.amount);
+      const category = String(item.category || item.suggested_category || 'Shopping').trim();
+      if (!body || !(amount > 0) || !category) continue;
+
+      const type = String(item.type || item.suggested_type || 'Expense');
+      const merchant = String(item.merchant ?? '').trim();
+      const isInvest = type === 'Investment' || category === 'Investment Outflow' ? 1 : 0;
+      let accountId = item.account_id !== undefined && item.account_id !== null ? Number(item.account_id) : null;
+      let cardId = item.card_id !== undefined && item.card_id !== null ? Number(item.card_id) : null;
+
+      if (!accountId && !cardId && body) {
+        const resolved = resolveAccountAndCardFromSms(db, body, item.sender ?? '', {
+          memberId,
+          cachedAccounts: ctx.cachedAccounts,
+          cachedCards: ctx.cachedCards,
+        });
+        accountId = resolved.account_id;
+        cardId = resolved.card_id;
+      }
+      if (cardId && body) {
+        autoUpdateCreditCardFromSms(db, body, item.sender ?? '', cardId);
+      }
+
+      db.run(
+        'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category,'
+        + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, created_at)'
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [memberId, accountId, cardId, item.date || today(), amount, currency, type, category, merchant,
+          merchantKey(merchant), String(item.description || '').trim(), isInvest, body, new Date().toISOString()],
+      );
+      if (merchant && item.apply_to_all) {
+        learnMerchant(db, merchant, category, type);
+      }
+      filed += 1;
+    }
+  });
+
+  await db.schedulePersist();
+  return { status: 'success', filed };
+}
+
 export async function handleSmsAction(args = {}) {
   try {
     const db = await getDatabase();
     initDb(db);
 
     if (args.action === 'parse_text') {
-      return await parseSmsText(args.sms_text ?? '', args.sender ?? '');
+      return await parseSmsText(args.sms_text ?? '', args.sender ?? '', args.received_at ?? null);
     }
 
     if (args.action === 'pending_alerts') {
@@ -756,8 +1138,8 @@ export async function handleSmsAction(args = {}) {
       const alerts = [];
       for (const alert of takePendingAlerts()) {
         // eslint-disable-next-line no-await-in-loop
-        const classified = await parseSmsText(alert.body ?? '', alert.sender ?? '');
-        if (classified.not_a_transaction) continue;
+        const classified = await parseSmsText(alert.body ?? '', alert.sender ?? '', alert.received_at ?? null);
+        if (classified.not_a_transaction || !classified.amount || classified.amount <= 0) continue;
         alerts.push({ ...classified, source: alert.source, received_at: alert.received_at });
       }
       return { status: 'success', alerts };
@@ -775,6 +1157,10 @@ export async function handleSmsAction(args = {}) {
       return await classifyAlert(db, args);
     }
 
+    if (args.action === 'classify_batch') {
+      return await classifyBatch(db, args);
+    }
+
     if (args.action === 'reclassify_alert') {
       return await reclassifyAlert(db, args);
     }
@@ -784,10 +1170,37 @@ export async function handleSmsAction(args = {}) {
     }
 
     if (args.action === 'ignore_alert') {
-      db.run('INSERT OR REPLACE INTO ignored_alerts (body, ignored_at) VALUES (?, ?)',
-        [String(args.body ?? ''), new Date().toISOString()]);
+      db.transaction(() => {
+        db.run('INSERT OR REPLACE INTO ignored_alerts (body, ignored_at) VALUES (?, ?)',
+          [String(args.body ?? ''), new Date().toISOString()]);
+        if (args.create_rule && args.merchant) {
+          learnMerchant(db, args.merchant, 'Ignore', 'Ignore');
+        }
+        if (args.create_sms_rule && (args.body_trigger || args.merchant)) {
+          const trigger = String(args.body_trigger || args.merchant).trim();
+          db.run(
+            "INSERT INTO sms_rules (rule_name, sender_keyword, body_trigger, transaction_type, category_name, is_active)"
+            + " VALUES (?, ?, ?, 'Ignore', 'Ignore', 1)",
+            [`Ignore: ${trigger}`, String(args.sender_keyword || '').trim(), trigger],
+          );
+        }
+      });
       await db.schedulePersist();
       return { status: 'success' };
+    }
+
+    if (args.action === 'ignore_batch') {
+      const bodies = Array.isArray(args.bodies) ? args.bodies : [];
+      if (bodies.length) {
+        db.transaction(() => {
+          for (const body of bodies) {
+            db.run('INSERT OR REPLACE INTO ignored_alerts (body, ignored_at) VALUES (?, ?)',
+              [String(body), new Date().toISOString()]);
+          }
+        });
+        await db.schedulePersist();
+      }
+      return { status: 'success', ignored: bodies.length };
     }
 
     if (args.action === 'learn_category') {

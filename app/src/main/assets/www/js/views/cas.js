@@ -1,7 +1,8 @@
-/* Import a consolidated account statement, from any of the four issuers. */
-
 import { Bridge } from '../bridge.js';
-import { icon, h, toast, pickFile, emptyState, errorBlock } from '../ui.js';
+import {
+  icon, h, toast, pickFile, saveFile, emptyState, errorBlock, taxDisclaimerCard, showProgressModal,
+  selectField, bindSelectFields,
+} from '../ui.js';
 import { formatCurrency, formatDate, daysUntil } from '../formatters.js';
 
 export async function renderCas(container, app) {
@@ -9,16 +10,43 @@ export async function renderCas(container, app) {
   const age = lastUpload ? Math.abs(daysUntil(lastUpload)) : null;
   const stale = age !== null && age > 30;
 
-  const [funds, demat, nps] = await Promise.all([
+  const [funds, demat, nps, accountsRes] = await Promise.all([
     Bridge.db('list_folios', { member_id: app.memberFilter }),
     Bridge.db('list_demat_holdings', { member_id: app.memberFilter }),
     Bridge.db('list_nps_holdings', { member_id: app.memberFilter }),
+    Bridge.db('get_records', { record_type: 'account', member_id: app.memberFilter }),
   ]);
 
   const folios = funds.folios || [];
+  const accounts = accountsRes?.records || [];
+  const linkedNpsAccount = accounts.find((a) => a.linked_holding_type === 'nps');
   const money = (value) => formatCurrency(value, app.currency, app.locale);
   const gain = (funds.total_value || 0) - (funds.total_invested || 0);
   const held = (funds.total_value || 0) + (demat.total_value || 0) + (nps.total_value || 0);
+
+  const npsHoldingRows = (nps.holdings || []).map((holding) => ({
+    title: holding.scheme,
+    subtitle: [holding.tier ? `Tier ${holding.tier}` : '', holding.asset_class,
+      holding.fund_manager].filter(Boolean).join(' · '),
+    value: holding.current_value,
+    footnote: holding.nav ? `NAV ${money(holding.nav)}` : '',
+  }));
+
+  const npsLinkBanner = npsHoldingRows.length ? (linkedNpsAccount ? `
+    <div class="card-flat" style="margin-top:10px;padding:8px 12px;background:var(--surface-container-high);border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:space-between">
+      <div class="row" style="gap:6px;align-items:center">
+        <span style="color:var(--income);display:flex">${icon('check_circle', 'icon-sm')}</span>
+        <span class="caption" style="font-weight:600">Linked to Account: ${h(linkedNpsAccount.name)} (${money(linkedNpsAccount.balance)})</span>
+      </div>
+      <button class="btn btn-text btn-xs" data-unlink-nps="${linkedNpsAccount.id}" style="color:var(--expense);padding:2px 8px">Unlink</button>
+    </div>` : `
+    <div class="card-flat" style="margin-top:10px;padding:10px 12px;background:var(--surface-container-high);border:1px solid var(--outline-variant);display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <div>
+        <span style="font-weight:600;font-size:12px;display:block">Link NPS to Accounts</span>
+        <span class="caption">Auto-sync balance & prevent double counting in Net Worth.</span>
+      </div>
+      <button class="btn btn-tonal btn-xs" data-link-nps-quick>${icon('autorenew', 'icon-sm')}Link Account</button>
+    </div>`) : '';
 
   container.innerHTML = `
     ${stale ? `
@@ -80,22 +108,159 @@ export async function renderCas(container, app) {
     footnote: holding.price ? money(holding.price) : '',
   })), money)}
 
-    ${holdingsSection('Pension', 'savings', (nps.holdings || []).map((holding) => ({
-    title: holding.scheme,
-    subtitle: [holding.tier ? `Tier ${holding.tier}` : '', holding.asset_class,
-      holding.fund_manager].filter(Boolean).join(' · '),
-    value: holding.current_value,
-    footnote: holding.nav ? `NAV ${money(holding.nav)}` : '',
-  })), money)}
+    ${npsHoldingRows.length ? `
+      <div class="section">
+        <div class="section-header"><span class="title">Pension (NPS)</span></div>
+        <div class="list">
+          ${npsHoldingRows.map((row) => `
+            <div class="list-row">
+              <span class="avatar avatar-sm" style="background:var(--accent-container);color:var(--on-accent-container)">
+                ${icon('savings')}
+              </span>
+              <span class="list-row-main">
+                <span class="list-row-title">${h(row.title)}</span>
+                <span class="list-row-sub">${h(row.subtitle)}</span>
+              </span>
+              <span class="list-row-trailing">
+                <span class="list-row-amount">${h(money(row.value))}</span>
+                ${row.footnote ? `<span class="list-row-sub">${h(row.footnote)}</span>` : ''}
+              </span>
+            </div>`).join('')}
+        </div>
+        ${npsLinkBanner}
+      </div>` : ''}
 
-    ${folios.length || (demat.holdings || []).length ? '' : `
+    ${folios.length || (demat.holdings || []).length || npsHoldingRows.length ? '' : `
       <div class="card">${emptyState('picture_as_pdf', 'Nothing imported yet',
     'Import a statement above, or add holdings by hand under Accounts.')}</div>`}`;
 
   container.querySelector('[data-pick]')
-    .addEventListener('click', () => importStatement(container, app));
+    ?.addEventListener('click', () => importStatement(container, app));
   container.querySelector('[data-gains]')
-    .addEventListener('click', () => gainsReport(container, app));
+    ?.addEventListener('click', () => gainsReport(container, app));
+
+  container.querySelector('[data-link-nps-quick]')
+    ?.addEventListener('click', () => openLinkNpsModal(app, nps, accounts));
+
+  container.querySelector('[data-unlink-nps]')
+    ?.addEventListener('click', async (e) => {
+      const accId = e.currentTarget.dataset.unlinkNps;
+      const res = await Bridge.db('link_nps_account', { unlink: true, account_id: accId });
+      if (res && res.status === 'success') {
+        toast('NPS account unlinked.', 'success');
+        app.refresh();
+      }
+    });
+}
+
+/** Modal to link NPS holdings to an account */
+async function openLinkNpsModal(app, nps, accounts) {
+  const pran = nps.holdings?.[0]?.pran || '';
+  const totalVal = nps.total_value || 0;
+  const money = (v) => formatCurrency(v, app.currency, app.locale);
+  const eligibleAccounts = accounts.filter((a) => a.category === 'NPS' || a.category === 'Bank' || a.category === 'Other');
+
+  const body = `
+    <p class="caption" style="margin-bottom:var(--gap-3)">
+      Link your imported NPS holdings (${nps.holdings.length} schemes · ${money(totalVal)}) to an account in your ledger. This keeps the balance in sync and prevents double counting in Net Worth.
+    </p>
+
+    <div class="field">
+      <span class="field-label">Linking Option</span>
+      <div class="segmented" data-link-mode style="display:grid;grid-template-columns:${eligibleAccounts.length ? '1fr 1fr' : '1fr'};gap:4px">
+        <button type="button" data-mode="new" aria-selected="true">Create New NPS Account</button>
+        ${eligibleAccounts.length ? '<button type="button" data-mode="existing" aria-selected="false">Link Existing Account</button>' : ''}
+      </div>
+    </div>
+
+    <div data-mode-fields style="margin-top:var(--gap-3)"></div>
+  `;
+
+  const saved = await sheet('Link NPS Account', body, {
+    actions: `
+      <button class="btn btn-outlined" data-cancel>Cancel</button>
+      <button class="btn btn-filled" data-save>Link & Sync</button>`,
+    onMount(node, close) {
+      let mode = 'new';
+      const modeFields = node.querySelector('[data-mode-fields]');
+
+      const renderMode = () => {
+        if (mode === 'new') {
+          modeFields.innerHTML = `
+            <div class="field">
+              <label class="field-label" for="npsAccName">Account Name</label>
+              <input class="input" id="npsAccName" data-name type="text" value="${h(pran ? `NPS (${pran})` : 'NPS Portfolio')}">
+            </div>
+            <div class="row" style="gap:12px">
+              <div class="field" style="flex:1">
+                <label class="field-label" for="npsInst">Institution / CRA</label>
+                <input class="input" id="npsInst" data-inst type="text" value="CRA-NSDL / PFRDA">
+              </div>
+              <div class="field" style="flex:1">
+                <label class="field-label" for="npsPran">PRAN Number</label>
+                <input class="input" id="npsPran" data-pran type="text" value="${h(pran)}">
+              </div>
+            </div>
+            <div class="field">
+              <label class="field-label">Synced Balance</label>
+              <input class="input numeric" type="text" value="${money(totalVal)}" readonly disabled>
+            </div>
+          `;
+        } else {
+          modeFields.innerHTML = `
+            ${selectField({
+              key: 'selNpsAcc',
+              id: 'selNpsAcc',
+              label: 'Select Account to Link',
+              value: eligibleAccounts[0]?.id || '',
+              options: eligibleAccounts.map((a) => ({
+                value: a.id,
+                label: `${a.name} (${a.category} · ${money(a.balance)})`,
+              })),
+            })}
+            <p class="caption" style="margin-top:6px">
+              The chosen account's category will be set to NPS and its balance will be updated to ${money(totalVal)}.
+            </p>
+          `;
+          bindSelectFields(modeFields);
+        }
+      };
+
+      renderMode();
+
+      node.querySelectorAll('[data-mode]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          mode = btn.dataset.mode;
+          node.querySelectorAll('[data-mode]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.mode === mode)));
+          renderMode();
+        });
+      });
+
+      node.querySelector('[data-cancel]').addEventListener('click', () => close(null));
+
+      node.querySelector('[data-save]').addEventListener('click', async () => {
+        let payload = { member_id: app.memberFilter, pran };
+        if (mode === 'new') {
+          payload.name = node.querySelector('[data-name]').value.trim() || 'NPS Portfolio';
+          payload.institution = node.querySelector('[data-inst]').value.trim() || 'CRA-NSDL / PFRDA';
+          payload.pran = node.querySelector('[data-pran]').value.trim() || pran;
+        } else {
+          const accId = node.querySelector('#selNpsAcc')?.value || node.querySelector('[data-field="selNpsAcc"]')?.value || node.querySelector('[data-sel-acc]')?.value;
+          payload.account_id = accId;
+        }
+
+        const res = await Bridge.db('link_nps_account', payload);
+        if (res && res.status === 'success') {
+          toast('NPS account linked & synced!', 'success');
+          close(true);
+        } else {
+          toast('Failed to link NPS account.', 'error');
+        }
+      });
+    },
+  });
+
+  if (saved) app.refresh();
 }
 
 /** One titled list of holdings, or nothing at all when there are none. */
@@ -130,20 +295,60 @@ async function importStatement(container, app) {
   const picked = await pickFile('application/pdf,.pdf', { binary: true });
   if (!picked) return;
 
-  status.textContent = `Reading ${picked.name}, this can take a moment.`;
-
-  const result = await Bridge.call('cas', {
-    action: 'parse_base64',
-    pdf_base64: picked.base64,
-    password,
-    member_id: app.memberFilter === 'all' ? 1 : Number(app.memberFilter),
+  const progress = showProgressModal('Importing Statement', {
+    message: `Reading ${picked.name}...`,
+    initialPercent: 15,
+    detail: 'Decrypting PDF text and extracting folios',
   });
 
+  const stepTimer1 = setTimeout(() => {
+    progress.update({
+      percent: 45,
+      message: 'Extracting holdings and transactions...',
+      detail: 'Scanning mutual funds, stocks, and NPS schemes',
+    });
+  }, 400);
+
+  const stepTimer2 = setTimeout(() => {
+    progress.update({
+      percent: 75,
+      message: 'Matching scheme ISINs & transactions...',
+      detail: 'Validating against ISIN scheme reference database',
+    });
+  }, 1200);
+
+  const stepTimer3 = setTimeout(() => {
+    progress.update({
+      percent: 90,
+      message: 'Storing holdings in encrypted vault...',
+      detail: 'Writing records to database',
+    });
+  }, 2200);
+
+  let result;
+  try {
+    result = await Bridge.call('cas', {
+      action: 'parse_base64',
+      pdf_base64: picked.base64,
+      password,
+      member_id: app.memberFilter === 'all' ? 1 : Number(app.memberFilter),
+    });
+  } catch (err) {
+    result = { status: 'error', message: err.message || 'Statement parsing failed.' };
+  } finally {
+    clearTimeout(stepTimer1);
+    clearTimeout(stepTimer2);
+    clearTimeout(stepTimer3);
+  }
+
   if (result.status !== 'success') {
+    progress.fail(result.message || 'Statement parsing failed.');
     console.error('Statement import failed', result);
     showFailure(status, result, picked, password);
     return;
   }
+
+  progress.complete('Statement imported successfully!', 350);
 
   const imported = [
     [result.scheme_count, 'fund'],
@@ -239,11 +444,13 @@ async function gainsReport(container, app) {
   const download = status.querySelector('[data-112a]');
   if (!download || !report.schedule_112a_csv) return;
   download.addEventListener('click', () => {
-    Bridge.shareFile(
-      `schedule-112a-${report.financial_year}.csv`,
-      'text/csv',
-      btoa(unescape(encodeURIComponent(report.schedule_112a_csv))),
-    );
+    const filename = `schedule-112a-${report.financial_year}.csv`;
+    const res = saveFile(filename, report.schedule_112a_csv, 'text/csv');
+    if (res && res.success === false) {
+      toast(res.error || 'Could not save Schedule 112A file.', 'error');
+    } else {
+      toast(`Saved ${filename} to Downloads`, 'success');
+    }
   });
 }
 
@@ -252,6 +459,7 @@ function gainsBlock(report, app) {
   const money = (value) => formatCurrency(value, app.currency, app.locale);
   if (!report.summary.length) {
     return `
+      ${taxDisclaimerCard({ compact: true })}
       <div class="card-flat" style="margin-top:12px">
         <div class="card-title">Nothing was sold</div>
         <div class="caption">This statement records no redemptions, so there is no
@@ -263,6 +471,7 @@ function gainsBlock(report, app) {
   const total = (key) => rows.reduce((sum, row) => sum + row[key], 0);
 
   return `
+    ${taxDisclaimerCard({ compact: false })}
     <div class="card-flat" style="margin-top:12px">
       <div class="card-title">Realised gains, ${h(report.financial_year)}</div>
       ${rows.map((row) => `

@@ -28,10 +28,10 @@ describe('ui.js and brand-mark.js helpers', () => {
     assert.ok(mark.includes('brand-mark'));
   });
 
-  it('maintains 9XX level z-index for dropdown menus and places dialogs above lock overlay', async () => {
+  it('maintains 9XX level z-index for dropdown menus and places lock overlay at 1000', async () => {
     const fs = await import('node:fs/promises');
     const css = await fs.readFile('app/src/main/assets/www/css/style.css', 'utf-8');
-    assert.ok(css.includes('--z-overlay: 400;'), 'overlay screen must be at 400');
+    assert.ok(css.includes('--z-overlay: 1000;'), 'overlay screen must be at 1000');
     assert.ok(css.includes('--z-scrim: 500;'), 'scrim must be at 500');
     assert.ok(css.includes('--z-dialog: 700;'), 'dialog must be at 700');
     assert.ok(css.includes('--z-menu-scrim: 990;'), 'menu scrim must be at 990');
@@ -64,6 +64,27 @@ describe('ui.js and brand-mark.js helpers', () => {
 
     // Verify closeOpenMenus executes safely
     assert.doesNotThrow(() => closeOpenMenus());
+  });
+
+  it('routes saveFile through AndroidBridge when available', async () => {
+    const { saveFile } = await import('../app/src/main/assets/www/js/ui.js');
+    let captured = null;
+    globalThis.AndroidBridge = {
+      saveFile(name, mime, b64) {
+        captured = { name, mime, b64 };
+        return JSON.stringify({ success: true, filename: name, path: `Downloads/${name}` });
+      },
+    };
+
+    const res = saveFile('vitta-vriksha-2026-08-17.vittavriksha', 'encrypted-payload-data', 'application/octet-stream');
+    assert.equal(res.success, true);
+    assert.equal(res.filename, 'vitta-vriksha-2026-08-17.vittavriksha');
+    assert.equal(res.path, 'Downloads/vitta-vriksha-2026-08-17.vittavriksha');
+    assert.equal(captured.name, 'vitta-vriksha-2026-08-17.vittavriksha');
+    assert.equal(captured.mime, 'application/octet-stream');
+    assert.ok(captured.b64.length > 0);
+
+    delete globalThis.AndroidBridge;
   });
 });
 

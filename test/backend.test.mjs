@@ -1388,13 +1388,63 @@ describe('backup', () => {
   });
 
   it('writes the tables in an order the foreign keys survive', async (t) => {
-    // Transactions reference household members. Clearing parents before children, or
-    // refilling children first, trips the constraint.
+    // Transactions reference household members, accounts and credit cards. Clearing parents
+    // before children, or refilling children first, trips the constraint.
     await seed(t);
+    const cardRes = await ok(t, 'save_record', {
+      record_type: 'card', record: { card_name: 'HDFC Millennia', bank: 'HDFC', total_limit: 100000 },
+    });
+    const txnRes = await ok(t, 'save_transaction', {
+      transaction: {
+        amount: 1500, category: 'Dining', type: 'Expense', merchant: 'Swiggy', card_id: cardRes.record_id,
+      },
+    });
+    await ok(t, 'save_record', {
+      record_type: 'split',
+      record: { transaction_id: txnRes.transaction_id, person_name: 'Friend', share_amount: 500 },
+    }).catch(() => null);
+
     const exported = await ok(t, 'export_backup', { password: 'hunter2hunter2' });
-    await ok(t, 'import_backup', {
+    const restored = await ok(t, 'import_backup', {
       backup_payload: exported.backup_payload, password: 'hunter2hunter2',
     });
+    assert.ok(restored.restored > 0);
+    const txns = (await ok(t, 'get_transactions')).transactions;
+    assert.equal(txns.length, 2);
+    const cardTxn = txns.find((tx) => tx.merchant === 'Swiggy');
+    assert.ok(cardTxn);
+    assert.equal(cardTxn.card_id, cardRes.record_id);
+  });
+
+  it('unlinks card_id and account_id when deleting card or account record', async (t) => {
+    await seed(t);
+    const cardRes = await ok(t, 'save_record', {
+      record_type: 'card', record: { card_name: 'SBI Cashback', bank: 'SBI', total_limit: 50000 },
+    });
+    const txnRes = await ok(t, 'save_transaction', {
+      transaction: {
+        amount: 800, category: 'Shopping', type: 'Expense', merchant: 'Amazon', card_id: cardRes.record_id,
+      },
+    });
+    await ok(t, 'delete_record', { record_type: 'card', record_id: cardRes.record_id });
+    const txns = (await ok(t, 'get_transactions')).transactions;
+    const amazonTxn = txns.find((tx) => tx.id === txnRes.transaction_id);
+    assert.ok(amazonTxn);
+    assert.equal(amazonTxn.card_id, null);
+  });
+
+  it('reassigns records to primary member when deleting secondary member', async (t) => {
+    const memberRes = await ok(t, 'add_family_member', {
+      member: { name: 'Spouse', relationship: 'Spouse', avatar_color: '#3B82F6' },
+    });
+    const cardRes = await ok(t, 'save_record', {
+      record_type: 'card', record: { member_id: memberRes.member_id, card_name: 'ICICI Amazon', bank: 'ICICI', total_limit: 75000 },
+    });
+    await ok(t, 'delete_family_member', { member_id: memberRes.member_id });
+    const cards = (await ok(t, 'list_records', { record_type: 'card' })).records;
+    const card = cards.find((c) => c.id === cardRes.record_id);
+    assert.ok(card);
+    assert.equal(card.member_id, 1);
   });
 
   it('changes nothing when the password is wrong', async (t) => {
@@ -1425,15 +1475,40 @@ describe('backup', () => {
     assert.equal(result.code, 'BACKUP_EMPTY');
   });
 
-  it('reads a backup written before the rewrite', async (t) => {
+  it('reads a completely unversioned legacy backup without metadata and restores it', async (t) => {
+    // Legacy backups from early builds had no _meta and no app_version_code key in app_settings.
+    // They must restore without error.
+    const unversionedPayload = await crypto.encryptData(
+      JSON.stringify({
+        family_members: [{
+          id: 1, name: 'Legacy User', relationship: 'Self', is_primary: 1, created_at: '2023-01-01',
+        }],
+        app_settings: [{ key: 'currency', value: 'INR' }],
+        transactions: [{
+          id: 1, member_id: 1, date: '2024-01-01', amount: 100, type: 'Expense', category: 'General',
+        }],
+      }),
+      'hunter2hunter2',
+    );
+    const restored = await ok(t, 'import_backup', {
+      backup_payload: unversionedPayload, password: 'hunter2hunter2',
+    });
+    assert.equal(restored.restored, 3);
+    const txns = (await ok(t, 'get_transactions')).transactions;
+    assert.equal(txns.length, 1);
+    assert.equal(txns[0].amount, 100);
+  });
+
+  it('reads a backup written before the rewrite and upgrades its schema', async (t) => {
     // The format did not change: same derivation, same layout, same cipher. An export
-    // taken from the previous release has to restore, or the change was not safe to make.
+    // taken from an older release (e.g. versionCode 3) must restore and upgrade.
     const payload = await crypto.encryptData(
       JSON.stringify({
+        _meta: { app_version: '1.0.2', app_version_code: 3 },
         family_members: [{
           id: 1, name: 'You', relationship: 'Self', is_primary: 1, created_at: '2024-01-01',
         }],
-        app_settings: [{ key: 'currency', value: 'INR' }],
+        app_settings: [{ key: 'currency', value: 'INR' }, { key: 'app_version_code', value: '3' }],
         transactions: [{
           id: 1, member_id: 1, date: '2025-01-01', amount: 42, type: 'Expense',
           category: 'Groceries',
@@ -1444,8 +1519,28 @@ describe('backup', () => {
     const restored = await ok(t, 'import_backup', {
       backup_payload: payload, password: 'hunter2hunter2',
     });
-    assert.equal(restored.restored, 3);
+    assert.equal(restored.restored, 4);
     assert.equal((await ok(t, 'get_transactions')).transactions.length, 1);
+    const ver = await ok(t, 'get_version_info');
+    assert.equal(ver.schema_version, 8);
+  });
+
+  it('rejects a backup created with a newer app version than the running build', async (t) => {
+    await seed(t);
+    const futurePayload = await crypto.encryptData(
+      JSON.stringify({
+        _meta: { app_version: '2.0.0', app_version_code: 99 },
+        family_members: [{ id: 1, name: 'You', relationship: 'Self', is_primary: 1 }],
+        app_settings: [{ key: 'app_version_code', value: '99' }],
+      }),
+      'hunter2hunter2',
+    );
+    const res = await call('import_backup', {
+      backup_payload: futurePayload, password: 'hunter2hunter2',
+    });
+    assert.equal(res.status, 'error');
+    assert.equal(res.code, 'BACKUP_VERSION_NEWER');
+    assert.ok(res.message.includes('newer version'));
   });
 
   it('clears everything on a factory reset and reseeds the defaults', async (t) => {
@@ -1715,7 +1810,7 @@ describe('the calculators', () => {
       + ' Card xx1234 on 06/08/2026', 'AUBANK',
     );
     assert.equal(payment.type, 'Transfer');
-    assert.equal(payment.category, 'Transfer');
+    assert.equal(payment.category, 'Credit Card');
     assert.equal(payment.amount, 2472);
     assert.equal(payment.not_a_transaction, undefined);
   });
@@ -2142,4 +2237,88 @@ describe('error handling', () => {
       assert.ok(reply.code in errors.ERROR_CODES, reply.code);
     }
   });
+
+  it('creates all high-performance composite and lookup indexes', async () => {
+    const db = database.currentDatabase();
+    const indexes = db.all("SELECT name FROM sqlite_master WHERE type = 'index'");
+    const names = new Set(indexes.map((idx) => idx.name));
+
+    assert.ok(names.has('idx_tx_member_date'));
+    assert.ok(names.has('idx_tx_category'));
+    assert.ok(names.has('idx_tx_type'));
+    assert.ok(names.has('idx_tx_account'));
+    assert.ok(names.has('idx_tx_card'));
+    assert.ok(names.has('idx_tx_merchant_key'));
+    assert.ok(names.has('idx_tx_date_amount'));
+    assert.ok(names.has('idx_accounts_member'));
+    assert.ok(names.has('idx_cards_member'));
+    assert.ok(names.has('idx_loans_member'));
+    assert.ok(names.has('idx_subscriptions_member'));
+    assert.ok(names.has('idx_sips_member'));
+    assert.ok(names.has('idx_goals_member'));
+    assert.ok(names.has('idx_custom_events_member'));
+    assert.ok(names.has('idx_mf_member_isin'));
+    assert.ok(names.has('idx_demat_member_isin'));
+    assert.ok(names.has('idx_nps_member'));
+  });
+
+  it('computes 6-month historical summary in a single pass accurately', async (t) => {
+    const d0 = monthsAgo(0).slice(0, 7);
+    const d1 = monthsAgo(1).slice(0, 7);
+    const d2 = monthsAgo(2).slice(0, 7);
+
+    await ok(t, 'save_transaction', { transaction: { amount: 50000, date: `${d0}-05`, type: 'Income', category: 'Salary' } });
+    await ok(t, 'save_transaction', { transaction: { amount: 15000, date: `${d0}-10`, type: 'Expense', category: 'Dining' } });
+    await ok(t, 'save_transaction', { transaction: { amount: 10000, date: `${d0}-15`, type: 'Investment', category: 'Investment Outflow' } });
+
+    await ok(t, 'save_transaction', { transaction: { amount: 48000, date: `${d1}-05`, type: 'Income', category: 'Salary' } });
+    await ok(t, 'save_transaction', { transaction: { amount: 20000, date: `${d1}-12`, type: 'Expense', category: 'Shopping' } });
+
+    await ok(t, 'save_transaction', { transaction: { amount: 12000, date: `${d2}-20`, type: 'Expense', category: 'Groceries' } });
+
+    const summary = await ok(t, 'get_summary');
+    assert.equal(summary.months.length, 6);
+    assert.equal(summary.months[0].month, d0);
+    assert.equal(summary.months[0].income, 50000);
+    assert.equal(summary.months[0].expense, 15000);
+    assert.equal(summary.months[0].invested, 10000);
+
+    assert.equal(summary.months[1].month, d1);
+    assert.equal(summary.months[1].income, 48000);
+    assert.equal(summary.months[1].expense, 20000);
+
+    assert.equal(summary.months[2].month, d2);
+    assert.equal(summary.months[2].expense, 12000);
+  });
+
+  it('calculates FD maturity and interest cleanly without timezone distortion', async () => {
+    const { calculateFdMaturity } = await import('../app/src/main/assets/www/js/backend/wealth_intel.js');
+    const result = calculateFdMaturity(100000, 7.5, 12, '2026-01-15');
+    assert.equal(result.status, 'success');
+    assert.equal(result.maturity_date, '2027-01-15');
+    assert.equal(result.principal, 100000);
+    assert.ok(result.maturity_value > 107000);
+  });
+
+  it('handles 0% interest loan part-payment without producing NaN', async () => {
+    const { calculateHomeLoanPartPayment } = await import('../app/src/main/assets/www/js/backend/debt_planner.js');
+    const result = calculateHomeLoanPartPayment(120000, 0, 1, 1, 5);
+    assert.equal(result.status, 'success');
+    assert.equal(result.base_emi, 10000);
+    assert.equal(result.base_total_interest, 0);
+    assert.ok(!Number.isNaN(result.base_emi));
+  });
+
+  it('calculates real returns and guards against zero denominators', async () => {
+    const { calculateRealReturn } = await import('../app/src/main/assets/www/js/backend/wealth_intel.js');
+    const normal = calculateRealReturn(12, 6);
+    assert.equal(normal.status, 'success');
+    assert.equal(normal.real_return_percent, 5.7);
+
+    const zeroDenom = calculateRealReturn(10, -100);
+    assert.equal(zeroDenom.status, 'success');
+    assert.ok(!Number.isNaN(zeroDenom.real_return_percent));
+  });
 });
+
+

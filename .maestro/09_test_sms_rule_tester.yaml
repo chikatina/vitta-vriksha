@@ -1,0 +1,76 @@
+appId: com.chikatistudio.vittavriksha.debug
+---
+# Flow 09: Test SMS Rule Tester & Rule Creation from Alert
+- launchApp:
+    clearState: false
+
+- extendedWaitUntil:
+    visible: "Vitta Vriksha"
+    timeout: 10000
+
+# Handle Lock Screen (if locked with PIN 1234)
+- runFlow:
+    when:
+      visible: "Enter your PIN to continue"
+    commands:
+      - tapOn: "1"
+      - tapOn: "2"
+      - tapOn: "3"
+      - tapOn: "4"
+
+- runFlow:
+    when:
+      visible: "Confirm fingerprint or enter PIN"
+    commands:
+      - tapOn: "1"
+      - tapOn: "2"
+      - tapOn: "3"
+      - tapOn: "4"
+
+# Navigate to More -> SMS Rules
+- tapOn: "More"
+- extendedWaitUntil:
+    visible: ".*SMS.*"
+    timeout: 5000
+- tapOn: ".*SMS.*"
+
+# Switch to the Rules tab
+- extendedWaitUntil:
+    visible: ".*Rules.*"
+    timeout: 5000
+- tapOn: ".*Rules.*"
+
+# Verify Rule Tester Card is visible
+- extendedWaitUntil:
+    visible: "Test an SMS Alert"
+    timeout: 5000
+
+# Tap the textarea and paste / type a dividend SMS
+- tapOn: "Paste a bank SMS.*"
+- inputText: "ICICI Bank Account XX486 credited:Rs. 25.00 on 10-Jul-26. Info ACH*TATAPOWERDIV10072026*245. Available Balance is Rs. 13,807.86."
+
+# Tap Test it
+- tapOn: "Test it"
+
+# Verify parsed results appear without error
+- extendedWaitUntil:
+    visible: ".*25.00.*"
+    timeout: 5000
+
+- assertVisible: ".*TATAPOWER.*"
+- assertVisible: ".*Interest & Dividends.*"
+- assertVisible: "Create Rule from this Alert"
+
+# Test Clear button
+- tapOn: "Clear"
+
+# Test non-transaction / OTP filtering in tester
+- tapOn: "Paste a bank SMS.*"
+- inputText: "Your OTP for login is 987654. Do not share with anyone."
+- tapOn: "Test it"
+
+- extendedWaitUntil:
+    visible: ".*Non-Transaction.*"
+    timeout: 5000
+
+- assertVisible: ".*OTP.*"

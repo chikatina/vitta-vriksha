@@ -61,6 +61,33 @@ describe('reminders.js reminder checker and dispatcher', () => {
     assert.equal(ev.title, 'Car Insurance Renewal');
   });
 
+  it('detects daily spend review reminder when SMS tracking is inactive', async () => {
+    const res = await checkReminders();
+    assert.equal(res.status, 'success');
+    const review = res.reminders.find((r) => r.type === 'DAILY_REVIEW');
+    assert.ok(review);
+    assert.equal(review.id, 'daily-spend-review');
+    assert.equal(review.title, 'Evening spend review');
+    assert.ok(review.targetEpochMs > Date.now());
+  });
+
+  it('respects custom daily review reminder time and toggle setting', async () => {
+    // Set custom time
+    db.run("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('daily_review_reminder_time', '20:30')");
+    let res = await checkReminders();
+    let review = res.reminders.find((r) => r.type === 'DAILY_REVIEW');
+    assert.ok(review);
+    const targetDate = new Date(review.targetEpochMs);
+    assert.equal(targetDate.getHours(), 20);
+    assert.equal(targetDate.getMinutes(), 30);
+
+    // Disable daily review
+    db.run("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('daily_review_reminder_enabled', '0')");
+    res = await checkReminders();
+    review = res.reminders.find((r) => r.type === 'DAILY_REVIEW');
+    assert.equal(review, undefined);
+  });
+
   it('syncs reminders and handles reminder actions', async () => {
     const resSync = await syncReminders();
     assert.equal(resSync.status, 'success');

@@ -622,14 +622,23 @@ export function importDepositoryStatement(db, data, memberId, stamp) {
 
   if (data.nps && data.nps.schemes.length) {
     const pran = data.nps.pran || 'NPS';
+    let npsTotal = 0;
     for (const scheme of data.nps.schemes) {
+      const val = toNumber(scheme.value);
+      npsTotal += val;
       upsertNpsHolding(db, [
         memberId, pran, scheme.scheme, scheme.fund_manager || '', scheme.tier || '',
         scheme.asset_class || '', toNumber(scheme.units), toNumber(scheme.nav),
-        toNumber(scheme.value), stamp,
+        val, stamp,
       ]);
       npsSchemes += 1;
     }
+    // Automatically keep any linked NPS asset accounts in sync with fresh holdings
+    db.run(
+      "UPDATE asset_accounts SET balance = ?, updated_at = ? WHERE linked_holding_type = 'nps'"
+      + " AND (linked_pran = ? OR linked_pran = '' OR linked_pran IS NULL)",
+      [npsTotal, stamp, pran],
+    );
   }
 
   // Only the places this statement actually reported on. A depository statement says

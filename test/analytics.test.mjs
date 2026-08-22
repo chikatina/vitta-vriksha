@@ -34,11 +34,19 @@ function daysAgo(days) {
 
 const thisMonth = () => monthsAgo(0).slice(0, 7);
 
-function spend(t, { date, amount, category = 'Groceries', merchant }) {
+function spend(t, {
+  date, amount, category = 'Groceries', merchant, description, investment,
+}) {
   const shop = merchant !== undefined ? merchant : (category === 'Groceries' ? 'A supermarket' : `${category} Store`);
   return ok(t, 'save_transaction', {
     transaction: {
-      date, amount, category, type: 'Expense', merchant: shop,
+      date,
+      amount,
+      category,
+      type: investment ? 'Investment' : 'Expense',
+      merchant: shop,
+      description: description || '',
+      is_investment_outflow: investment ? 1 : 0,
     },
   });
 }
@@ -808,5 +816,85 @@ describe('exclude_investments_from_expenses toggle', () => {
     const groceriesAnomaly = res.anomalies.find((a) => a.category === 'Groceries');
     assert.ok(!groceriesAnomaly, 'Groceries should NOT be flagged as an anomaly (within normal range)');
   });
+
+  it('strictly isolates transfers and credit card payments from spends and investments', async (t) => {
+    const today = monthsAgo(0);
+    // 1. Regular expense
+    await ok(t, 'save_transaction', {
+      transaction: { date: today, amount: 2500, category: 'Groceries', type: 'Expense', merchant: 'Supermarket' },
+    });
+    // 2. Credit Card Bill payment (Transfer)
+    await ok(t, 'save_transaction', {
+      transaction: { date: today, amount: 15000, category: 'Credit Card', type: 'Transfer', merchant: 'HDFC CC Payment' },
+    });
+    // 3. Demat transfer (Transfer)
+    await ok(t, 'save_transaction', {
+      transaction: { date: today, amount: 10000, category: 'Transfer', type: 'Transfer', merchant: 'Zerodha Funds' },
+    });
+    // 4. SIP Investment (Investment)
+    await ok(t, 'save_transaction', {
+      transaction: { date: today, amount: 5000, category: 'Mutual Funds', type: 'Investment', is_investment_outflow: 1, merchant: 'Nippon India MF' },
+    });
+    // 5. Salary Income (Income)
+    await ok(t, 'save_transaction', {
+      transaction: { date: today, amount: 50000, category: 'Salary', type: 'Income', merchant: 'Employer' },
+    });
+
+    const summary = await ok(t, 'get_period_summary', { granularity: 'month', bucket: today.slice(0, 7) });
+    assert.equal(summary.expense, 2500, 'Expense should only be regular spend of 2,500');
+    assert.equal(summary.invested, 5000, 'Invested should be 5,000');
+    assert.equal(summary.transferred, 25000, 'Transferred should be 25,000 (15,000 CC + 10,000 Demat)');
+    assert.equal(summary.income, 50000, 'Income should be 50,000');
+    assert.equal(summary.net, 42500, 'Net kept should be 50,000 - 2,500 - 5,000 = 42,500');
+
+    // Spend breakdown
+    const spendBreakdown = await ok(t, 'get_breakdown', { granularity: 'month', bucket: today.slice(0, 7), flow: 'spend' });
+    assert.equal(spendBreakdown.total, 2500, 'Spend breakdown total must not include transfers or investments');
+
+    // Transfer breakdown
+    const transferBreakdown = await ok(t, 'get_breakdown', { granularity: 'month', bucket: today.slice(0, 7), flow: 'transfer' });
+    assert.equal(transferBreakdown.total, 25000, 'Transfer breakdown total must be 25,000');
+
+    // Investment breakdown
+    const investBreakdown = await ok(t, 'get_breakdown', { granularity: 'month', bucket: today.slice(0, 7), flow: 'invest' });
+    assert.equal(investBreakdown.total, 5000, 'Invest breakdown total must be 5,000');
+  });
+
+  it('discovers SIPs from folio transactions and bank mandate descriptions', async (t) => {
+    // 1. Insert 3 monthly folio purchases (CAS import)
+    for (const m of [3, 2, 1]) {
+      db.run(
+        'INSERT INTO folio_transactions (member_id, folio_number, isin, scheme_name, date, amount, units, kind)'
+        + " VALUES (1, '12345/67', 'INF109K012R6', 'Parag Parikh Flexi Cap Fund - Direct Plan - Growth', ?, 5000, 75.5, 'purchase')",
+        [monthsAgo(m)],
+      );
+    }
+
+    // 2. Insert 3 monthly bank mandate debits with description
+    for (const m of [3, 2, 1]) {
+      await spend(t, {
+        date: monthsAgo(m),
+        amount: 2500,
+        merchant: '',
+        description: 'ACH DEBIT BSE STAR MF SIP 1029384',
+        category: 'Mutual Funds',
+        investment: true,
+      });
+    }
+
+    const found = await ok(t, 'find_recurring');
+    const ppfasSip = found.candidates.find((c) => /Parag Parikh/i.test(c.name));
+    assert.ok(ppfasSip, 'Parag Parikh SIP from folio_transactions should be discovered');
+    assert.equal(ppfasSip.kind, 'sip');
+    assert.equal(ppfasSip.amount, 5000);
+    assert.equal(ppfasSip.cadence, 'monthly');
+
+    const bseSip = found.candidates.find((c) => /BSE STAR MF/i.test(c.name));
+    assert.ok(bseSip, 'BSE STAR MF SIP from bank description should be discovered');
+    assert.equal(bseSip.kind, 'sip');
+    assert.equal(bseSip.amount, 2500);
+    assert.equal(bseSip.cadence, 'monthly');
+  });
 });
+
 

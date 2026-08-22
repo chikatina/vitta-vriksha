@@ -3,7 +3,7 @@ import { before, describe, it } from 'node:test';
 import fs from 'node:fs';
 import { readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT_JS = fileURLToPath(new URL('../app/src/main/assets/www/js', import.meta.url));
 const WASM_PATH = fileURLToPath(new URL('../app/src/main/assets/www/vendor/sqlite/sqlite3.wasm', import.meta.url));
@@ -106,6 +106,7 @@ function setupMockDom() {
     history: { pushState: () => {} },
     requestAnimationFrame: (cb) => setTimeout(cb, 0),
   };
+  globalThis.history = globalThis.window.history;
 }
 
 function findJsFiles(dir) {
@@ -141,7 +142,7 @@ describe('Build & Runtime integrity: all application files import cleanly', () =
   for (const file of allFiles) {
     const rel = relative(ROOT_JS, file).replace(/\\/g, '/');
     it(`imports and parses ${rel} without syntax or resolution errors`, async () => {
-      const fileUrl = new URL(`file://${file.replace(/\\/g, '/')}`).href;
+      const fileUrl = pathToFileURL(file).href;
       const mod = await import(fileUrl);
       assert.ok(mod, `Module ${rel} must export an object`);
     });
@@ -164,5 +165,178 @@ describe('Lock screen and Setup smoke test', () => {
     assert.ok(html.includes('lock-footer'), 'Lock screen must contain lock-footer container');
     assert.ok(html.includes('data-forgot'), 'Lock footer must contain data-forgot button');
     assert.ok(html.includes('Forgot your PIN?'), 'Lock screen must display "Forgot your PIN?" message');
+  });
+
+  it('app.open navigates to top-level tabs and sub-pages seamlessly', async () => {
+    const appModule = await import(
+      new URL('../app/src/main/assets/www/js/app.js', import.meta.url).href
+    );
+    // Instantiate or test App routing logic
+    const app = new appModule.default();
+    let rendered = false;
+    app.render = () => { rendered = true; };
+
+    // Navigate to top-level tab 'budgets'
+    app.open('budgets');
+    assert.equal(app.tab, 'budgets');
+    assert.equal(app.page, null);
+    assert.equal(rendered, true);
+
+    // Navigate to sub-page 'cas'
+    app.open('cas');
+    assert.equal(app.tab, 'wealth');
+    assert.equal(app.page, 'cas');
+
+    // Navigate to top-level tab 'home'
+    app.open('home');
+    assert.equal(app.tab, 'home');
+    assert.equal(app.page, null);
+  });
+
+  it('renders home page with onboarding checklist without initialization errors', async () => {
+    const { Bridge } = await import(
+      new URL('../app/src/main/assets/www/js/bridge.js', import.meta.url).href
+    );
+    const { renderHome } = await import(
+      new URL('../app/src/main/assets/www/js/views/home.js', import.meta.url).href
+    );
+    const origDb = Bridge.db;
+    Bridge.db = async (action) => {
+      if (action === 'get_summary') {
+        return { status: 'success', monthly_budget: 25000, total_assets: 100000, family_members: [] };
+      }
+      return { status: 'success' };
+    };
+
+    const mockContainer = {
+      innerHTML: '',
+      querySelectorAll: () => [],
+      querySelector: () => null,
+    };
+    const mockApp = {
+      settings: { onboarding_dismissed: '0' },
+      pendingAlerts: [],
+      memberFilter: 'all',
+      db: Bridge.db,
+    };
+
+    try {
+      await renderHome(mockContainer, mockApp);
+      assert.ok(mockContainer.innerHTML.includes('Getting Started') || mockContainer.innerHTML.includes('Setup Complete!'), 'Must render onboarding card');
+      assert.ok(mockContainer.innerHTML.includes('steps completed'), 'Must display completed steps without throwing ReferenceError');
+    } finally {
+      Bridge.db = origDb;
+    }
+  });
+
+  it('verifies that every icon referenced in all JS files exists in ICON_CODEPOINTS', async () => {
+    const { ICON_CODEPOINTS } = await import(
+      new URL('../app/src/main/assets/www/js/icon-codepoints.js', import.meta.url).href
+    );
+
+    const jsFiles = [];
+    function scanDir(dir) {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        if (statSync(full).isDirectory()) scanDir(full);
+        else if (entry.endsWith('.js')) jsFiles.push(full);
+      }
+    }
+    scanDir(ROOT_JS);
+
+    const patterns = [
+      /\bicon\(\s*['"]([a-zA-Z0-9_-]+)['"]/g,
+      /\bglyph:\s*['"]([a-zA-Z0-9_-]+)['"]/g,
+      /\bicon:\s*['"]([a-zA-Z0-9_-]+)['"]/g,
+      /\bnavRow\([^,]+,\s*['"]([a-zA-Z0-9_-]+)['"]/g,
+      /\bemptyState\(\s*['"]([a-zA-Z0-9_-]+)['"]/g,
+    ];
+
+    const missingIcons = new Map();
+
+    for (const file of jsFiles) {
+      const content = fs.readFileSync(file, 'utf-8');
+      const rel = relative(ROOT_JS, file);
+
+      // Icon calls
+      const iconMatches = content.matchAll(/\bicon\(\s*['"]([a-zA-Z0-9_-]+)['"]/g);
+      for (const m of iconMatches) {
+        const name = m[1];
+        if (['icon-sm', 'icon-lg', 'icon-xl', 'true', 'false'].includes(name)) continue;
+        if (!ICON_CODEPOINTS[name]) {
+          if (!missingIcons.has(name)) missingIcons.set(name, []);
+          missingIcons.get(name).push(`${rel} (icon('${name}'))`);
+        }
+      }
+
+      // Glyph properties
+      const glyphMatches = content.matchAll(/\bglyph:\s*['"]([a-zA-Z0-9_-]+)['"]/g);
+      for (const m of glyphMatches) {
+        const name = m[1];
+        if (!ICON_CODEPOINTS[name]) {
+          if (!missingIcons.has(name)) missingIcons.set(name, []);
+          missingIcons.get(name).push(`${rel} (glyph: '${name}')`);
+        }
+      }
+
+      // Icon properties
+      const propMatches = content.matchAll(/\bicon:\s*['"]([a-zA-Z0-9_-]+)['"]/g);
+      for (const m of propMatches) {
+        const name = m[1];
+        if (['icon-sm', 'icon-lg', 'icon-xl', 'text', 'number', 'select', 'date', 'switch', 'textarea'].includes(name)) continue;
+        if (!ICON_CODEPOINTS[name]) {
+          if (!missingIcons.has(name)) missingIcons.set(name, []);
+          missingIcons.get(name).push(`${rel} (icon: '${name}')`);
+        }
+      }
+
+      // navRow
+      const navMatches = content.matchAll(/\bnavRow\([^,]+,\s*['"]([a-zA-Z0-9_-]+)['"]/g);
+      for (const m of navMatches) {
+        const name = m[1];
+        if (!ICON_CODEPOINTS[name]) {
+          if (!missingIcons.has(name)) missingIcons.set(name, []);
+          missingIcons.get(name).push(`${rel} (navRow '${name}')`);
+        }
+      }
+
+      // emptyState
+      const emptyMatches = content.matchAll(/\bemptyState\(\s*['"]([a-zA-Z0-9_-]+)['"]/g);
+      for (const m of emptyMatches) {
+        const name = m[1];
+        if (!ICON_CODEPOINTS[name]) {
+          if (!missingIcons.has(name)) missingIcons.set(name, []);
+          missingIcons.get(name).push(`${rel} (emptyState '${name}')`);
+        }
+      }
+    }
+
+    // Also check DEFAULT_CATEGORIES in database.js
+    const dbContent = fs.readFileSync(join(ROOT_JS, 'backend/database.js'), 'utf-8');
+    const catMatches = dbContent.matchAll(/\['[^']+',\s*'[^']+',\s*'#[0-9A-Fa-f]+',\s*'([^']+)'\]/g);
+    for (const m of catMatches) {
+      const name = m[1];
+      if (!ICON_CODEPOINTS[name]) {
+        if (!missingIcons.has(name)) missingIcons.set(name, []);
+        missingIcons.get(name).push('backend/database.js (DEFAULT_CATEGORIES)');
+      }
+    }
+
+    // Also check GOAL_PRESETS in records.js
+    const recContent = fs.readFileSync(join(ROOT_JS, 'views/records.js'), 'utf-8');
+    const goalMatches = recContent.matchAll(/icon:\s*'([^']+)'/g);
+    for (const m of goalMatches) {
+      const name = m[1];
+      if (!ICON_CODEPOINTS[name]) {
+        if (!missingIcons.has(name)) missingIcons.set(name, []);
+        missingIcons.get(name).push('views/records.js (GOAL_PRESETS)');
+      }
+    }
+
+    if (missingIcons.size > 0) {
+      console.log('MISSING ICONS FOUND IN CODEBASE:', JSON.stringify(Object.fromEntries(missingIcons), null, 2));
+    }
+
+    assert.deepEqual(Object.fromEntries(missingIcons), {}, 'All UI icons must be present in ICON_CODEPOINTS');
   });
 });

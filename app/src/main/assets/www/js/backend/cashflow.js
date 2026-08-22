@@ -228,7 +228,7 @@ export function getSalaryChecklist(db, args = {}) {
       desc: `Keep ₹${safe.breakdown.recurring_bills.toLocaleString('en-IN')} for utilities, subscriptions & rent.`,
       amount: safe.breakdown.recurring_bills,
       completed: false,
-      icon: 'receipt',
+      icon: 'receipt_long',
     },
     {
       id: 'buffer',

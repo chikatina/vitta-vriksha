@@ -44,12 +44,18 @@ class ReminderNotificationManager(private val context: Context) {
     private fun manager() =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-    private fun openAppIntent(): PendingIntent {
+    private fun openAppIntent(reminderId: String? = null): PendingIntent {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            if (reminderId != null) {
+                putExtra(ReminderReceiver.EXTRA_ID, reminderId)
+            }
         }
         return PendingIntent.getActivity(
-            context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            context,
+            reminderId?.hashCode() ?: 0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
     }
 
@@ -61,7 +67,7 @@ class ReminderNotificationManager(private val context: Context) {
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setContentIntent(openAppIntent())
+            .setContentIntent(openAppIntent(id))
             .setAutoCancel(true)
             .build()
 
@@ -80,9 +86,9 @@ class ReminderNotificationManager(private val context: Context) {
             .setContentTitle(
                 if (count == 1) "A transaction to review" else "$count transactions to review",
             )
-            .setContentText("Open the app to check and file them.")
+            .setContentText("Tap to quickly classify, accept or discard.")
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setContentIntent(openAppIntent())
+            .setContentIntent(openAppIntent("pending-alerts"))
             .setAutoCancel(true)
             .build()
 

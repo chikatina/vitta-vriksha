@@ -17,11 +17,12 @@ const STORE_KEY = 'vittavriksha.db';
 
 /** True when the Android shell is present. */
 export function isAndroid() {
-  return typeof window !== 'undefined' && typeof window.AndroidBridge !== 'undefined';
+  const g = typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : null);
+  return Boolean(g && typeof g.AndroidBridge !== 'undefined');
 }
 
 function bridge() {
-  return window.AndroidBridge;
+  return typeof window !== 'undefined' ? window.AndroidBridge : globalThis.AndroidBridge;
 }
 
 /* ------------------------------------------------------------------ storage */
@@ -134,6 +135,42 @@ export function triggerBiometricAuth() {
   } else if (typeof window !== 'undefined' && window.onBiometricAuthResult) {
     setTimeout(() => window.onBiometricAuthResult(false, 'Biometrics are not available here.'), 200);
   }
+}
+
+/**
+ * Initiates a biometric prompt and resolves with { success: boolean, message: string|null }.
+ * Used during biometric enablement to verify that the biometric sensor works and the user
+ * successfully authenticates before enabling biometric unlock.
+ */
+export function verifyBiometric() {
+  if (!isBiometricAvailable()) {
+    return Promise.resolve({ success: false, message: 'Biometrics are not available on this device.' });
+  }
+
+  return new Promise((resolve) => {
+    const previous = typeof window !== 'undefined' ? window.onBiometricAuthResult : null;
+    let settled = false;
+
+    const finish = (success, message) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (typeof window !== 'undefined') {
+        window.onBiometricAuthResult = previous;
+      }
+      resolve({ success: Boolean(success), message: message || null });
+    };
+
+    const timer = setTimeout(() => finish(false, 'Biometric prompt timed out.'), 60000);
+
+    if (typeof window !== 'undefined') {
+      window.onBiometricAuthResult = (success, message) => {
+        finish(success, message);
+      };
+    }
+
+    triggerBiometricAuth();
+  });
 }
 
 /* --------------------------------------------------------------- permissions */
@@ -274,22 +311,55 @@ export function readSmsInbox(days = 0) {
 /* ---------------------------------------------------------------------- files */
 
 /**
+ * Saves a file directly to the user's Downloads directory.
+ *
+ * Inside Android this calls through the native bridge to MediaStore.Downloads.
+ * In a desktop browser this falls back to an ordinary download anchor.
+ */
+export function saveFile(name, mimeType, base64) {
+  if (isAndroid() && bridge()?.saveFile) {
+    const raw = bridge().saveFile(name, mimeType, base64);
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return { success: Boolean(raw), filename: name, path: `Downloads/${name}` };
+    }
+  }
+  if (typeof document !== 'undefined' && typeof URL !== 'undefined' && typeof Blob !== 'undefined') {
+    const blob = new Blob([decodeBase64(base64)], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = name;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  return { success: true, filename: name, path: name };
+}
+
+/**
  * Hands a file to the platform's share sheet, for the encrypted export.
  *
  * In a browser this falls back to an ordinary download, so the backup screen works the
  * same way in the preview.
  */
 export function shareFile(name, mimeType, base64) {
-  if (isAndroid() && bridge().shareFile) {
+  if (isAndroid() && bridge()?.shareFile) {
     return bridge().shareFile(name, mimeType, base64);
   }
-  const blob = new Blob([decodeBase64(base64)], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = name;
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  if (typeof document !== 'undefined' && typeof URL !== 'undefined' && typeof Blob !== 'undefined') {
+    const blob = new Blob([decodeBase64(base64)], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = name;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
   return true;
 }
 
@@ -329,4 +399,14 @@ export function openEmail(email, subject = '', body = '') {
     window.location.href = url;
   }
   return true;
+}
+
+/** Reports whether the environment is a debug build / developer testing session. */
+export function isDebug() {
+  if (isAndroid() && typeof bridge()?.isDebug === 'function') {
+    return Boolean(bridge().isDebug());
+  }
+  // In development environments / Node.js test runs / local browsers:
+  if (typeof window === 'undefined' || !window.location) return true;
+  return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 }

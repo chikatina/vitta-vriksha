@@ -8,6 +8,7 @@
 
 import { icon, h } from '../ui.js';
 import { Bridge } from '../bridge.js';
+import { openOnboardingTour } from './onboarding-tour.js';
 
 const SECTIONS = [
   {
@@ -245,6 +246,22 @@ export async function renderGuide(container, app) {
       </div>
     </div>
 
+    <div class="card" style="border:1px solid var(--accent);background:var(--surface-container-low)">
+      <div class="row-between" style="align-items:center;margin-bottom:8px">
+        <div class="row" style="gap:8px;align-items:center">
+          <span style="color:var(--accent);display:flex">${icon('rocket_launch', 'icon-sm')}</span>
+          <span style="font-weight:700;font-size:14px">Interactive App Walkthrough</span>
+        </div>
+        <span class="badge badge-income">8 Live Steps</span>
+      </div>
+      <p class="caption" style="margin-bottom:12px">
+        Tour all tabs and understand key features with our guided Driver.js-style spotlight.
+      </p>
+      <button type="button" class="btn btn-filled btn-block" data-guide-tour style="gap:8px">
+        ${icon('rocket_launch', 'icon-sm')}Launch Interactive Tour
+      </button>
+    </div>
+
     ${SECTIONS.map((section) => `
       <div class="card">
         <div class="card-title">${h(section.title)}</div>
@@ -269,14 +286,19 @@ export async function renderGuide(container, app) {
         If you have questions that aren't answered here or run into any problems, our team is ready to assist you.
       </p>
       <div class="row" style="gap:8px;flex-wrap:wrap">
-        <button type="button" class="btn btn-filled" data-open-email style="flex:1;min-width:180px">
-          ${icon('mail')}Email Support
+        <button type="button" class="btn btn-filled" data-open-email style="flex:1;min-width:120px">
+          ${icon('help')}Email Support
         </button>
-        <button type="button" class="btn btn-tonal" data-open-support-hub style="flex:1;min-width:140px">
-          ${icon('support_agent')}Help Hub
+        <button type="button" class="btn btn-tonal" data-open-support-hub style="flex:1;min-width:120px">
+          ${icon('help')}Help Hub
         </button>
       </div>
     </div>`;
+
+  const tourBtn = container.querySelector('[data-guide-tour]');
+  if (tourBtn) {
+    tourBtn.addEventListener('click', () => openOnboardingTour(app));
+  }
 
   const emailBtn = container.querySelector('[data-open-email]');
   if (emailBtn) {

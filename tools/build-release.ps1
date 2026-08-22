@@ -6,10 +6,13 @@ $sdk = "C:\Users\sagar\AppData\Local\Android\Sdk"
 $env:JAVA_HOME = $javaHome
 $env:PATH = "$javaHome\bin;$sdk\platform-tools;$env:PATH"
 
-Write-Host "=== 1. Validating Node Tests ===" -ForegroundColor Cyan
-node --test tests/run-all.mjs
+Write-Host "=== 1. Verifying Coding & Styling Guidelines (AGENTS.md) ===" -ForegroundColor Cyan
+node tools/check-style-guidelines.mjs
 
-Write-Host "`n=== 2. Building Release App Bundle (.aab) & Release APK (.apk) ===" -ForegroundColor Cyan
+Write-Host "`n=== 2. Validating Automated Test Suite ===" -ForegroundColor Cyan
+node --test test/*.test.mjs
+
+Write-Host "`n=== 3. Building Release App Bundle (.aab) & Release APK (.apk) ===" -ForegroundColor Cyan
 .\gradlew.bat bundleRelease assembleRelease
 
 # Parse version name from build.gradle

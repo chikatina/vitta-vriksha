@@ -1,0 +1,12 @@
+{
+  "name": "vitta-vriksha",
+  "version": "1.0.4",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "lint": "node tools/check-style-guidelines.mjs",
+    "test": "node tools/check-style-guidelines.mjs && node --test test/*.test.mjs",
+    "build:release": "powershell -ExecutionPolicy Bypass -File ./tools/build-release.ps1",
+    "deploy:release": "powershell -ExecutionPolicy Bypass -File ./tools/deploy-release.ps1"
+  }
+}

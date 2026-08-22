@@ -30,6 +30,7 @@ export const ERROR_CODES = {
 
   // Records
   RECORD_TYPE_UNKNOWN: 'No such record type.',
+  RECORD_NOT_FOUND: 'The requested record was not found.',
   RECORD_EMPTY: 'Nothing in the payload maps to a writable column.',
   AMOUNT_INVALID: 'An amount was zero, negative or not a number.',
   NAME_REQUIRED: 'A name or title was blank.',
@@ -48,6 +49,7 @@ export const ERROR_CODES = {
   BACKUP_DECRYPT_FAILED: 'The backup could not be decrypted, usually a wrong password.',
   BACKUP_MALFORMED: 'The file decrypted but is not a Vitta Vriksha backup.',
   BACKUP_EMPTY: 'The backup held no records for any known table.',
+  BACKUP_VERSION_NEWER: 'The backup was created with a newer version of the app than the one running.',
 
   // Statement import
   CAS_NO_FILE: 'No file reached the parser.',
@@ -62,6 +64,11 @@ export const ERROR_CODES = {
   CAS_HEADER_UNREADABLE: 'The statement header could not be read.',
   CAS_SUMMARY_ONLY: 'A summary statement was supplied where a detailed one is needed.',
   CAS_NO_HOLDINGS: 'The statement parsed but contained no holdings.',
+
+  // Tradebook CSV import
+  CSV_EMPTY: 'The CSV file contains no transaction rows.',
+  CSV_UNKNOWN_HEADER: 'Could not identify tradebook headers in the CSV file.',
+  CSV_MISSING_COLUMNS: 'CSV is missing essential trade columns.',
 };
 
 /** Builds an error reply. An unregistered code is surfaced rather than hidden. */
