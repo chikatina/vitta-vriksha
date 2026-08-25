@@ -24,9 +24,9 @@ describe('Database Schema Versioning & Sequential Migrations', () => {
   describe('Constants & Registry Integrity', () => {
     it('defines current app version name and version code', () => {
       assert.equal(typeof APP_VERSION_NAME, 'string');
-      assert.equal(APP_VERSION_NAME, '1.0.4');
+      assert.equal(APP_VERSION_NAME, '1.0.5');
       assert.equal(typeof APP_VERSION_CODE, 'number');
-      assert.equal(APP_VERSION_CODE, 8);
+      assert.equal(APP_VERSION_CODE, 9);
     });
 
     it('has sequentially ordered migrations up to APP_VERSION_CODE', () => {
@@ -169,19 +169,20 @@ describe('Database Schema Versioning & Sequential Migrations', () => {
       const ccColsBefore = oldDb.all('PRAGMA table_info(credit_cards)').map((r) => r.name);
       assert.ok(!ccColsBefore.includes('available_limit'));
 
-      // Run sequential migrations from 3 -> 8
-      const applied = runMigrations(oldDb, 3, 8);
-      assert.equal(applied.length, 5);
+      // Run sequential migrations from 3 -> 9
+      const applied = runMigrations(oldDb, 3, 9);
+      assert.equal(applied.length, 6);
       assert.equal(applied[0].versionCode, 4);
       assert.equal(applied[1].versionCode, 5);
       assert.equal(applied[2].versionCode, 6);
       assert.equal(applied[3].versionCode, 7);
       assert.equal(applied[4].versionCode, 8);
+      assert.equal(applied[5].versionCode, 9);
 
-      // Verify version was upgraded to 8
+      // Verify version was upgraded to 9
       const verAfter = getDatabaseVersion(oldDb);
-      assert.equal(verAfter.versionCode, 8);
-      assert.equal(verAfter.versionName, '1.0.4');
+      assert.equal(verAfter.versionCode, 9);
+      assert.equal(verAfter.versionName, '1.0.5');
 
       // Verify new tables and columns exist after migrations
       const txColsAfter = oldDb.all('PRAGMA table_info(transactions)').map((r) => r.name);

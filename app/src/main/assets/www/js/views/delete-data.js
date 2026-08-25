@@ -9,18 +9,19 @@ import { icon, h, toast, confirmDialog, promptDialog } from '../ui.js';
 
 /** What can be deleted, and how much it hurts. */
 export const ERASABLE = [
-  ['transactions', 'Transactions', 'Ledger entries and splits'],
+  ['transactions', 'Transactions', 'Ledger entries, splits, and scanned SMS history'],
   ['accounts', 'Accounts', 'Balances and manual holdings'],
-  ['holdings', 'Imported holdings', 'Mutual funds, demat, pension'],
+  ['holdings', 'Imported holdings', 'Mutual funds, demat, pension, stock trades'],
   ['goals', 'Goals', 'Savings targets'],
   ['budgets', 'Budgets', 'Monthly category limits'],
   ['loans', 'Loans', 'Borrowed and lent amounts'],
   ['cards', 'Credit cards', 'Card limits and balances'],
-  ['subscriptions', 'Subscriptions', 'Tracked services'],
+  ['subscriptions', 'Subscriptions', 'Tracked services and price history'],
   ['sips', 'SIPs', 'Recurring fund mandates'],
   ['events', 'Events', 'Dated reminders'],
   ['categories', 'Categories', 'Reset to defaults'],
-  ['rules', 'SMS rules', 'Reset to defaults'],
+  ['rules', 'SMS & merchant rules', 'Reset to defaults'],
+  ['alerts', 'SMS alerts cache', 'Ignored alerts and pending SMS queue'],
 ];
 
 export async function renderDeleteData(container, app) {
@@ -95,6 +96,11 @@ export function bindErase(container, app) {
 
       const result = await app.db('factory_reset');
       if (!result) return;
+      try {
+        localStorage.clear();
+      } catch {
+        // Ignored
+      }
       toast('Everything has been deleted.', 'success');
       await app.restart();
     });

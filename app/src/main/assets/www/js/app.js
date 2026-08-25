@@ -7,7 +7,7 @@
  */
 
 import { Bridge } from './bridge.js';
-import { toast, icon, h } from './ui.js';
+import { toast, icon, h, autoScrollChipScrollers } from './ui.js';
 import { setAmountsMasked } from './formatters.js';
 import { openTransactionSheet } from './views/transaction-sheet.js';
 import { renderLock, renderSetup, renderStartupFailure } from './views/lock.js';
@@ -350,16 +350,15 @@ class App {
     if (page && typeof history !== 'undefined' && history?.pushState) {
       history.pushState({ page }, '');
     }
-    this.render();
+    return this.render();
   }
 
   open(destination) {
     if (TAB_VIEWS[destination]) {
-      this.go(destination);
-      return;
+      return this.go(destination);
     }
     const config = PAGES[destination];
-    if (config) this.go(config.parent, destination);
+    if (config) return this.go(config.parent, destination);
   }
 
   openPage(page) {
@@ -454,6 +453,7 @@ class App {
     const render = config ? config.render : TAB_VIEWS[this.tab];
     try {
       await render(this.view, this);
+      autoScrollChipScrollers(this.view);
       if (preserveScroll && scrollPos > 0) {
         this.view.scrollTop = scrollPos;
         this.appBar.classList.toggle('scrolled', scrollPos > 4);

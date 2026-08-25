@@ -31,6 +31,8 @@ export const ERROR_CODES = {
   // Records
   RECORD_TYPE_UNKNOWN: 'No such record type.',
   RECORD_NOT_FOUND: 'The requested record was not found.',
+  CARD_NOT_FOUND: 'The specified credit card could not be found.',
+  ACCOUNT_NOT_FOUND: 'The specified bank account could not be found.',
   RECORD_EMPTY: 'Nothing in the payload maps to a writable column.',
   AMOUNT_INVALID: 'An amount was zero, negative or not a number.',
   NAME_REQUIRED: 'A name or title was blank.',

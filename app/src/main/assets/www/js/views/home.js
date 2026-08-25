@@ -39,7 +39,7 @@ export async function renderHome(container, app) {
     if (!widget) return '';
     try {
       const html = widget.render(data, app, entry.options || {});
-      return html ? `<div data-panel="${h(entry.uid)}">${html}</div>` : '';
+      return html ? `<div data-panel="${h(entry.uid)}" data-widget="${h(entry.id)}">${html}</div>` : '';
     } catch (error) {
       console.error(`Widget "${entry.id}" failed to render`, error);
       return '';
@@ -93,7 +93,7 @@ export async function renderHome(container, app) {
           </span>
         </div>
 
-        <div class="list-row" style="padding:10px 0;background:transparent">
+        <div class="list-row" data-onboarding-sms style="padding:10px 0;background:transparent">
           <span class="badge ${smsGranted ? 'badge-income' : 'badge-tonal'}" style="width:22px;height:22px;border-radius:50%;padding:0;display:grid;place-items:center">
             ${icon(smsGranted ? 'check' : 'sms', 'icon-sm')}
           </span>
@@ -104,7 +104,7 @@ export async function renderHome(container, app) {
           ${!smsGranted ? `<button class="btn btn-sm btn-tonal" data-action-sms>Enable</button>` : ''}
         </div>
 
-        <div class="list-row" style="padding:10px 0;background:transparent">
+        <div class="list-row" data-onboarding-cas style="padding:10px 0;background:transparent">
           <span class="badge ${hasInvestments ? 'badge-income' : 'badge-tonal'}" style="width:22px;height:22px;border-radius:50%;padding:0;display:grid;place-items:center">
             ${icon(hasInvestments ? 'check' : 'savings', 'icon-sm')}
           </span>
@@ -115,7 +115,7 @@ export async function renderHome(container, app) {
           ${!hasInvestments ? `<button class="btn btn-sm btn-tonal" data-action-cas>Upload</button>` : ''}
         </div>
 
-        <div class="list-row" style="padding:10px 0;background:transparent">
+        <div class="list-row" data-onboarding-budget style="padding:10px 0;background:transparent">
           <span class="badge ${hasBudget ? 'badge-income' : 'badge-tonal'}" style="width:22px;height:22px;border-radius:50%;padding:0;display:grid;place-items:center">
             ${icon(hasBudget ? 'check' : 'donut_small', 'icon-sm')}
           </span>
@@ -126,7 +126,7 @@ export async function renderHome(container, app) {
           ${!hasBudget ? `<button class="btn btn-sm btn-tonal" data-action-budget>Set</button>` : ''}
         </div>
 
-        <div class="list-row" style="padding:10px 0;background:transparent">
+        <div class="list-row" data-onboarding-accounts style="padding:10px 0;background:transparent">
           <span class="badge ${hasAccounts ? 'badge-income' : 'badge-tonal'}" style="width:22px;height:22px;border-radius:50%;padding:0;display:grid;place-items:center">
             ${icon(hasAccounts ? 'check' : 'account_balance', 'icon-sm')}
           </span>
@@ -160,7 +160,7 @@ export async function renderHome(container, app) {
   bindMemberChips(container, app);
 
   if (waiting) {
-    bindAlertTooltip(container, app);
+    bindAlertTooltip(container, app, { categories });
   }
 
   const onboardingCard = container.querySelector('[data-onboarding-card]');

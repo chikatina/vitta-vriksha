@@ -21,6 +21,7 @@ const FILTERS = [
   { id: 'upi', label: 'UPI', icon: 'payments' },
   { id: 'large', label: '> ₹2k', icon: 'bolt' },
   { id: 'uncategorized', label: 'Uncategorized', icon: 'help' },
+  { id: 'duplicates', label: 'Duplicates', icon: 'content_copy' },
   { id: 'ignored', label: 'Ignored', icon: 'visibility_off' },
 ];
 
@@ -219,6 +220,14 @@ export async function renderLedger(container, app) {
     }
   };
 
+  const dupKeyCounts = new Map();
+  for (const tx of all) {
+    if (!tx.is_ignored && !tx.is_duplicate && tx.amount > 0 && tx.date) {
+      const key = `${tx.date}:${tx.amount}`;
+      dupKeyCounts.set(key, (dupKeyCounts.get(key) || 0) + 1);
+    }
+  }
+
   const matches = () => all.filter((tx) => {
     if (scope === 'day') {
       if (tx.date !== activeDay) return false;
@@ -237,6 +246,10 @@ export async function renderLedger(container, app) {
       if (isIgnored) return false;
     }
 
+    if (filter === 'duplicates') {
+      const key = `${tx.date}:${tx.amount}`;
+      if ((dupKeyCounts.get(key) || 0) < 2) return false;
+    }
     if (filter === 'Investment' && !tx.is_investment_outflow && tx.type !== 'Investment') return false;
     if (filter === 'Expense' && (tx.type !== 'Expense' || tx.is_investment_outflow)) return false;
     if (filter === 'Income' && tx.type !== 'Income') return false;
@@ -499,6 +512,19 @@ export async function renderLedger(container, app) {
     }
 
     // Group by day
+    results.innerHTML = filter === 'duplicates' ? `
+      <div class="card-flat" style="border-left:3px solid var(--warning);background:var(--surface-container-high);padding:10px 12px;margin-bottom:var(--gap-3)">
+        <div class="row-between" style="align-items:center">
+          <div class="row" style="gap:6px;align-items:center">
+            <span style="color:var(--warning);display:flex">${icon('content_copy', 'icon-sm')}</span>
+            <span style="font-weight:700;font-size:13px">Potential Duplicates (${rows.length} entries)</span>
+          </div>
+        </div>
+        <div class="caption" style="font-size:11.5px;margin-top:2px">
+          Transactions sharing the same amount and date in your ledger. Tap any entry to edit or mark as duplicate.
+        </div>
+      </div>` : '';
+
     const days = new Map();
     rows.forEach((tx) => {
       const key = tx.date || 'undated';

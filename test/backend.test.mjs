@@ -897,6 +897,19 @@ describe('deleting data', () => {
   it('refuses an empty request', async () => {
     assert.equal((await call('clear_data', { kinds: [] })).code, 'BAD_REQUEST');
   });
+
+  it('clears pre-scanned SMS, ignored alerts and sync marks when clearing transactions or alerts', async (t) => {
+    await seed(t);
+    // Add an ignored alert and an SMS sync mark
+    await ok(t, 'update_setting', { key: 'last_sms_sync', value: '2026-08-20T10:00:00.000Z' });
+    await call('sms', { action: 'ignore_batch', bodies: ['Your OTP is 123456', 'Spam alert'] });
+
+    const clearRes = await ok(t, 'clear_data', { kinds: ['alerts'] });
+    assert.ok(clearRes.cleared >= 0);
+
+    const settings = (await ok(t, 'get_settings')).settings;
+    assert.equal(settings.last_sms_sync, undefined, 'last_sms_sync should be reset');
+  });
 });
 
 describe('holdings', () => {
@@ -1522,7 +1535,7 @@ describe('backup', () => {
     assert.equal(restored.restored, 4);
     assert.equal((await ok(t, 'get_transactions')).transactions.length, 1);
     const ver = await ok(t, 'get_version_info');
-    assert.equal(ver.schema_version, 8);
+    assert.equal(ver.schema_version, 9);
   });
 
   it('rejects a backup created with a newer app version than the running build', async (t) => {

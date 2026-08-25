@@ -10,7 +10,7 @@
 import { fail } from './errors.js';
 import { BackupDecryptError, decryptData, encryptData, hashPin, pinMatches } from './crypto.js';
 import { Database } from './sqlite.js';
-import { deleteDatabase, deleteVaultKey, writeAttempts } from './native.js';
+import { deleteDatabase, deleteVaultKey, takePendingAlerts, writeAttempts } from './native.js';
 import { merchantKey } from './merchants.js';
 import { classifyAsset } from './asset-class.js';
 import {
@@ -53,6 +53,7 @@ import {
   processFifoCapitalGains, calculateExactTaxHarvesting, TAX_DISCLAIMER_TEXT, TAX_DISCLAIMER_SHORT,
 } from './tax_engine.js';
 import { parseBrokerCsv } from './broker_parser.js';
+import { getFireProfile, saveFireSettings } from './fire.js';
 import { navSearch } from '../../vendor/casparser/isin.js';
 
 /** Settings that must never be handed to the UI. */
@@ -65,13 +66,21 @@ const PRIVATE_SETTINGS = new Set(['pin_hash', 'pin_code']);
 const DEFAULT_CATEGORIES = [
   ['Groceries', 'Expense', '#10B981', 'shopping_cart'],
   ['Dining', 'Expense', '#F59E0B', 'restaurant'],
+  ['Shopping', 'Expense', '#6366F1', 'shopping_bag'],
+  ['Transport', 'Expense', '#8B5CF6', 'directions_car'],
+  ['Fuel', 'Expense', '#F59E0B', 'local_gas_station'],
+  ['Medical', 'Expense', '#EF4444', 'local_hospital'],
+  ['Health', 'Expense', '#EF4444', 'medical_services'],
+  ['School', 'Expense', '#F97316', 'school'],
+  ['Education', 'Expense', '#F97316', 'menu_book'],
+  ['Kids & Baby', 'Expense', '#EC4899', 'child_care'],
+  ['Pets', 'Expense', '#10B981', 'pets'],
+  ['Fitness', 'Expense', '#06B6D4', 'fitness_center'],
+  ['Entertainment', 'Expense', '#14B8A6', 'movie'],
+  ['Subscriptions', 'Expense', '#8B5CF6', 'subscriptions'],
   ['Utilities', 'Expense', '#3B82F6', 'bolt'],
   ['Rent & Housing', 'Expense', '#EC4899', 'home'],
-  ['Transport & Fuel', 'Expense', '#8B5CF6', 'directions_car'],
-  ['Health', 'Expense', '#EF4444', 'medical_services'],
-  ['Shopping', 'Expense', '#6366F1', 'shopping_bag'],
-  ['Entertainment', 'Expense', '#14B8A6', 'movie'],
-  ['Education', 'Expense', '#F97316', 'school'],
+  ['Maintenance & Repairs', 'Expense', '#64748B', 'build'],
   ['Personal Care', 'Expense', '#D946EF', 'spa'],
   ['Travel', 'Expense', '#06B6D4', 'flight'],
   ['Gifts & Donations', 'Expense', '#FB7185', 'redeem'],
@@ -80,13 +89,17 @@ const DEFAULT_CATEGORIES = [
   ['Investment Outflow', 'Investment', '#059669', 'trending_up'],
   ['Salary', 'Income', '#10B981', 'work'],
   ['Freelance', 'Income', '#3B82F6', 'computer'],
+  ['Business Income', 'Income', '#3B82F6', 'storefront'],
+  ['Rental Income', 'Income', '#10B981', 'real_estate_agent'],
   ['Interest & Dividends', 'Income', '#F59E0B', 'savings'],
   ['Refunds & Cashback', 'Income', '#8B5CF6', 'receipt_long'],
+  ['Gifts Received', 'Income', '#EC4899', 'redeem'],
+  ['Other Income', 'Income', '#06B6D4', 'savings'],
   /* Money moving between the household's own pockets: a credit card bill paid from a
      bank account, a transfer between two accounts. It is neither earned nor spent, and
      every total that adds up income or expenditure leaves it out. */
   ['Transfer', 'Transfer', '#78909C', 'arrow_forward'],
-  ['Credit Card', 'Transfer', '#6366F1', 'credit_card'],
+  ['Credit Card', 'Transfer', '#F59E0B', 'credit_card'],
 ];
 
 /*
@@ -121,10 +134,10 @@ const DEFAULT_SMS_RULES = [
   ['Meal voucher credit', '', 'towards meal wallet', 'Income', 'Salary', AMOUNT_PATTERN],
   ['Meal wallet spend', '', 'spent from pluxee meal wallet', 'Expense', 'Dining', AMOUNT_PATTERN],
   ['Meal card spend', '', 'meal wallet', 'Expense', 'Dining', AMOUNT_PATTERN],
-  ['Toll paid', '', 'toll paid', 'Expense', 'Transport & Fuel', AMOUNT_PATTERN],
-  ['FASTag Recharge', '', 'fastag recharge', 'Expense', 'Transport & Fuel', AMOUNT_PATTERN],
-  ['FASTag Toll', '', 'fastag toll', 'Expense', 'Transport & Fuel', AMOUNT_PATTERN],
-  ['FASTag Debit', '', 'fastag', 'Expense', 'Transport & Fuel', AMOUNT_PATTERN],
+  ['Toll paid', '', 'toll paid', 'Expense', 'Transport', AMOUNT_PATTERN],
+  ['FASTag Recharge', '', 'fastag recharge', 'Expense', 'Transport', AMOUNT_PATTERN],
+  ['FASTag Toll', '', 'fastag toll', 'Expense', 'Transport', AMOUNT_PATTERN],
+  ['FASTag Debit', '', 'fastag', 'Expense', 'Transport', AMOUNT_PATTERN],
   ['Bill paid', '', 'bill paid', 'Expense', 'Utilities', AMOUNT_PATTERN],
   ['SmartPay bill', '', 'via smartpay', 'Expense', 'Utilities', AMOUNT_PATTERN],
   ['Electricity Bill', '', 'electricity bill', 'Expense', 'Utilities', AMOUNT_PATTERN],
@@ -267,8 +280,8 @@ const DEFAULT_SMS_RULES = [
 ];
 
 // Application and Database Schema Version tracking
-export const APP_VERSION_NAME = '1.0.4';
-export const APP_VERSION_CODE = 8;
+export const APP_VERSION_NAME = '1.0.5';
+export const APP_VERSION_CODE = 9;
 
 const DEFAULT_SETTINGS = {
   locale: 'en-IN',
@@ -1053,6 +1066,14 @@ export const MIGRATIONS = [
       seedDefaultRules(db);
     },
   },
+  {
+    versionCode: 9,
+    versionName: '1.0.5',
+    description: 'Discovered accounts weighted scoring, non-destructive debit card linking, and configurable merge balances',
+    up(db) {
+      seedDefaultRules(db);
+    },
+  },
 ];
 
 export function getDatabaseVersion(db) {
@@ -1142,6 +1163,11 @@ function runAdditiveMigrations(db) {
     addColumnIfMissing(db, table, 'member_id', 'INTEGER DEFAULT 1');
   }
   addColumnIfMissing(db, 'custom_categories', 'monthly_budget', 'REAL DEFAULT 0.0');
+  // Rename legacy "Transport & Fuel" category to "Transport"
+  db.run("UPDATE custom_categories SET name = 'Transport' WHERE name = 'Transport & Fuel'");
+  db.run("UPDATE sms_rules SET category_name = 'Transport' WHERE category_name = 'Transport & Fuel'");
+  db.run("UPDATE merchant_rules SET category_name = 'Transport' WHERE category_name = 'Transport & Fuel'");
+  db.run("UPDATE transactions SET category = 'Transport' WHERE category = 'Transport & Fuel'");
   // Loans used to be borrowing only. Everything already recorded is money owed.
   addColumnIfMissing(db, 'loans', 'direction', "TEXT DEFAULT 'borrowed'");
   db.run("UPDATE loans SET direction = 'borrowed' WHERE direction IS NULL OR direction = ''");
@@ -1811,8 +1837,10 @@ function saveRecord(db, args) {
   if (table === 'asset_accounts') {
     db.run('UPDATE asset_accounts SET updated_at = ? WHERE id = ?', [today(), recordId]);
     const inst = String(record.institution || '').trim();
-    if (record.account_number) {
-      const accNum = String(record.account_number).trim();
+    const accNum = record.account_number ? String(record.account_number).trim() : '';
+    const dcLast4 = record.debit_card_last_4 ? String(record.debit_card_last_4).trim() : '';
+
+    if (accNum) {
       const last4 = accNum.slice(-4);
       db.run(
         "UPDATE transactions SET account_id = ? WHERE (account_id IS NULL OR account_id = 0) AND raw_sms LIKE '%' || ? || '%'",
@@ -1829,19 +1857,38 @@ function saveRecord(db, args) {
           [last4.toLowerCase(), inst, last4, new Date().toISOString()]);
       }
     }
-    if (record.debit_card_last_4) {
-      const dcLast4 = String(record.debit_card_last_4).trim().slice(-4);
+    if (dcLast4) {
+      const dcDigits = dcLast4.slice(-4);
       db.run(
         "UPDATE transactions SET account_id = ? WHERE (account_id IS NULL OR account_id = 0) AND raw_sms LIKE '%' || ? || '%'",
-        [recordId, dcLast4],
+        [recordId, dcDigits],
       );
-      if (dcLast4 && dcLast4.length >= 4) {
+      if (dcDigits && dcDigits.length >= 4) {
         db.run('INSERT OR REPLACE INTO ignored_discovered_accounts (identifier, issuer, last_4, ignored_at) VALUES (?, ?, ?, ?)',
-          [`debit_card:${inst}:${dcLast4}`.toLowerCase(), inst, dcLast4, new Date().toISOString()]);
+          [`debit_card:${inst}:${dcDigits}`.toLowerCase(), inst, dcDigits, new Date().toISOString()]);
         db.run('INSERT OR REPLACE INTO ignored_discovered_accounts (identifier, issuer, last_4, ignored_at) VALUES (?, ?, ?, ?)',
-          [`${inst}:${dcLast4}`.toLowerCase(), inst, dcLast4, new Date().toISOString()]);
+          [`${inst}:${dcDigits}`.toLowerCase(), inst, dcDigits, new Date().toISOString()]);
         db.run('INSERT OR REPLACE INTO ignored_discovered_accounts (identifier, issuer, last_4, ignored_at) VALUES (?, ?, ?, ?)',
-          [dcLast4.toLowerCase(), inst, dcLast4, new Date().toISOString()]);
+          [dcDigits.toLowerCase(), inst, dcDigits, new Date().toISOString()]);
+      }
+    }
+
+    // Auto-detect balance from transactions if not explicitly set / is 0
+    const currentAcc = db.get('SELECT balance FROM asset_accounts WHERE id = ?', [recordId]);
+    if (!currentAcc?.balance || Number(currentAcc.balance) === 0) {
+      const matchPats = [accNum ? accNum.slice(-4) : '', dcLast4 ? dcLast4.slice(-4) : ''].filter((p) => p && p.length >= 4);
+      for (const pat of matchPats) {
+        const matchingTxns = db.all(
+          "SELECT raw_sms FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' AND raw_sms LIKE '%' || ? || '%' ORDER BY date DESC, id DESC LIMIT 50",
+          [pat],
+        );
+        for (const m of matchingTxns) {
+          const detectedBal = extractAccountBalanceFromText(m.raw_sms);
+          if (detectedBal !== null && detectedBal !== undefined && detectedBal > 0) {
+            db.run('UPDATE asset_accounts SET balance = ? WHERE id = ?', [detectedBal, recordId]);
+            break;
+          }
+        }
       }
     }
   } else if (table === 'credit_cards') {
@@ -2879,8 +2926,10 @@ function saveTransaction(db, args) {
     isDuplicate,
   ];
 
+  let oldTx = null;
   let transactionId = transaction.id;
   if (transactionId) {
+    oldTx = db.get('SELECT id, account_id, card_id, amount, type FROM transactions WHERE id = ?', [transactionId]);
     db.run(
       'UPDATE transactions SET member_id = ?, account_id = ?, card_id = ?, date = ?, amount = ?,'
       + ' currency = ?, type = ?, category = ?, merchant = ?,'
@@ -2898,6 +2947,56 @@ function saveTransaction(db, args) {
       [...values, new Date().toISOString()],
     );
     transactionId = result.lastInsertRowid;
+  }
+
+  // Update account / card balances
+  let handledBySms = false;
+  if (accountId && rawSms) {
+    const updated = autoUpdateAccountFromSms(db, rawSms, transaction.sender || '', accountId);
+    if (updated) handledBySms = true;
+  }
+  if (cardId && rawSms) {
+    const updated = autoUpdateCreditCardFromSms(db, rawSms, transaction.sender || '', cardId);
+    if (updated) handledBySms = true;
+  }
+
+  if (!handledBySms) {
+    if (accountId) {
+      const acc = db.get('SELECT id, balance FROM asset_accounts WHERE id = ?', [accountId]);
+      if (acc) {
+        let currentBal = Number(acc.balance) || 0;
+        if (oldTx) {
+          const oldAmt = Number(oldTx.amount) || 0;
+          if (oldTx.type === 'Income' || oldTx.type === 'credit') currentBal -= oldAmt;
+          else currentBal += oldAmt;
+        }
+        if (amount > 0) {
+          if (txType === 'Income' || txType === 'credit') currentBal += amount;
+          else currentBal -= amount;
+        }
+        db.run('UPDATE asset_accounts SET balance = ?, updated_at = ? WHERE id = ?', [currentBal, new Date().toISOString(), accountId]);
+      }
+    }
+    if (cardId) {
+      const card = db.get('SELECT id, current_balance, total_limit, available_limit FROM credit_cards WHERE id = ?', [cardId]);
+      if (card) {
+        let curBal = Number(card.current_balance) || 0;
+        if (oldTx) {
+          const oldAmt = Number(oldTx.amount) || 0;
+          if (oldTx.type === 'Transfer' || oldTx.type === 'credit') curBal += oldAmt;
+          else curBal = Math.max(0, curBal - oldAmt);
+        }
+        if (amount > 0) {
+          if (txType === 'Transfer' || txType === 'credit') curBal = Math.max(0, curBal - amount);
+          else curBal += amount;
+        }
+        let newAvail = card.available_limit;
+        if (card.total_limit > 0) {
+          newAvail = Math.max(0, card.total_limit - curBal);
+        }
+        db.run('UPDATE credit_cards SET current_balance = ?, available_limit = ?, updated_at = ? WHERE id = ?', [curBal, newAvail, new Date().toISOString(), cardId]);
+      }
+    }
   }
 
   // Naming a category for a named vendor is the teaching moment. It is only taken when
@@ -2933,7 +3032,34 @@ function saveTransaction(db, args) {
 }
 
 function deleteTransaction(db, args) {
-  db.run('DELETE FROM transactions WHERE id = ?', [args.transaction_id]);
+  const tx = db.get('SELECT id, account_id, card_id, amount, type FROM transactions WHERE id = ?', [args.transaction_id]);
+  if (tx) {
+    if (tx.account_id) {
+      const acc = db.get('SELECT balance FROM asset_accounts WHERE id = ?', [tx.account_id]);
+      if (acc) {
+        let bal = Number(acc.balance) || 0;
+        const amt = Number(tx.amount) || 0;
+        if (tx.type === 'Income' || tx.type === 'credit') bal -= amt;
+        else bal += amt;
+        db.run('UPDATE asset_accounts SET balance = ?, updated_at = ? WHERE id = ?', [bal, new Date().toISOString(), tx.account_id]);
+      }
+    }
+    if (tx.card_id) {
+      const card = db.get('SELECT current_balance, total_limit, available_limit FROM credit_cards WHERE id = ?', [tx.card_id]);
+      if (card) {
+        let curBal = Number(card.current_balance) || 0;
+        const amt = Number(tx.amount) || 0;
+        if (tx.type === 'Transfer' || tx.type === 'credit') curBal += amt;
+        else curBal = Math.max(0, curBal - amt);
+        let newAvail = card.available_limit;
+        if (card.total_limit > 0) {
+          newAvail = Math.max(0, card.total_limit - curBal);
+        }
+        db.run('UPDATE credit_cards SET current_balance = ?, available_limit = ?, updated_at = ? WHERE id = ?', [curBal, newAvail, new Date().toISOString(), tx.card_id]);
+      }
+    }
+    db.run('DELETE FROM transactions WHERE id = ?', [args.transaction_id]);
+  }
   return {};
 }
 
@@ -3030,6 +3156,102 @@ function restoreTransaction(db, args = {}) {
   if (!txId) return fail('BAD_REQUEST', 'Transaction ID is required.');
   db.run('UPDATE transactions SET is_ignored = 0, is_duplicate = 0 WHERE id = ?', [txId]);
   return { status: 'success', transaction_id: txId, is_ignored: 0, is_duplicate: 0 };
+}
+
+function scanLedgerDuplicates(db, args = {}) {
+  const memberId = args.member_id && args.member_id !== 'all' ? Number(args.member_id) : null;
+  const rows = db.all(`
+    SELECT t.id, t.date, t.amount, t.type, t.category, t.merchant, t.description,
+           t.account_id, t.card_id, t.member_id, t.raw_sms, t.created_at,
+           COALESCE(a.name, c.card_name) AS instrument_name,
+           m.name AS member_name
+    FROM transactions t
+    LEFT JOIN asset_accounts a ON t.account_id = a.id
+    LEFT JOIN credit_cards c ON t.card_id = c.id
+    LEFT JOIN family_members m ON t.member_id = m.id
+    WHERE t.amount > 0 AND COALESCE(t.is_ignored, 0) = 0 AND COALESCE(t.is_duplicate, 0) = 0
+      ${memberId ? 'AND t.member_id = ?' : ''}
+    ORDER BY t.date DESC, t.amount DESC, t.id DESC
+  `, memberId ? [memberId] : []);
+
+  const utrPattern = /\b(?:upi(?:\/|\s*(?:ref|txn|reference)?\s*(?:no\.?|id|num)?[:\s\/-]+)|ref(?:\s*no\.?|\s*id|\s*num)?[:\s\/-]+|rrn[:\s\/-]+|utr(?:\s*no\.?)?[:\s\/-]+|txn\s*id[:\s\/-]+|upi\/)([A-Za-z0-9]{6,24})\b/i;
+  const getUtr = (txt) => {
+    if (!txt) return '';
+    const m = utrPattern.exec(txt);
+    return (m && m[1] && /\d/.test(m[1])) ? m[1].trim() : '';
+  };
+
+  const groupsMap = new Map();
+  for (const row of rows) {
+    const key = `${row.date}:${row.amount}`;
+    if (!groupsMap.has(key)) groupsMap.set(key, []);
+    groupsMap.get(key).push({ ...row, utr: getUtr(row.raw_sms) });
+  }
+
+  const duplicateGroups = [];
+  for (const [key, list] of groupsMap.entries()) {
+    if (list.length >= 2) {
+      const first = list[0];
+      const second = list[1];
+      const isExactUtr = Boolean(first.utr && second.utr && first.utr === second.utr);
+      const sameMerchant = Boolean(first.merchant && second.merchant && first.merchant.toLowerCase() === second.merchant.toLowerCase());
+      const sameInstrument = Boolean((first.account_id && first.account_id === second.account_id) || (first.card_id && first.card_id === second.card_id));
+
+      duplicateGroups.push({
+        key,
+        date: first.date,
+        amount: first.amount,
+        match_type: isExactUtr ? 'exact-utr' : (sameMerchant || sameInstrument ? 'high-confidence' : 'date-amount'),
+        match_score: isExactUtr ? 100 : (sameMerchant && sameInstrument ? 90 : (sameMerchant ? 80 : 65)),
+        transactions: list,
+      });
+    }
+  }
+
+  return {
+    status: 'success',
+    count: duplicateGroups.length,
+    total_duplicate_txns: duplicateGroups.reduce((acc, g) => acc + g.transactions.length, 0),
+    groups: duplicateGroups,
+  };
+}
+
+function mergeLedgerTransactions(db, args = {}) {
+  const primaryId = Number(args.primary_id || args.target_id);
+  const secondaryId = Number(args.secondary_id || args.source_id);
+  if (!primaryId || !secondaryId || primaryId === secondaryId) {
+    return fail('BAD_REQUEST', 'Two distinct transaction IDs required to merge.');
+  }
+
+  const primary = db.get('SELECT * FROM transactions WHERE id = ?', [primaryId]);
+  const secondary = db.get('SELECT * FROM transactions WHERE id = ?', [secondaryId]);
+  if (!primary || !secondary) {
+    return fail('BAD_REQUEST', 'One or both transactions no longer exist.');
+  }
+
+  const mergedMerchant = String(args.merchant !== undefined ? args.merchant : (primary.merchant || secondary.merchant || '')).trim();
+  const mergedCategory = String(args.category !== undefined ? args.category : (primary.category || secondary.category || 'Shopping')).trim();
+  const mergedType = String(args.type || primary.type || secondary.type || 'Expense');
+  const mergedDesc = String(args.description !== undefined ? args.description : (primary.description || secondary.description || '')).trim();
+  const mergedAccountId = args.account_id !== undefined ? (args.account_id ? Number(args.account_id) : null) : (primary.account_id || secondary.account_id);
+  const mergedCardId = args.card_id !== undefined ? (args.card_id ? Number(args.card_id) : null) : (primary.card_id || secondary.card_id);
+  const isInvest = mergedType === 'Investment' || mergedCategory === 'Investment Outflow' ? 1 : 0;
+
+  db.transaction(() => {
+    db.run(
+      'UPDATE transactions SET merchant = ?, merchant_key = ?, category = ?, type = ?,'
+      + ' description = ?, account_id = ?, card_id = ?, is_investment_outflow = ? WHERE id = ?',
+      [mergedMerchant, merchantKey(mergedMerchant), mergedCategory, mergedType, mergedDesc, mergedAccountId, mergedCardId, isInvest, primaryId],
+    );
+    // Mark secondary transaction as duplicate
+    db.run('UPDATE transactions SET is_duplicate = 1 WHERE id = ?', [secondaryId]);
+    if (secondary.raw_sms) {
+      db.run('INSERT OR REPLACE INTO ignored_alerts (body, ignored_at) VALUES (?, ?)',
+        [secondary.raw_sms, new Date().toISOString()]);
+    }
+  });
+
+  return { status: 'success', primary_id: primaryId, secondary_id: secondaryId, is_merged: true };
 }
 
 function batchUpdateTransactions(db, args) {
@@ -3149,6 +3371,244 @@ function extractCreditLimits(text) {
 }
 
 /**
+ * Extracts bank account, wallet, or food card available/clear balance from SMS alert text.
+ */
+export function extractAccountBalanceFromText(text) {
+  const t = String(text || '');
+  const balPatterns = [
+    // 1. Explicit Avl / Available / Clear / Total / Updated / Effective / Net / Wallet / A/c Balance
+    /(?:avl\.?|avail(?:able)?|clear|total|updated|effective|net|wallet|acct?|a\/c)?\s*bal(?:ance)?(?:\s*in\s*(?:your\s*)?(?:a\/c|account|wallet|card|bank))?\s*(?:is)?\s*[:\s-]*\s*(?:rs\.?|inr|₹|inr\.)?\s*[:\s-]*\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:cr\.?|dr\.?)?/i,
+    // 2. Bal: Rs. 1234 or Bal: 1234 or Bal Rs 1234 or Bal INR 1234
+    /\bbal(?:ance)?\s*[:\s-]+\s*(?:rs\.?|inr|₹)?\s*[:\s-]*\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:cr\.?|dr\.?)?/i,
+    // 3. Currency followed by is Avl Bal
+    /(?:rs\.?|inr|₹)\s*[:\s-]*\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:is\s*)?(?:avl\.?|available|clear|total|updated|current)?\s*bal(?:ance)?/i,
+    // 4. Standalone Balance is / Balance:
+    /\bbalance\s*(?:is)?\s*[:\s-]+\s*(?:rs\.?|inr|₹)?\s*([0-9,]+(?:\.[0-9]+)?)/i,
+    // 5. Account Balance Rs 1234
+    /(?:account|a\/c)\s+bal(?:ance)?\s*[:\s-]*\s*(?:rs\.?|inr|₹)?\s*([0-9,]+(?:\.[0-9]+)?)/i,
+  ];
+
+  for (const pat of balPatterns) {
+    const m = pat.exec(t);
+    if (m && m[1]) {
+      const clean = m[1].replace(/,/g, '').replace(/\/[- ]*$/, '').trim();
+      const val = Number(clean);
+      if (Number.isFinite(val) && val >= 0) {
+        return val;
+      }
+    }
+  }
+  return null;
+}
+
+function isValid4Digits(d, text) {
+  if (!d || d.length !== 4 || !/^\d{4}$/.test(d)) return false;
+  const num = Number(d);
+  // Exclude calendar years (2020-2035) when found in date context
+  if (num >= 2020 && num <= 2035) {
+    if (new RegExp(`(?:[-/]|\\b(?:on|dt|dated|in|year)\\s+)${d}\\b`, 'i').test(text)) {
+      return false;
+    }
+  }
+  // Exclude numbers directly preceded by currency indicators (amounts like Rs 1200, INR 5000, Rs. 2500)
+  if (new RegExp(`(?:rs\\.?|inr|₹)\\s*[:\\s-]*${d}(?:\\b|\\.)`, 'i').test(text)) {
+    return false;
+  }
+  // Exclude reference / OTP / UTR / Auth numbers
+  if (new RegExp(`\\b(?:otp|ref|utr|rrn|txn|id|code|pin|vpa)\\b[^.]*?${d}\\b`, 'i').test(text)) {
+    return false;
+  }
+  return true;
+}
+
+const KNOWN_INSTITUTIONS = [
+  { issuer: 'HDFC Bank', code: 'HDFC', aliases: [/\bhdfc bank\b/i, /\bhdfc\b/i], senderRe: /hdfc/i },
+  { issuer: 'ICICI Bank', code: 'ICICI', aliases: [/\bicici bank\b/i, /\bicici\b/i], senderRe: /icici/i },
+  { issuer: 'State Bank of India', code: 'SBI', aliases: [/\bstate bank\b/i, /\bsbi card\b/i, /\bsbi\b/i], senderRe: /sbi/i },
+  { issuer: 'Axis Bank', code: 'AXIS', aliases: [/\baxis bank\b/i, /\baxis\b/i], senderRe: /axis/i },
+  { issuer: 'Kotak Mahindra Bank', code: 'KOTAK', aliases: [/\bkotak mahindra\b/i, /\bkotak bank\b/i, /\bkotak\b/i], senderRe: /kotak/i },
+  { issuer: 'IndusInd Bank', code: 'INDUSIND', aliases: [/\bindusind bank\b/i, /\bindusind\b/i], senderRe: /indus/i },
+  { issuer: 'IDFC FIRST Bank', code: 'IDFC', aliases: [/\bidfc first\b/i, /\bidfc bank\b/i, /\bidfc\b/i], senderRe: /idfc/i },
+  { issuer: 'RBL Bank', code: 'RBL', aliases: [/\brbl bank\b/i, /\brbl\b/i, /\bratnakar\b/i], senderRe: /rbl/i },
+  { issuer: 'DCB Bank', code: 'DCB', aliases: [/\bdcb bank\b/i, /\bdcb\b/i], senderRe: /dcb/i },
+  { issuer: 'American Express', code: 'AMEX', aliases: [/\bamerican express\b/i, /\bamex\b/i], senderRe: /amex/i },
+  { issuer: 'Standard Chartered Bank', code: 'SCB', aliases: [/\bstandard chartered\b/i, /\bstanchart\b/i, /\bscb\b/i], senderRe: /scb|stanchar/i },
+  { issuer: 'Citibank', code: 'CITI', aliases: [/\bcitibank\b/i, /\bciti\b/i], senderRe: /citi/i },
+  { issuer: 'HSBC Bank', code: 'HSBC', aliases: [/\bhsbc bank\b/i, /\bhsbc\b/i], senderRe: /hsbc/i },
+  { issuer: 'Federal Bank', code: 'FED', aliases: [/\bfederal bank\b/i, /\bfederal\b/i], senderRe: /fed/i },
+  { issuer: 'Bank of Baroda', code: 'BOB', aliases: [/\bbank of baroda\b/i, /\bbaroda bank\b/i, /\bbob\b/i], senderRe: /bob/i },
+  { issuer: 'Punjab National Bank', code: 'PNB', aliases: [/\bpunjab national\b/i, /\bpnb\b/i], senderRe: /pnb/i },
+  { issuer: 'Canara Bank', code: 'CANARA', aliases: [/\bcanara bank\b/i, /\bcanara\b/i], senderRe: /canara|canbnk/i },
+  { issuer: 'Union Bank of India', code: 'UBI', aliases: [/\bunion bank\b/i, /\bubi\b/i], senderRe: /unionb|ubi/i },
+  { issuer: 'Central Bank of India', code: 'CBI', aliases: [/\bcentral bank\b/i, /\bcbi\b/i], senderRe: /cbi/i },
+  { issuer: 'Bank of India', code: 'BOI', aliases: [/\bbank of india\b/i, /\bboi\b/i], senderRe: /boi/i },
+  { issuer: 'Indian Bank', code: 'INDIAN', aliases: [/\bindian bank\b/i], senderRe: /indianb/i },
+  { issuer: 'Indian Overseas Bank', code: 'IOB', aliases: [/\bindian overseas bank\b/i, /\biob\b/i], senderRe: /iob/i },
+  { issuer: 'UCO Bank', code: 'UCO', aliases: [/\buco bank\b/i, /\buco\b/i], senderRe: /uco/i },
+  { issuer: 'Bank of Maharashtra', code: 'BOM', aliases: [/\bbank of maharashtra\b/i, /\bbom\b/i], senderRe: /bom/i },
+  { issuer: 'Punjab & Sind Bank', code: 'PSB', aliases: [/\bpunjab & sind\b/i, /\bpunjab and sind\b/i, /\bpsb\b/i], senderRe: /psb/i },
+  { issuer: 'Karur Vysya Bank', code: 'KVB', aliases: [/\bkarur vysya\b/i, /\bkvb\b/i], senderRe: /kvb/i },
+  { issuer: 'Karnataka Bank', code: 'KTK', aliases: [/\bkarnataka bank\b/i, /\bktk\b/i], senderRe: /ktk/i },
+  { issuer: 'J&K Bank', code: 'JKB', aliases: [/\bjammu & kashmir\b/i, /\bj&k bank\b/i, /\bjk bank\b/i], senderRe: /jkb/i },
+  { issuer: 'Yes Bank', code: 'YES', aliases: [/\byes bank\b/i, /\byes\b/i], senderRe: /yes/i },
+  { issuer: 'South Indian Bank', code: 'SIB', aliases: [/\bsouth indian bank\b/i, /\bsib\b/i], senderRe: /sib/i },
+  { issuer: 'Bandhan Bank', code: 'BANDHAN', aliases: [/\bbandhan bank\b/i, /\bbandhan\b/i], senderRe: /bandhan/i },
+  { issuer: 'City Union Bank', code: 'CUB', aliases: [/\bcity union bank\b/i, /\bcub\b/i], senderRe: /cub/i },
+  { issuer: 'AU Small Finance Bank', code: 'AU', aliases: [/\bau small finance\b/i, /\bau bank\b/i, /\bau sfb\b/i], senderRe: /aubank|au/i },
+  { issuer: 'Equitas Small Finance Bank', code: 'EQUITAS', aliases: [/\bequitas\b/i], senderRe: /equitas/i },
+  { issuer: 'Ujjivan Small Finance Bank', code: 'UJJIVAN', aliases: [/\bujjivan\b/i], senderRe: /ujjivan/i },
+  { issuer: 'Jana Small Finance Bank', code: 'JANA', aliases: [/\bjana sfb\b/i, /\bjana\b/i], senderRe: /jana/i },
+  { issuer: 'Deutsche Bank', code: 'DB', aliases: [/\bdeutsche bank\b/i, /\bdeutsche\b/i], senderRe: /deutsche/i },
+  { issuer: 'DBS Bank', code: 'DBS', aliases: [/\bdbs bank\b/i, /\bdbs\b/i], senderRe: /dbs/i },
+  { issuer: 'Barclays', code: 'BARCLAYS', aliases: [/\bbarclays\b/i], senderRe: /barclays/i },
+  { issuer: 'OneCard', code: 'ONECARD', aliases: [/\bonecard\b/i], senderRe: /onecard|onecrd/i },
+  { issuer: 'Scapia', code: 'SCAPIA', aliases: [/\bscapia\b/i], senderRe: /scapia/i },
+  { issuer: 'Slice', code: 'SLICE', aliases: [/\bslice\b/i], senderRe: /slice/i },
+  { issuer: 'Airtel Payments Bank', code: 'AIRTEL', aliases: [/\bairtel payments\b/i, /\bairtel bank\b/i], senderRe: /airtel/i },
+  { issuer: 'India Post Payments Bank', code: 'IPPB', aliases: [/\bindia post\b/i, /\bippb\b/i], senderRe: /ippb/i },
+  { issuer: 'Fino Payments Bank', code: 'FINO', aliases: [/\bfino\b/i], senderRe: /fino/i },
+  { issuer: 'Jio Payments Bank', code: 'JIO', aliases: [/\bjio payments\b/i], senderRe: /jio/i },
+  { issuer: 'Pluxee', code: 'PLUXEE', aliases: [/\bpluxee\b/i], senderRe: /pluxee/i },
+  { issuer: 'Sodexo', code: 'SODEXO', aliases: [/\bsodexo\b/i], senderRe: /sodexo/i },
+  { issuer: 'Zeta', code: 'ZETA', aliases: [/\bzeta\b/i], senderRe: /zeta/i },
+  { issuer: 'SmartQ', code: 'SMARTQ', aliases: [/\bsmartq\b/i], senderRe: /smartq/i },
+  { issuer: 'HungerBox', code: 'HUNGERBOX', aliases: [/\bhungerbox\b/i], senderRe: /hungerbox/i },
+  { issuer: 'Amazon Pay', code: 'AMAZON', aliases: [/\bamazon pay\b/i, /\bamazon\b/i], senderRe: /amazon/i, isWalletOnly: true },
+  { issuer: 'Paytm', code: 'PAYTM', aliases: [/\bpaytm\b/i], senderRe: /paytm/i, isWalletOnly: true },
+  { issuer: 'PhonePe', code: 'PHONEPE', aliases: [/\bphonepe\b/i], senderRe: /phonepe/i, isWalletOnly: true },
+  { issuer: 'MobiKwik', code: 'MOBIKWIK', aliases: [/\bmobikwik\b/i], senderRe: /mobikwik/i, isWalletOnly: true },
+  { issuer: 'Freecharge', code: 'FREECHARGE', aliases: [/\bfreecharge\b/i], senderRe: /freecharge/i, isWalletOnly: true },
+];
+
+/**
+ * Weighted scoring engine to determine the true account-holding bank / issuer.
+ * Accounts for counterparty VPAs/handles (penalized as external parties) and direct account anchors (highly weighted).
+ */
+export function detectAccountIssuerWeighted(text = '', sender = '') {
+  const t = String(text || '');
+  const s = String(sender || '');
+  const scores = new Map();
+
+  const addScore = (inst, points) => {
+    const existing = scores.get(inst.issuer) || { score: 0, code: inst.code, issuer: inst.issuer };
+    existing.score += points;
+    scores.set(inst.issuer, existing);
+  };
+
+  const isIntermediaryContext = /it refund|income tax refund|tax refund|refund for ay|pan\s+[a-z0-9]+\s*,\s*an?\s*it\s*refund|refund banker|cpc refund|pf claim|epfo|pfms|dbt\b/i.test(t);
+
+  // 1. Direct Account / Card Anchor (+120 points)
+  // E.g. "Your DCB A/c no XX1977", "HDFC Bank A/C *1234", "ICICI Bank Credit Card ending 9012"
+  let directAnchorInst = null;
+  const anchorRegex = /(?:in|from|to|on|your|dear)?\s*\b([A-Za-z0-9\s&]+?)\s*(?:Bank)?\s*(?:A\/c|Account|Acct|Card|Debit\s*Card|Credit\s*Card|Meal\s*Card|Meal\s*Wallet|Wallet)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/gi;
+  let m;
+  while ((m = anchorRegex.exec(t)) !== null) {
+    const anchoredText = m[1].toLowerCase();
+    for (const inst of KNOWN_INSTITUTIONS) {
+      if (inst.aliases.some((al) => al.test(anchoredText))) {
+        directAnchorInst = inst;
+        addScore(inst, 120);
+      }
+    }
+  }
+
+  // 2. Sender Header Match (+100 points)
+  if (s) {
+    const isIntermediarySender = isIntermediaryContext || /itdept|cpc|epfo|pfms|dbt/i.test(s);
+    for (const inst of KNOWN_INSTITUTIONS) {
+      if (inst.senderRe && inst.senderRe.test(s)) {
+        if (!isIntermediarySender || directAnchorInst === inst) {
+          addScore(inst, 100);
+        }
+      }
+    }
+  }
+
+  // 3. Salutation / Bank Alert Header (+70 points)
+  // E.g. "Dear HDFC Bank Customer", "ICICI Bank Alert:", "Thank you for banking with State Bank of India"
+  if (!isIntermediaryContext) {
+    const salutationRegex = /(?:dear|thank you for banking with|welcome to|alert:?)\s+([A-Za-z0-9\s&]+?)\s*(?:customer|user|bank|alert)?\b/gi;
+    while ((m = salutationRegex.exec(t)) !== null) {
+      const salText = m[1].toLowerCase();
+      for (const inst of KNOWN_INSTITUTIONS) {
+        if (inst.aliases.some((al) => al.test(salText))) {
+          addScore(inst, 70);
+        }
+      }
+    }
+  }
+
+  // 3b. Trailing Sender / Gateway Signature (e.g. " - SBI", " - HDFC Bank", " - Google Pay")
+  // Trailing suffixes identify the sending gateway/channel (+40 points), subordinate to direct account anchors (+120 points).
+  // In intermediary contexts (IT Refunds, PF Claims, Government DBT), the signatory bank (e.g. SBI as Refund Banker)
+  // is merely the disbursing agent, NOT the user's account-holding bank.
+  const sigMatch = /[-–—~]\s*([A-Za-z0-9\s&]+)$/.exec(t);
+  let sigText = '';
+  if (sigMatch && sigMatch[1] && (!isIntermediaryContext || directAnchorInst)) {
+    sigText = sigMatch[1].trim().toLowerCase();
+    for (const inst of KNOWN_INSTITUTIONS) {
+      if (inst.aliases.some((al) => al.test(sigText))) {
+        addScore(inst, 40);
+      }
+    }
+  }
+
+  // 4. Standalone mentions in body (excluding trailing signature) (+30 points for banks, +10 for wallets)
+  const bodyWithoutSig = sigMatch ? t.slice(0, sigMatch.index) : t;
+  if (!isIntermediaryContext || directAnchorInst) {
+    for (const inst of KNOWN_INSTITUTIONS) {
+      for (const al of inst.aliases) {
+        if (al.test(bodyWithoutSig)) {
+          addScore(inst, inst.isWalletOnly ? 10 : 30);
+          break;
+        }
+      }
+    }
+  }
+
+  // 5. PENALTIES:
+  // Penalty A: Counterparty VPA / UPI handle (-150 points)
+  // VPA handles indicate the EXTERNAL party (e.g. 'from UPI ID aaaaa@okaxis', 'to user@okhdfcbank', 'xyz@ybl')
+  const vpaMatches = t.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+/g) || [];
+  for (const vpa of vpaMatches) {
+    const vpaLower = vpa.toLowerCase();
+    for (const inst of KNOWN_INSTITUTIONS) {
+      if (vpaLower.includes(inst.code.toLowerCase())
+        || (inst.code === 'AXIS' && vpaLower.includes('axis'))
+        || (inst.code === 'HDFC' && vpaLower.includes('hdfc'))
+        || (inst.code === 'ICICI' && vpaLower.includes('icici'))
+        || (inst.code === 'SBI' && vpaLower.includes('sbi'))
+        || (inst.code === 'YES' && vpaLower.includes('ybl'))
+        || (inst.code === 'PAYTM' && vpaLower.includes('paytm'))) {
+        addScore(inst, -150);
+      }
+    }
+  }
+
+  // Penalty B: External Payee / Merchant context (-80 points)
+  // E.g. "to Amazon Pay", "to Swiggy", "towards Amazon Pay", "paid to Ramesh on Google Pay"
+  const payeeRegex = /(?:to|towards|at|for|paid to|sent to|transferred to)\s+([A-Za-z0-9\s&@._-]+?)(?:\s+(?:on|via|using|ref|bal|from|dated)|$|\.)/gi;
+  while ((m = payeeRegex.exec(t)) !== null) {
+    const payeeText = m[1].toLowerCase();
+    for (const inst of KNOWN_INSTITUTIONS) {
+      if (inst.aliases.some((al) => al.test(payeeText))) {
+        addScore(inst, -80);
+      }
+    }
+  }
+
+  // Determine the highest scoring institution
+  let best = null;
+  for (const entry of scores.values()) {
+    if (entry.score > 0 && (!best || entry.score > best.score)) {
+      best = entry;
+    }
+  }
+
+  return best ? { issuer: best.issuer, bankCode: best.code, score: best.score } : { issuer: 'Bank', bankCode: 'BANK', score: 0 };
+}
+
+/**
  * Extracts bank account, debit card, credit card, meal card (Pluxee/Sodexo), wallet, and prepaid card details from SMS alert text.
  */
 export function parseAccountDetailsFromText(text = '', sender = '') {
@@ -3156,68 +3616,18 @@ export function parseAccountDetailsFromText(text = '', sender = '') {
   const s = String(sender || '');
   const combined = `${s} ${t}`;
 
-  // 1. Detect Institution / Issuer
-  let issuer = '';
-  let bankCode = '';
-  if (/pluxee/i.test(combined)) { issuer = 'Pluxee'; bankCode = 'PLUXEE'; }
-  else if (/sodexo/i.test(combined)) { issuer = 'Sodexo'; bankCode = 'SODEXO'; }
-  else if (/zeta/i.test(combined)) { issuer = 'Zeta'; bankCode = 'ZETA'; }
-  else if (/smartq/i.test(combined)) { issuer = 'SmartQ'; bankCode = 'SMARTQ'; }
-  else if (/hungerbox/i.test(combined)) { issuer = 'HungerBox'; bankCode = 'HUNGERBOX'; }
-  else if (/paytm/i.test(combined)) { issuer = 'Paytm'; bankCode = 'PAYTM'; }
-  else if (/amazon pay|amazon/i.test(combined) && /wallet|balance|pay/i.test(combined)) { issuer = 'Amazon Pay'; bankCode = 'AMAZON'; }
-  else if (/phonepe/i.test(combined)) { issuer = 'PhonePe'; bankCode = 'PHONEPE'; }
-  else if (/mobikwik/i.test(combined)) { issuer = 'MobiKwik'; bankCode = 'MOBIKWIK'; }
-  else if (/hdfc/i.test(combined)) { issuer = 'HDFC Bank'; bankCode = 'HDFC'; }
-  else if (/icici/i.test(combined)) { issuer = 'ICICI Bank'; bankCode = 'ICICI'; }
-  else if (/\bsbi\b|state bank/i.test(combined)) { issuer = 'State Bank of India'; bankCode = 'SBI'; }
-  else if (/axis/i.test(combined)) { issuer = 'Axis Bank'; bankCode = 'AXIS'; }
-  else if (/kotak/i.test(combined)) { issuer = 'Kotak Mahindra Bank'; bankCode = 'KOTAK'; }
-  else if (/indusind/i.test(combined)) { issuer = 'IndusInd Bank'; bankCode = 'INDUSIND'; }
-  else if (/idfc/i.test(combined)) { issuer = 'IDFC FIRST Bank'; bankCode = 'IDFC'; }
-  else if (/rbl/i.test(combined)) { issuer = 'RBL Bank'; bankCode = 'RBL'; }
-  else if (/amex|american express/i.test(combined)) { issuer = 'American Express'; bankCode = 'AMEX'; }
-  else if (/standard chartered|stanchart|\bscb\b/i.test(combined)) { issuer = 'Standard Chartered Bank'; bankCode = 'SCB'; }
-  else if (/citi|citibank/i.test(combined)) { issuer = 'Citibank'; bankCode = 'CITI'; }
-  else if (/hsbc/i.test(combined)) { issuer = 'HSBC Bank'; bankCode = 'HSBC'; }
-  else if (/deutsche bank|\bdeutsche\b/i.test(combined)) { issuer = 'Deutsche Bank'; bankCode = 'DB'; }
-  else if (/dbs bank|\bdbs\b/i.test(combined)) { issuer = 'DBS Bank'; bankCode = 'DBS'; }
-  else if (/barclays/i.test(combined)) { issuer = 'Barclays'; bankCode = 'BARCLAYS'; }
-  else if (/au small finance|au bank|\bau\b/i.test(combined)) { issuer = 'AU Small Finance Bank'; bankCode = 'AU'; }
-  else if (/equitas/i.test(combined)) { issuer = 'Equitas Small Finance Bank'; bankCode = 'EQUITAS'; }
-  else if (/ujjivan/i.test(combined)) { issuer = 'Ujjivan Small Finance Bank'; bankCode = 'UJJIVAN'; }
-  else if (/jana small finance|jana sfb/i.test(combined)) { issuer = 'Jana Small Finance Bank'; bankCode = 'JANA'; }
-  else if (/federal bank|\bfederal\b/i.test(combined)) { issuer = 'Federal Bank'; bankCode = 'FED'; }
-  else if (/south indian bank|\bsib\b/i.test(combined)) { issuer = 'South Indian Bank'; bankCode = 'SIB'; }
-  else if (/bandhan bank|\bbandhan\b/i.test(combined)) { issuer = 'Bandhan Bank'; bankCode = 'BANDHAN'; }
-  else if (/bank of baroda|\bbob\b/i.test(combined)) { issuer = 'Bank of Baroda'; bankCode = 'BOB'; }
-  else if (/pnb|punjab national/i.test(combined)) { issuer = 'Punjab National Bank'; bankCode = 'PNB'; }
-  else if (/city union bank|\bcub\b/i.test(combined)) { issuer = 'City Union Bank'; bankCode = 'CUB'; }
-  else if (/union bank/i.test(combined)) { issuer = 'Union Bank of India'; bankCode = 'UBI'; }
-  else if (/central bank of india|\bcentral bank\b/i.test(combined)) { issuer = 'Central Bank of India'; bankCode = 'CBI'; }
-  else if (/bank of india|\bboi\b/i.test(combined)) { issuer = 'Bank of India'; bankCode = 'BOI'; }
-  else if (/indian bank/i.test(combined)) { issuer = 'Indian Bank'; bankCode = 'INDIAN'; }
-  else if (/indian overseas bank|\biob\b/i.test(combined)) { issuer = 'Indian Overseas Bank'; bankCode = 'IOB'; }
-  else if (/uco bank|\buco\b/i.test(combined)) { issuer = 'UCO Bank'; bankCode = 'UCO'; }
-  else if (/bank of maharashtra|\bbom\b/i.test(combined)) { issuer = 'Bank of Maharashtra'; bankCode = 'BOM'; }
-  else if (/punjab & sind|punjab and sind|\bpsb\b/i.test(combined)) { issuer = 'Punjab & Sind Bank'; bankCode = 'PSB'; }
-  else if (/karur vysya|\bkvb\b/i.test(combined)) { issuer = 'Karur Vysya Bank'; bankCode = 'KVB'; }
-  else if (/karnataka bank/i.test(combined)) { issuer = 'Karnataka Bank'; bankCode = 'KTK'; }
-  else if (/dcb bank|\bdcb\b/i.test(combined)) { issuer = 'DCB Bank'; bankCode = 'DCB'; }
-  else if (/jammu & kashmir|j&k bank|\bjk bank\b/i.test(combined)) { issuer = 'J&K Bank'; bankCode = 'JKB'; }
-  else if (/yes bank/i.test(combined)) { issuer = 'Yes Bank'; bankCode = 'YES'; }
-  else if (/onecard/i.test(combined)) { issuer = 'OneCard'; bankCode = 'ONECARD'; }
-  else if (/scapia/i.test(combined)) { issuer = 'Scapia'; bankCode = 'SCAPIA'; }
-  else if (/slice/i.test(combined)) { issuer = 'Slice'; bankCode = 'SLICE'; }
-  else if (/airtel/i.test(combined)) { issuer = 'Airtel Payments Bank'; bankCode = 'AIRTEL'; }
-  else if (/india post|ippb/i.test(combined)) { issuer = 'India Post Payments Bank'; bankCode = 'IPPB'; }
-  else if (/fino/i.test(combined)) { issuer = 'Fino Payments Bank'; bankCode = 'FINO'; }
-  else if (/jio payments/i.test(combined)) { issuer = 'Jio Payments Bank'; bankCode = 'JIO'; }
-  else { issuer = 'Bank'; bankCode = 'BANK'; }
+  // 1. Detect Institution / Issuer using Weighted Scoring Engine
+  const detected = detectAccountIssuerWeighted(t, s);
+  const issuer = detected.issuer;
+  const bankCode = detected.bankCode;
 
   // 2. Specific Instrument Detection
   const isFoodCard = /pluxee|sodexo|zeta|smartq|hungerbox|meal card|food card|meal wallet|food wallet/i.test(combined);
-  const isWallet = !isFoodCard && /paytm wallet|amazon pay wallet|mobikwik|phonepe wallet|freecharge|ola money|wallet ending|debited from wallet|credited to wallet|wallet balance/i.test(combined);
+  const isWallet = !isFoodCard && (
+    /paytm wallet|amazon pay (?:wallet|balance)|mobikwik (?:wallet|zip)|phonepe wallet|freecharge (?:wallet|balance)|ola money|wallet ending|debited from (?:your )?wallet|credited to (?:your )?wallet|wallet balance/i.test(combined)
+    || (issuer === 'Amazon Pay' && /balance|wallet/i.test(combined))
+    || (issuer === 'Paytm' && /wallet/i.test(combined))
+  );
   const isPrepaidCard = !isFoodCard && !isWallet && /prepaid card|prepaid wallet|ncmc card|travel card|forex card|gift card|prepaid card ending/i.test(combined);
 
   // Debit card check: explicit debit card mentions MUST NOT become credit cards
@@ -3239,25 +3649,24 @@ export function parseAccountDetailsFromText(text = '', sender = '') {
   let creditCardLast4 = '';
   let generalLast4 = '';
 
-  const acctMatch = /(?:a\/c|acct|account)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s]*([0-9]{4})\b/i.exec(t);
-  if (acctMatch && acctMatch[1]) accountLast4 = acctMatch[1];
+  const acctMatch = /(?:a\/c|acct|account)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/i.exec(t);
+  if (acctMatch && acctMatch[1] && isValid4Digits(acctMatch[1], t)) accountLast4 = acctMatch[1];
 
-  const dcMatch = /(?:debit\s*card|dc)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s]*([0-9]{4})\b/i.exec(t);
-  if (dcMatch && dcMatch[1]) debitCardLast4 = dcMatch[1];
+  const dcMatch = /(?:debit\s*card|dc)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/i.exec(t);
+  if (dcMatch && dcMatch[1] && isValid4Digits(dcMatch[1], t)) debitCardLast4 = dcMatch[1];
 
-  const ccMatch = /(?:credit\s*card|cc)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s]*([0-9]{4})\b/i.exec(t);
-  if (ccMatch && ccMatch[1]) creditCardLast4 = ccMatch[1];
+  const ccMatch = /(?:credit\s*card|cc)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/i.exec(t);
+  if (ccMatch && ccMatch[1] && isValid4Digits(ccMatch[1], t)) creditCardLast4 = ccMatch[1];
 
   const generalPatterns = [
-    /(?:card|wallet|vpa)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s]*([0-9]{4})\b/i,
-    /(?:ending(?:\s*(?:in|with))?|ending)\s*[*Xx#\s]*([0-9]{4})\b/i,
-    /(?:xx|[*#]{2,})\s*([0-9]{4})\b/i,
-    /\b([0-9]{4})\s*(?:is your a\/c|debited|credited)/i,
+    /(?:card|wallet)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/i,
+    /\bending(?:\s*(?:in|with))?\s*[*Xx#\s.]*([0-9]{4})\b/i,
+    /(?:xx|[*#]{2,}|\.{2,})\s*([0-9]{4})\b/i,
     /(?:card|a\/c)\s+([0-9]{4})\b/i,
   ];
   for (const pat of generalPatterns) {
     const m = pat.exec(t);
-    if (m && m[1]) {
+    if (m && m[1] && isValid4Digits(m[1], t)) {
       generalLast4 = m[1];
       break;
     }
@@ -3306,6 +3715,7 @@ export function parseAccountDetailsFromText(text = '', sender = '') {
   else if (isCreditCard) instrumentType = 'credit_card';
 
   const limits = extractCreditLimits(t);
+  const accountBalance = extractAccountBalanceFromText(t);
 
   return {
     last4: primaryLast4,
@@ -3325,6 +3735,7 @@ export function parseAccountDetailsFromText(text = '', sender = '') {
     total_limit: limits.total_limit,
     current_outstanding: limits.current_outstanding,
     min_due: limits.min_due,
+    account_balance: accountBalance,
   };
 }
 
@@ -3334,6 +3745,8 @@ export function parseAccountDetailsFromText(text = '', sender = '') {
 export function resolveAccountAndCardFromSms(db, text = '', sender = '', { memberId = null, cachedAccounts = null, cachedCards = null } = {}) {
   const info = parseAccountDetailsFromText(text, sender);
   const last4 = info.last4 || '';
+  const dcLast4 = info.debit_card_last_4 || '';
+  const acctLast4 = info.account_number || '';
   const issuer = info.issuer || '';
   const [clause, params] = memberClause(memberId, 'WHERE');
 
@@ -3359,8 +3772,16 @@ export function resolveAccountAndCardFromSms(db, text = '', sender = '', { membe
       matchedCardId = matchedCard.id;
     }
   } else {
-    if (last4) {
-      matchedAccount = existingAccounts.find((a) => (a.debit_card_last_4 && a.debit_card_last_4.endsWith(last4))
+    // Bank account or Debit card or Wallet/Meal Card
+    if (dcLast4) {
+      matchedAccount = existingAccounts.find((a) => a.debit_card_last_4 && a.debit_card_last_4.endsWith(dcLast4));
+    }
+    if (!matchedAccount && acctLast4) {
+      matchedAccount = existingAccounts.find((a) => a.account_number && a.account_number.endsWith(acctLast4));
+    }
+    if (!matchedAccount && last4) {
+      matchedAccount = existingAccounts.find((a) =>
+        (a.debit_card_last_4 && a.debit_card_last_4.endsWith(last4))
         || (a.account_number && a.account_number.endsWith(last4))
         || (a.name && a.name.includes(last4)));
     }
@@ -3374,7 +3795,7 @@ export function resolveAccountAndCardFromSms(db, text = '', sender = '', { membe
     }
     if (matchedAccount) {
       matchedAccountId = matchedAccount.id;
-    } else if (last4) {
+    } else if (last4 && !info.isDebitCard && !info.isBankAccount) {
       // Fallback: check if last4 matches a credit card
       matchedCard = existingCards.find((c) => c.last_4 && c.last_4.endsWith(last4));
       if (matchedCard) matchedCardId = matchedCard.id;
@@ -3388,6 +3809,34 @@ export function resolveAccountAndCardFromSms(db, text = '', sender = '', { membe
     card: matchedCard,
     info,
   };
+}
+
+/**
+ * Automatically updates bank account or wallet balances from SMS text.
+ */
+export function autoUpdateAccountFromSms(db, text = '', sender = '', matchedAccountId = null) {
+  const info = parseAccountDetailsFromText(text, sender);
+  let accountId = matchedAccountId;
+  if (!accountId) {
+    const res = resolveAccountAndCardFromSms(db, text, sender);
+    accountId = res.account_id;
+  }
+  if (!accountId) return null;
+
+  const account = db.get('SELECT id, balance FROM asset_accounts WHERE id = ?', [accountId]);
+  if (!account) return null;
+
+  if (info.account_balance !== null && info.account_balance !== undefined && info.account_balance >= 0) {
+    db.run(
+      'UPDATE asset_accounts SET balance = ?, updated_at = ? WHERE id = ?',
+      [info.account_balance, new Date().toISOString(), accountId],
+    );
+    return {
+      account_id: accountId,
+      balance: info.account_balance,
+    };
+  }
+  return null;
 }
 
 /**
@@ -3433,7 +3882,7 @@ export function autoUpdateCreditCardFromSms(db, text = '', sender = '', matchedC
 }
 
 export function discoverAccountsFromSms(db) {
-  const transactions = db.all("SELECT raw_sms, type, amount, date FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != ''");
+  const transactions = db.all("SELECT raw_sms, type, amount, date, id FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' ORDER BY date DESC, id DESC");
   const existingAccounts = db.all('SELECT id, name, category, institution, account_number, debit_card_last_4 FROM asset_accounts');
   const existingCards = db.all('SELECT id, card_name, bank, last_4 FROM credit_cards');
 
@@ -3445,14 +3894,36 @@ export function discoverAccountsFromSms(db) {
     if (r.last_4) ignoredSet.add(String(r.last_4).trim().toLowerCase());
   }
 
-  // Pre-collect existing last_4 digits so existing accounts/cards are never re-discovered
-  const existingLast4Set = new Set();
+  // Pre-collect existing last_4 digits across both cards and accounts
+  const extractDigits4 = (str) => {
+    if (!str) return '';
+    const digits = String(str).replace(/\D/g, '');
+    return digits.length >= 4 ? digits.slice(-4).toLowerCase() : '';
+  };
+
+  const existingCardLast4Set = new Set();
+  const existingAccountLast4Set = new Set();
+  const existingDebitCardLast4Set = new Set();
+  const existingAllLast4Set = new Set();
+
   for (const c of existingCards) {
-    if (c.last_4) existingLast4Set.add(String(c.last_4).trim().slice(-4).toLowerCase());
+    const d = extractDigits4(c.last_4) || extractDigits4(c.card_name);
+    if (d) {
+      existingCardLast4Set.add(d);
+      existingAllLast4Set.add(d);
+    }
   }
   for (const a of existingAccounts) {
-    if (a.account_number) existingLast4Set.add(String(a.account_number).trim().slice(-4).toLowerCase());
-    if (a.debit_card_last_4) existingLast4Set.add(String(a.debit_card_last_4).trim().slice(-4).toLowerCase());
+    const acctD = extractDigits4(a.account_number) || extractDigits4(a.name);
+    if (acctD) {
+      existingAccountLast4Set.add(acctD);
+      existingAllLast4Set.add(acctD);
+    }
+    const dcD = extractDigits4(a.debit_card_last_4);
+    if (dcD) {
+      existingDebitCardLast4Set.add(dcD);
+      existingAllLast4Set.add(dcD);
+    }
   }
 
   const discovered = [];
@@ -3461,14 +3932,20 @@ export function discoverAccountsFromSms(db) {
   for (const m of transactions) {
     const text = m.raw_sms || '';
     const info = parseAccountDetailsFromText(text);
-    if (!info.last4 && !info.isFoodCard && !info.isWallet && !info.cardVariant) continue;
+    if (!info.last4 && !info.isFoodCard && !info.isWallet) continue;
 
-    const last4 = info.last4 || 'Card';
+    // Filter out invalid/generic issuers or payees
+    if (info.issuer === 'Bank' && !info.last4) continue;
+    if ((info.issuer === 'Amazon Pay' || info.issuer === 'PhonePe' || info.issuer === 'Google Pay' || info.issuer === 'Paytm') && info.instrument_type === 'bank_account') {
+      continue;
+    }
+
+    const last4 = info.last4 || (info.isFoodCard ? 'Meal Card' : 'Wallet');
     const key = `${info.instrument_type}:${info.issuer}:${last4}`.toLowerCase();
 
     if (ignoredSet.has(key)
       || ignoredSet.has(`${info.issuer}:${last4}`.toLowerCase())
-      || (last4 !== 'Card' && (ignoredSet.has(last4.toLowerCase()) || existingLast4Set.has(last4.toLowerCase())))) {
+      || (last4.length === 4 && (ignoredSet.has(last4.toLowerCase()) || existingAllLast4Set.has(last4.toLowerCase())))) {
       continue;
     }
 
@@ -3484,12 +3961,20 @@ export function discoverAccountsFromSms(db) {
         total_limit: info.total_limit || 0,
         available_limit: info.available_limit,
         current_balance: info.current_outstanding || 0,
+        balance: info.account_balance || 0,
+        last_balance_date: (info.account_balance !== null && info.account_balance !== undefined) ? (m.date || '') : '',
         last_seen: m.date || '',
         sample_sms: text.trim(),
       };
       map.set(key, entry);
     }
 
+    if (info.account_balance !== null && info.account_balance !== undefined && info.account_balance >= 0) {
+      if (!entry.balance || !entry.last_balance_date || (m.date && m.date >= entry.last_balance_date)) {
+        entry.balance = info.account_balance;
+        entry.last_balance_date = m.date || '';
+      }
+    }
     if (info.available_limit !== null && info.available_limit !== undefined) {
       entry.available_limit = info.available_limit;
     }
@@ -3518,15 +4003,17 @@ export function discoverAccountsFromSms(db) {
 
     if (ignoredSet.has(`${instrument_type}:${info.issuer}:${last4}`.toLowerCase())
       || ignoredSet.has(`${info.issuer}:${last4}`.toLowerCase())
-      || (last4 !== 'Card' && (ignoredSet.has(last4.toLowerCase()) || existingLast4Set.has(last4.toLowerCase())))) {
+      || (last4.length === 4 && (ignoredSet.has(last4.toLowerCase()) || existingAllLast4Set.has(last4.toLowerCase())))) {
       continue;
     }
 
     if (instrument_type === 'debit_card') {
-      const alreadyHas = existingAccounts.some((a) =>
-        (a.debit_card_last_4 && a.debit_card_last_4.endsWith(last4))
-        || (a.account_number && a.account_number.endsWith(last4))
-        || (a.name && a.name.includes(last4)));
+      const alreadyHas = existingDebitCardLast4Set.has(last4)
+        || existingCardLast4Set.has(last4)
+        || existingAccounts.some((a) =>
+          (a.debit_card_last_4 && a.debit_card_last_4.endsWith(last4))
+          || (a.account_number && a.account_number.endsWith(last4))
+          || (a.name && a.name.includes(last4)));
       if (!alreadyHas) {
         discovered.push({
           kind: 'account',
@@ -3541,7 +4028,7 @@ export function discoverAccountsFromSms(db) {
           debit_card_last_4: last4,
           last_4: last4,
           suggested_name: `${info.issuer} Debit Card (${last4})`,
-          balance: 0,
+          balance: entry.balance || 0,
           txn_count: entry.txn_count,
           total_spent: Math.round(entry.total_spent * 100) / 100,
           total_received: Math.round(entry.total_received * 100) / 100,
@@ -3561,11 +4048,11 @@ export function discoverAccountsFromSms(db) {
           account_type: 'Meal Card',
           instrument_type: 'meal_card',
           institution: info.issuer,
-          name: `${info.issuer} ${info.cardVariant || 'Meal Card'}${last4 !== 'Card' ? ` (${last4})` : ''}`,
-          account_number: last4 !== 'Card' ? last4 : '',
+          name: `${info.issuer} ${info.cardVariant || 'Meal Card'}${last4 !== 'Card' && last4 !== 'Meal Card' ? ` (${last4})` : ''}`,
+          account_number: last4 !== 'Card' && last4 !== 'Meal Card' ? last4 : '',
           last_4: last4,
-          suggested_name: `${info.issuer} ${info.cardVariant || 'Meal Card'}${last4 !== 'Card' ? ` (${last4})` : ''}`,
-          balance: 0,
+          suggested_name: `${info.issuer} ${info.cardVariant || 'Meal Card'}${last4 !== 'Card' && last4 !== 'Meal Card' ? ` (${last4})` : ''}`,
+          balance: entry.balance || 0,
           txn_count: entry.txn_count,
           total_spent: Math.round(entry.total_spent * 100) / 100,
           total_received: Math.round(entry.total_received * 100) / 100,
@@ -3584,11 +4071,11 @@ export function discoverAccountsFromSms(db) {
           account_type: 'Wallet',
           instrument_type: 'wallet',
           institution: info.issuer,
-          name: `${info.issuer} Wallet${last4 !== 'Card' ? ` (${last4})` : ''}`,
-          account_number: last4 !== 'Card' ? last4 : '',
+          name: `${info.issuer} Wallet${last4 !== 'Card' && last4 !== 'Wallet' ? ` (${last4})` : ''}`,
+          account_number: last4 !== 'Card' && last4 !== 'Wallet' ? last4 : '',
           last_4: last4,
-          suggested_name: `${info.issuer} Wallet${last4 !== 'Card' ? ` (${last4})` : ''}`,
-          balance: 0,
+          suggested_name: `${info.issuer} Wallet${last4 !== 'Card' && last4 !== 'Wallet' ? ` (${last4})` : ''}`,
+          balance: entry.balance || 0,
           txn_count: entry.txn_count,
           total_spent: Math.round(entry.total_spent * 100) / 100,
           total_received: Math.round(entry.total_received * 100) / 100,
@@ -3611,7 +4098,7 @@ export function discoverAccountsFromSms(db) {
           account_number: last4 !== 'Card' ? last4 : '',
           last_4: last4,
           suggested_name: `${info.issuer} Prepaid Card (${last4})`,
-          balance: 0,
+          balance: entry.balance || 0,
           txn_count: entry.txn_count,
           total_spent: Math.round(entry.total_spent * 100) / 100,
           total_received: Math.round(entry.total_received * 100) / 100,
@@ -3620,9 +4107,11 @@ export function discoverAccountsFromSms(db) {
         });
       }
     } else if (instrument_type === 'credit_card') {
-      const alreadyHas = existingCards.some((c) =>
-        (c.last_4 && c.last_4.endsWith(last4))
-        || (c.card_name && c.card_name.includes(last4)));
+      const alreadyHas = existingCardLast4Set.has(last4)
+        || existingDebitCardLast4Set.has(last4)
+        || existingCards.some((c) =>
+          (c.last_4 && c.last_4.endsWith(last4))
+          || (c.card_name && c.card_name.includes(last4)));
       if (!alreadyHas) {
         const displayName = info.cardVariant ? `${info.issuer} ${info.cardVariant}` : `${info.issuer} Credit Card`;
         const discoveredTotalLimit = entry.total_limit || info.total_limit || 0;
@@ -3650,9 +4139,12 @@ export function discoverAccountsFromSms(db) {
         });
       }
     } else {
-      const alreadyHas = existingAccounts.some((a) =>
-        (a.account_number && a.account_number.endsWith(last4))
-        || (a.name && a.name.includes(last4)));
+      const alreadyHas = existingAccountLast4Set.has(last4)
+        || existingDebitCardLast4Set.has(last4)
+        || existingCardLast4Set.has(last4)
+        || existingAccounts.some((a) =>
+          (a.account_number && a.account_number.endsWith(last4))
+          || (a.name && a.name.includes(last4)));
       if (!alreadyHas) {
         discovered.push({
           kind: 'account',
@@ -3665,7 +4157,7 @@ export function discoverAccountsFromSms(db) {
           account_number: last4 !== 'Card' ? last4 : '',
           last_4: last4,
           suggested_name: `${info.issuer} A/c${last4 !== 'Card' ? ` (${last4})` : ''}`,
-          balance: 0,
+          balance: entry.balance || 0,
           txn_count: entry.txn_count,
           total_spent: Math.round(entry.total_spent * 100) / 100,
           total_received: Math.round(entry.total_received * 100) / 100,
@@ -3724,7 +4216,26 @@ export function addDiscoveredAccounts(db, args = {}) {
         const institution = bank;
         const accountNum = String(item.account_number || (isDebit ? '' : last4) || '').trim();
         const debitCardLast4 = String(item.debit_card_last_4 || (isDebit ? last4 : '') || '').trim();
-        const bal = Math.abs(Number(item.balance) || 0);
+        let bal = Math.abs(Number(item.balance) || 0);
+
+        if (!bal) {
+          const matchPats = [accountNum ? accountNum.slice(-4) : '', debitCardLast4 ? debitCardLast4.slice(-4) : '', last4 ? last4.slice(-4) : ''].filter((p) => p && p.length >= 4);
+          for (const pat of matchPats) {
+            const matchingTxns = db.all(
+              "SELECT raw_sms FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' AND raw_sms LIKE '%' || ? || '%' ORDER BY date DESC, id DESC LIMIT 50",
+              [pat],
+            );
+            for (const m of matchingTxns) {
+              const detected = extractAccountBalanceFromText(m.raw_sms);
+              if (detected !== null && detected !== undefined && detected > 0) {
+                bal = detected;
+                break;
+              }
+            }
+            if (bal > 0) break;
+          }
+        }
+
         const result = db.run(
           'INSERT INTO asset_accounts (member_id, name, category, institution, account_number, debit_card_last_4, balance) VALUES (?, ?, ?, ?, ?, ?, ?)',
           [memberId, name, category, institution, accountNum, debitCardLast4, bal],
@@ -3771,6 +4282,7 @@ export function combineDiscoveredAccount(db, args = {}) {
   const last4 = String(args.last_4 || '').trim();
   const bank = String(args.bank || args.institution || '').trim();
   const isDebitCard = Boolean(args.is_debit_card || args.link_as === 'debit_card' || args.instrument_type === 'debit_card');
+  const updateLast4 = Boolean(args.update_last_4);
 
   if (!targetId || !targetType) {
     return fail('BAD_REQUEST', 'Target account is required.');
@@ -3780,13 +4292,13 @@ export function combineDiscoveredAccount(db, args = {}) {
     if (targetType === 'card') {
       const card = db.get('SELECT id, last_4, bank, total_limit, available_limit, current_balance FROM credit_cards WHERE id = ?', [targetId]);
       if (card) {
-        const updateLast4 = card.last_4 ? card.last_4 : last4;
+        const updateLast4Val = (updateLast4 && last4) || !card.last_4 ? last4 : card.last_4;
         const updateBank = card.bank ? card.bank : bank;
         const updateLimit = args.total_limit !== undefined ? Number(args.total_limit) : card.total_limit;
         const updateAvail = args.available_limit !== undefined ? Number(args.available_limit) : card.available_limit;
         const updateBal = args.current_balance !== undefined ? Number(args.current_balance) : card.current_balance;
         db.run('UPDATE credit_cards SET last_4 = ?, bank = ?, total_limit = ?, available_limit = ?, current_balance = ?, updated_at = ? WHERE id = ?',
-          [updateLast4, updateBank, updateLimit, updateAvail, updateBal, new Date().toISOString(), targetId]);
+          [updateLast4Val, updateBank, updateLimit, updateAvail, updateBal, new Date().toISOString(), targetId]);
         if (last4) {
           db.run(
             "UPDATE transactions SET card_id = ? WHERE (card_id IS NULL OR card_id = 0) AND raw_sms LIKE '%' || ? || '%'",
@@ -3795,7 +4307,7 @@ export function combineDiscoveredAccount(db, args = {}) {
         }
       }
     } else {
-      const acc = db.get('SELECT id, account_number, debit_card_last_4, institution FROM asset_accounts WHERE id = ?', [targetId]);
+      const acc = db.get('SELECT id, account_number, debit_card_last_4, institution, balance FROM asset_accounts WHERE id = ?', [targetId]);
       if (acc) {
         if (isDebitCard) {
           const updateDebitCard = last4 || acc.debit_card_last_4;
@@ -3808,7 +4320,7 @@ export function combineDiscoveredAccount(db, args = {}) {
             );
           }
         } else {
-          const updateAccNum = acc.account_number ? acc.account_number : last4;
+          const updateAccNum = (!acc.account_number || updateLast4) && last4 ? last4 : acc.account_number;
           const updateInst = acc.institution ? acc.institution : bank;
           db.run('UPDATE asset_accounts SET account_number = ?, institution = ? WHERE id = ?', [updateAccNum, updateInst, targetId]);
           if (last4) {
@@ -3817,6 +4329,9 @@ export function combineDiscoveredAccount(db, args = {}) {
               [targetId, last4],
             );
           }
+        }
+        if (args.balance && (!acc.balance || acc.balance === 0)) {
+          db.run('UPDATE asset_accounts SET balance = ? WHERE id = ?', [Number(args.balance), targetId]);
         }
       }
     }
@@ -3838,6 +4353,214 @@ export function combineDiscoveredAccount(db, args = {}) {
   });
 
   return { status: 'success', combined: true };
+}
+
+export function mergeCards(db, args = {}) {
+  const sourceCardId = Number(args.source_card_id);
+  const targetCardId = Number(args.target_card_id);
+  const updateLast4 = Boolean(args.update_last_4);
+  const balanceAction = args.balance_action
+    || (args.overwrite_balance ? 'use_source' : (args.add_balance === false ? 'keep_target' : 'add'));
+
+  if (!sourceCardId || !targetCardId || sourceCardId === targetCardId) {
+    return fail('BAD_REQUEST', 'Please choose two different cards to merge.');
+  }
+
+  const sourceCard = db.get('SELECT * FROM credit_cards WHERE id = ?', [sourceCardId]);
+  const targetCard = db.get('SELECT * FROM credit_cards WHERE id = ?', [targetCardId]);
+
+  if (!sourceCard) return fail('CARD_NOT_FOUND', 'Source card could not be found.');
+  if (!targetCard) return fail('CARD_NOT_FOUND', 'Target card could not be found.');
+
+  let movedTxns = 0;
+  let movedStatements = 0;
+
+  db.transaction(() => {
+    // 1. Move all transactions from source card to target card
+    const txnRes = db.run('UPDATE transactions SET card_id = ? WHERE card_id = ?', [targetCardId, sourceCardId]);
+    movedTxns = txnRes.changes || 0;
+
+    // 2. Move any imported statements
+    try {
+      const stmtRes = db.run('UPDATE imported_statements SET card_id = ? WHERE card_id = ?', [targetCardId, sourceCardId]);
+      movedStatements = stmtRes.changes || 0;
+    } catch {}
+
+    // 3. Move any transactions that might have matched source card's last 4 digits
+    if (sourceCard.last_4) {
+      const sLast4 = String(sourceCard.last_4).trim().slice(-4);
+      if (sLast4.length >= 4) {
+        db.run(
+          "UPDATE transactions SET card_id = ? WHERE (card_id IS NULL OR card_id = 0) AND raw_sms LIKE '%' || ? || '%'",
+          [targetCardId, sLast4],
+        );
+      }
+    }
+
+    // 4. Update target card's last_4 if requested (e.g. source card had the new replacement card number)
+    const newLast4 = (updateLast4 && sourceCard.last_4) ? sourceCard.last_4 : targetCard.last_4;
+    const newTotalLimit = Math.max(Number(targetCard.total_limit) || 0, Number(sourceCard.total_limit) || 0);
+    const newAvailLimit = sourceCard.available_limit !== null && sourceCard.available_limit !== undefined
+      ? Number(sourceCard.available_limit)
+      : targetCard.available_limit;
+
+    let newBal;
+    if (balanceAction === 'use_source') {
+      newBal = Number(sourceCard.current_balance) || 0;
+    } else if (balanceAction === 'keep_target') {
+      newBal = Number(targetCard.current_balance) || 0;
+    } else {
+      newBal = (Number(targetCard.current_balance) || 0) + (Number(sourceCard.current_balance) || 0);
+    }
+
+    db.run(
+      'UPDATE credit_cards SET last_4 = ?, total_limit = ?, available_limit = ?, current_balance = ?, updated_at = ? WHERE id = ?',
+      [newLast4, newTotalLimit, newAvailLimit, newBal, new Date().toISOString(), targetCardId],
+    );
+
+    // 5. Register ignore rules for the source card so discovery won't recreate it
+    const bank = sourceCard.bank || targetCard.bank || 'Bank';
+    const last4 = sourceCard.last_4 || '';
+    const keys = [
+      `credit_card:${bank}:${last4}`.toLowerCase(),
+      `card:${bank}:${last4}`.toLowerCase(),
+      `${bank}:${last4}`.toLowerCase(),
+      last4 ? last4.toLowerCase() : null,
+    ].filter(Boolean);
+
+    for (const k of keys) {
+      db.run(
+        'INSERT OR REPLACE INTO ignored_discovered_accounts (identifier, issuer, last_4, ignored_at) VALUES (?, ?, ?, ?)',
+        [k, bank, last4, new Date().toISOString()],
+      );
+    }
+
+    // 6. Delete the source card
+    db.run('DELETE FROM credit_cards WHERE id = ?', [sourceCardId]);
+  });
+
+  return {
+    status: 'success',
+    merged: true,
+    moved_transactions: movedTxns,
+    moved_statements: movedStatements,
+    target_card_id: targetCardId,
+  };
+}
+
+export function mergeAccounts(db, args = {}) {
+  const sourceAccountId = Number(args.source_account_id);
+  const targetAccountId = Number(args.target_account_id);
+  const updateAccountNumber = Boolean(args.update_account_number);
+  const updateDebitCard = Boolean(args.update_debit_card);
+  const linkAsDebitCard = Boolean(args.link_as_debit_card);
+  const balanceAction = args.balance_action
+    || (args.overwrite_balance ? 'use_source' : (args.add_balance === false ? 'keep_target' : 'add'));
+
+  if (!sourceAccountId || !targetAccountId || sourceAccountId === targetAccountId) {
+    return fail('BAD_REQUEST', 'Please choose two different accounts to merge.');
+  }
+
+  const sourceAccount = db.get('SELECT * FROM asset_accounts WHERE id = ?', [sourceAccountId]);
+  const targetAccount = db.get('SELECT * FROM asset_accounts WHERE id = ?', [targetAccountId]);
+
+  if (!sourceAccount) return fail('ACCOUNT_NOT_FOUND', 'Source account could not be found.');
+  if (!targetAccount) return fail('ACCOUNT_NOT_FOUND', 'Target account could not be found.');
+
+  let movedTxns = 0;
+
+  db.transaction(() => {
+    // 1. Move all transactions from source account to target account
+    const txnRes = db.run('UPDATE transactions SET account_id = ? WHERE account_id = ?', [targetAccountId, sourceAccountId]);
+    movedTxns = txnRes.changes || 0;
+
+    // 2. Link raw SMS from source account identifiers
+    if (sourceAccount.account_number) {
+      const sAcc = String(sourceAccount.account_number).trim().slice(-4);
+      if (sAcc.length >= 4) {
+        db.run(
+          "UPDATE transactions SET account_id = ? WHERE (account_id IS NULL OR account_id = 0) AND raw_sms LIKE '%' || ? || '%'",
+          [targetAccountId, sAcc],
+        );
+      }
+    }
+    if (sourceAccount.debit_card_last_4) {
+      const sDc = String(sourceAccount.debit_card_last_4).trim().slice(-4);
+      if (sDc.length >= 4) {
+        db.run(
+          "UPDATE transactions SET account_id = ? WHERE (account_id IS NULL OR account_id = 0) AND raw_sms LIKE '%' || ? || '%'",
+          [targetAccountId, sDc],
+        );
+      }
+    }
+
+    // 3. Update target account properties
+    const sourceAccNum = sourceAccount.account_number ? String(sourceAccount.account_number).trim() : '';
+    const sourceDc = sourceAccount.debit_card_last_4 ? String(sourceAccount.debit_card_last_4).trim() : '';
+    const targetAccNum = targetAccount.account_number ? String(targetAccount.account_number).trim() : '';
+    const targetDc = targetAccount.debit_card_last_4 ? String(targetAccount.debit_card_last_4).trim() : '';
+
+    let newAccNum = targetAccNum;
+    let newDc = targetDc;
+
+    if (linkAsDebitCard) {
+      newDc = sourceDc || sourceAccNum || targetDc;
+    } else {
+      if (updateAccountNumber && sourceAccNum) {
+        newAccNum = sourceAccNum;
+      } else if (!targetAccNum && sourceAccNum) {
+        newAccNum = sourceAccNum;
+      }
+
+      if (updateDebitCard && sourceDc) {
+        newDc = sourceDc;
+      } else if (!targetDc) {
+        newDc = sourceDc || (sourceAccount.name?.toLowerCase().includes('debit') ? sourceAccNum : '');
+      }
+    }
+
+    let newBal;
+    if (balanceAction === 'use_source') {
+      newBal = Number(sourceAccount.balance) || 0;
+    } else if (balanceAction === 'keep_target') {
+      newBal = Number(targetAccount.balance) || 0;
+    } else {
+      newBal = (Number(targetAccount.balance) || 0) + (Number(sourceAccount.balance) || 0);
+    }
+
+    db.run(
+      'UPDATE asset_accounts SET account_number = ?, debit_card_last_4 = ?, balance = ?, updated_at = ? WHERE id = ?',
+      [newAccNum, newDc, newBal, today(), targetAccountId],
+    );
+
+    // 4. Register ignore rules for source account
+    const inst = sourceAccount.institution || targetAccount.institution || 'Bank';
+    const accNum = sourceAccount.account_number ? sourceAccount.account_number.slice(-4) : '';
+    const dcLast4 = sourceAccount.debit_card_last_4 ? sourceAccount.debit_card_last_4.slice(-4) : '';
+
+    if (accNum && accNum.length >= 4) {
+      db.run('INSERT OR REPLACE INTO ignored_discovered_accounts (identifier, issuer, last_4, ignored_at) VALUES (?, ?, ?, ?)',
+        [`bank_account:${inst}:${accNum}`.toLowerCase(), inst, accNum, new Date().toISOString()]);
+      db.run('INSERT OR REPLACE INTO ignored_discovered_accounts (identifier, issuer, last_4, ignored_at) VALUES (?, ?, ?, ?)',
+        [`${inst}:${accNum}`.toLowerCase(), inst, accNum, new Date().toISOString()]);
+    }
+    if (dcLast4 && dcLast4.length >= 4) {
+      db.run('INSERT OR REPLACE INTO ignored_discovered_accounts (identifier, issuer, last_4, ignored_at) VALUES (?, ?, ?, ?)',
+        [`debit_card:${inst}:${dcLast4}`.toLowerCase(), inst, dcLast4, new Date().toISOString()]);
+      db.run('INSERT OR REPLACE INTO ignored_discovered_accounts (identifier, issuer, last_4, ignored_at) VALUES (?, ?, ?, ?)',
+        [`${inst}:${dcLast4}`.toLowerCase(), inst, dcLast4, new Date().toISOString()]);
+    }
+
+    // 5. Delete the source account
+    db.run('DELETE FROM asset_accounts WHERE id = ?', [sourceAccountId]);
+  });
+
+  return {
+    status: 'success',
+    merged: true,
+    moved_transactions: movedTxns,
+    target_account_id: targetAccountId,
+  };
 }
 
 export function ignoreDiscoveredAccount(db, args = {}) {
@@ -4076,22 +4799,41 @@ class EmptyBackup extends Error {}
  * intend to expose.
  */
 const CLEARABLE = {
-  transactions: ['transactions'],
+  transactions: [
+    'transaction_splits',
+    'transaction_cashbacks',
+    'transactions',
+    'ignored_alerts',
+    'imported_statements',
+  ],
   // A transaction can name the account it came out of, so those references have to be
   // released before the accounts go. Deleting straight out fails the foreign key.
-  accounts: ['asset_accounts'],
+  accounts: [
+    'ignored_discovered_accounts',
+    'asset_accounts',
+  ],
   goals: ['goals'],
   loans: ['loans'],
-  cards: ['credit_cards'],
+  cards: [
+    'imported_statements',
+    'credit_cards',
+  ],
   // The price history goes with the plan it describes: rows left behind would point at a
   // record that no longer exists and turn up in the next projection.
   subscriptions: ['subscriptions'],
   sips: ['sips'],
   recurring: ['recurring_dismissed'],
   events: ['custom_events'],
-  holdings: ['mf_folios', 'demat_holdings', 'nps_holdings'],
-  rules: ['sms_rules'],
+  holdings: [
+    'folio_transactions',
+    'mf_folios',
+    'stock_transactions',
+    'demat_holdings',
+    'nps_holdings',
+  ],
+  rules: ['sms_rules', 'merchant_rules'],
   categories: ['custom_categories'],
+  alerts: ['ignored_alerts', 'ignored_discovered_accounts'],
 };
 
 /**
@@ -4134,6 +4876,14 @@ async function clearData(db, args) {
         cleared += db.run('DELETE FROM price_changes WHERE kind = ?',
           [kind === 'sips' ? 'sip' : 'subscription']).changes;
       }
+      if (kind === 'transactions' || kind === 'alerts') {
+        db.run("DELETE FROM app_settings WHERE key IN ('last_sms_sync', 'pending_alerts_count')");
+        try {
+          takePendingAlerts();
+        } catch {
+          // Non-Android or test environment
+        }
+      }
       for (const table of tables) {
         cleared += db.run(`DELETE FROM ${table}`).changes;
       }
@@ -4175,6 +4925,12 @@ async function factoryReset() {
   }
   useDatabase(null);
   lockVault();
+
+  try {
+    takePendingAlerts();
+  } catch {
+    // Non-Android or test environment
+  }
 
   await deleteDatabase();
   // Last, and in this order. A key deleted before the file it opens would leave a file
@@ -4222,6 +4978,8 @@ const ACTIONS = {
   get_life_goals: (db, args) => calculateLifeGoals(args.goals, args.expected_cagr),
   evaluate_challenge: (db, args) => evaluateChallenge(db, args.challenge),
   get_local_sync_payload: generateLocalSyncPayload,
+  get_fire_profile: getFireProfile,
+  save_fire_settings: saveFireSettings,
   // The two catalogues, so a screen that offers the user a choice of chart offers exactly
   // the charts the backend can draw rather than a list somebody has to keep in step.
   get_chart_catalogue: () => ({
@@ -4264,12 +5022,16 @@ const ACTIONS = {
   ignore_transaction: ignoreTransaction,
   mark_transaction_duplicate: markTransactionDuplicate,
   restore_transaction: restoreTransaction,
+  scan_ledger_duplicates: scanLedgerDuplicates,
+  merge_ledger_transactions: mergeLedgerTransactions,
   split_transaction: splitTransaction,
   batch_update_transactions: batchUpdateTransactions,
   batch_delete_transactions: batchDeleteTransactions,
   discover_accounts_from_sms: discoverAccountsFromSms,
   add_discovered_accounts: addDiscoveredAccounts,
   combine_discovered_account: combineDiscoveredAccount,
+  merge_cards: mergeCards,
+  merge_accounts: mergeAccounts,
   ignore_discovered_account: ignoreDiscoveredAccount,
   restore_discovered_account: restoreDiscoveredAccount,
   get_ignored_discovered_accounts: getIgnoredDiscoveredAccounts,

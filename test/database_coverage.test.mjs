@@ -180,4 +180,36 @@ describe('database.js comprehensive CRUD and edge coverage', () => {
     const cleared = await ok(null, 'clear_data', { kinds: ['goals', 'budgets', 'events'] });
     assert.equal(cleared.status, 'success');
   });
+
+  it('verifies expanded default categories and Transport & Fuel migration', async () => {
+    const res = await ok(null, 'get_categories');
+    assert.equal(res.status, 'success');
+    const names = res.categories.map((c) => c.name);
+
+    // Verify presence of new categories
+    const expected = [
+      'Groceries', 'Dining', 'Shopping', 'Transport', 'Fuel',
+      'Medical', 'Health', 'School', 'Education', 'Kids & Baby',
+      'Pets', 'Fitness', 'Entertainment', 'Subscriptions', 'Utilities',
+      'Rent & Housing', 'Maintenance & Repairs', 'Personal Care', 'Travel',
+      'Gifts & Donations', 'Insurance & Tax', 'Loans & EMI', 'Investment Outflow',
+      'Salary', 'Freelance', 'Business Income', 'Rental Income',
+      'Interest & Dividends', 'Refunds & Cashback', 'Gifts Received', 'Other Income',
+      'Transfer', 'Credit Card',
+    ];
+
+    for (const name of expected) {
+      assert.ok(names.includes(name), `Missing default category: ${name}`);
+    }
+
+    // Verify Transport is present and Transport & Fuel is migrated
+    assert.ok(names.includes('Transport'));
+    assert.ok(names.includes('Fuel'));
+    assert.ok(names.includes('Medical'));
+    assert.ok(names.includes('School'));
+    assert.ok(names.includes('Subscriptions'));
+
+    const ccCat = res.categories.find((c) => c.name === 'Credit Card');
+    assert.equal(ccCat.color, '#F59E0B');
+  });
 });
