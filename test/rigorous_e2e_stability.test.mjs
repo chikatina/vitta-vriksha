@@ -104,7 +104,7 @@ describe('E2E Stability: 3. Driver.js-Style Modal Guided Tour Walkthrough', () =
     assert.equal(TOUR_STEPS.length, 8);
 
     const stepTabs = TOUR_STEPS.map((s) => s.tab);
-    assert.deepEqual(stepTabs, ['home', 'more', 'wealth', 'ledger', 'budgets', 'home', 'wealth', 'more']);
+    assert.deepEqual(stepTabs, ['home', 'home', 'ledger', 'budgets', 'wealth', 'wealth', 'more', 'more']);
 
     // Setup mock DOM
     const removedClasses = [];

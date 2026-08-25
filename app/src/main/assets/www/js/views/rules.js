@@ -35,7 +35,7 @@ function pickCategorySheet(app, categories, currentCategory, onPicked) {
       <label class="field-label">Select Category</label>
       <div class="list" style="margin-top:var(--gap-2);max-height:340px;overflow-y:auto">
         ${categories.map((c) => `
-          <button type="button" class="list-row" data-choose-category="${h(c.name)}" style="cursor:pointer;width:100%;text-align:left;display:flex;align-items:center;gap:10px">
+          <button type="button" class="list-row" data-choose-category="${h(c.name)}" ${c.name === currentCategory ? 'data-selected="true"' : ''} style="cursor:pointer;width:100%;text-align:left;display:flex;align-items:center;gap:10px">
             <span class="avatar avatar-sm" style="background:${h(c.color || 'var(--accent-container)')};color:${h(c.on_color || 'var(--on-accent-container)')}">
               ${icon(c.icon || 'sell', 'icon-sm')}
             </span>
@@ -48,6 +48,16 @@ function pickCategorySheet(app, categories, currentCategory, onPicked) {
       </div>
     </div>`, {
     onMount(node, close) {
+      const selected = node.querySelector('[data-selected="true"]');
+      if (selected) {
+        setTimeout(() => {
+          try {
+            selected.scrollIntoView({ block: 'center', behavior: 'smooth' });
+          } catch {
+            selected.scrollIntoView();
+          }
+        }, 50);
+      }
       node.querySelectorAll('[data-choose-category]').forEach((btn) => {
         btn.addEventListener('click', () => {
           const picked = btn.dataset.chooseCategory;
@@ -59,8 +69,121 @@ function pickCategorySheet(app, categories, currentCategory, onPicked) {
   });
 }
 
+function renderDuplicateCard(item, itemIndex, categories, isSelectMode, isSelected, app) {
+  const twin = item.duplicate_twin || {};
+  const isExactUtr = twin.match_reason === 'exact-utr';
+  const matchReasonText = isExactUtr
+    ? 'Exact Reference / UTR Match'
+    : (twin.merchant && item.merchant && twin.merchant.toLowerCase() === item.merchant.toLowerCase()
+      ? 'Same Merchant, Amount & Date'
+      : 'Same Amount & Date as Recorded Entry');
+
+  const incomingAmount = item.amount ? formatCurrency(item.amount, app.currency, app.locale) : '0';
+  const existingAmount = twin.amount ? formatCurrency(twin.amount, app.currency, app.locale) : incomingAmount;
+
+  const incomingMerchant = item.merchant || 'Unknown Merchant';
+  const existingMerchant = twin.merchant || 'Recorded Transaction';
+
+  const incomingCat = item.chosenCategory || item.suggested_category || 'Shopping';
+  const existingCat = twin.category || 'Shopping';
+
+  const incomingInst = item.account_name || (item.card_id ? 'Credit Card' : (item.account_id ? 'Bank A/c' : ''));
+  const existingInst = twin.instrument_name || '';
+
+  return `
+    <div class="duplicate-compare-card ${isExactUtr ? 'high-confidence' : ''}" data-item-row="${itemIndex}">
+      <div class="row-between" style="align-items:center;gap:6px;flex-wrap:wrap">
+        <div class="row" style="gap:6px;align-items:center;min-width:0">
+          ${isSelectMode ? `
+            <input type="checkbox" data-select-item="${itemIndex}" ${isSelected ? 'checked' : ''} style="width:18px;height:18px;margin:0 2px 0 0;cursor:pointer;flex-shrink:0;accent-color:var(--accent)">` : ''}
+          <span class="avatar avatar-sm avatar-warning" style="flex-shrink:0">
+            ${icon('content_copy', 'icon-sm')}
+          </span>
+          <div style="min-width:0">
+            <div class="row" style="gap:6px;align-items:center">
+              <span style="font-weight:700;font-size:14px;color:var(--on-surface)">Potential Duplicate</span>
+              <span class="badge ${isExactUtr ? 'badge-income' : 'badge-warning'}" style="font-size:10px;padding:1px 6px">
+                ${isExactUtr ? '100% Match' : 'Possible Twin'}
+              </span>
+            </div>
+            <span class="caption" style="font-size:11px;color:var(--on-surface-variant)">${h(matchReasonText)}</span>
+          </div>
+        </div>
+        <button type="button" class="btn btn-outlined btn-xs" data-compare-duplicate="${itemIndex}" style="gap:3px;padding:3px 8px;font-size:11px">
+          ${icon('tune', 'icon-sm')}Compare
+        </button>
+      </div>
+
+      <div class="twin-split-grid">
+        <!-- EXISTING IN LEDGER -->
+        <div class="twin-panel existing">
+          <div class="twin-panel-header">
+            <span>Existing Record</span>
+            <span class="badge badge-tonal" style="font-size:9.5px;padding:0 4px">In Ledger</span>
+          </div>
+          <div class="row-between" style="align-items:baseline;gap:4px">
+            <span class="display expense" style="font-size:16px;font-weight:700">
+              -${h(existingAmount)}
+            </span>
+            <span class="caption" style="font-size:11px">${h(formatDate(twin.date || item.date))}</span>
+          </div>
+          <div class="twin-panel-title">${h(existingMerchant)}</div>
+          <div class="row" style="gap:4px;flex-wrap:wrap;margin-top:2px">
+            <span class="badge badge-tonal" style="font-size:10.5px">${h(existingCat)}</span>
+            ${existingInst ? `<span class="badge badge-tonal" style="font-size:10.5px">${h(existingInst)}</span>` : ''}
+          </div>
+          ${twin.raw_sms ? `
+            <details style="margin-top:4px;font-size:11px">
+              <summary style="cursor:pointer;opacity:0.75">Show Original SMS</summary>
+              <div class="sms-raw-box">${h(twin.raw_sms)}</div>
+            </details>` : ''}
+        </div>
+
+        <!-- INCOMING ALERT -->
+        <div class="twin-panel incoming">
+          <div class="twin-panel-header">
+            <span>Incoming SMS</span>
+            <span class="badge badge-income" style="font-size:9.5px;padding:0 4px">New Alert</span>
+          </div>
+          <div class="row-between" style="align-items:baseline;gap:4px">
+            <span class="display expense" style="font-size:16px;font-weight:700">
+              -${h(incomingAmount)}
+            </span>
+            <span class="caption" style="font-size:11px">${h(formatDate(item.date))}</span>
+          </div>
+          <div class="twin-panel-title">${h(incomingMerchant)}</div>
+          <div class="row" style="gap:4px;flex-wrap:wrap;margin-top:2px">
+            <span class="badge badge-tonal" style="font-size:10.5px">${h(incomingCat)}</span>
+            ${incomingInst ? `<span class="badge badge-tonal" style="font-size:10.5px">${h(incomingInst)}</span>` : ''}
+          </div>
+          <details style="margin-top:4px;font-size:11px" open>
+            <summary style="cursor:pointer;opacity:0.75">Incoming SMS</summary>
+            <div class="sms-raw-box">${h(item.body)}</div>
+          </details>
+        </div>
+      </div>
+
+      <!-- 3-WAY INSTANT ACTION BAR -->
+      <div style="display:flex;align-items:center;justify-content:flex-end;gap:6px;padding-top:6px;border-top:1px solid var(--outline-variant);flex-wrap:wrap">
+        <button type="button" class="btn btn-tonal btn-xs" data-discard-duplicate="${itemIndex}" style="gap:3px;padding:5px 10px;font-size:11.5px" title="Ignore incoming SMS as duplicate">
+          ${icon('visibility_off', 'icon-sm')}Discard
+        </button>
+        <button type="button" class="btn btn-filled btn-xs" data-merge-duplicate="${itemIndex}" style="gap:3px;padding:5px 10px;font-size:11.5px;background:var(--accent);color:var(--on-accent)" title="Merge details into existing transaction">
+          ${icon('autorenew', 'icon-sm')}Merge
+        </button>
+        <button type="button" class="btn btn-outlined btn-xs" data-keep-both="${itemIndex}" style="gap:3px;padding:5px 10px;font-size:11.5px" title="Keep both as separate transactions">
+          ${icon('add', 'icon-sm')}Keep Both
+        </button>
+      </div>
+    </div>`;
+}
+
 function renderAlertCard(item, itemIndex, categories, isSelectMode, isSelected, app) {
   const isPending = item.state === 'pending';
+  if (isPending && (item.duplicate_of > 0 || item.reason === 'possible-duplicate')) {
+    return renderDuplicateCard(item, itemIndex, categories, isSelectMode, isSelected, app);
+  }
+
   const itemType = isPending ? (item.suggested_type || 'Expense') : item.type;
   const matchingCats = categories.filter((c) => !c.type || c.type === itemType);
   const selectedCat = isPending ? (item.chosenCategory || item.suggested_category || matchingCats[0]?.name || 'Shopping') : item.category;
@@ -208,7 +331,7 @@ export async function renderRules(container, app) {
             ${discovered.map((d, i) => `
               <div class="card-flat" style="background:var(--surface-container-high);padding:14px;border-radius:var(--radius-md);border:1px solid var(--outline-variant);display:flex;flex-direction:column;gap:10px;width:100%;box-sizing:border-box">
                 <div style="display:flex;align-items:flex-start;gap:12px;cursor:pointer" data-inspect-discovered="${i}">
-                  <span class="avatar avatar-sm" style="background:var(--accent-container);color:var(--on-accent-container);flex-shrink:0;margin-top:2px">
+                  <span class="avatar avatar-sm ${d.instrument_type === 'credit_card' ? 'avatar-credit' : (d.instrument_type === 'debit_card' || d.instrument_type === 'prepaid_card' ? 'avatar-debit' : (d.instrument_type === 'wallet' ? 'avatar-wallet' : (d.instrument_type === 'meal_card' ? 'avatar-meal' : 'avatar-bank')))}" style="flex-shrink:0;margin-top:2px">
                     ${icon(
                       d.instrument_type === 'debit_card' ? 'payments' :
                       (d.instrument_type === 'credit_card' ? 'credit_card' :
@@ -223,7 +346,7 @@ export async function renderRules(container, app) {
                       <div style="font-weight:700;font-size:13.5px;color:var(--on-surface);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
                         ${h(d.suggested_name || d.name || d.card_name)}
                       </div>
-                      <span class="badge ${d.instrument_type === 'credit_card' ? 'badge-tonal' : 'badge-income'}" style="font-size:10px;padding:1px 6px;text-transform:uppercase;letter-spacing:0.3px;flex-shrink:0">
+                      <span class="badge ${d.instrument_type === 'credit_card' ? 'badge-gold' : (d.instrument_type === 'debit_card' || d.instrument_type === 'prepaid_card' ? 'badge-income' : (d.instrument_type === 'wallet' ? 'badge-info' : (d.instrument_type === 'meal_card' ? 'badge-warning' : 'badge-income')))}" style="font-size:10px;padding:1px 6px;text-transform:uppercase;letter-spacing:0.3px;flex-shrink:0">
                         ${h(
                           d.instrument_type === 'debit_card' ? 'Debit Card' :
                           (d.instrument_type === 'credit_card' ? 'Credit Card' :
@@ -243,15 +366,15 @@ export async function renderRules(container, app) {
                   </div>
                 </div>
 
-                <div class="row-between" style="align-items:center;padding-top:8px;border-top:1px solid var(--outline-variant);gap:6px">
-                  <button class="btn btn-tonal btn-xs" data-inspect-discovered="${i}" style="gap:4px">
+                <div class="discovered-card-actions">
+                  <button class="btn btn-tonal btn-xs" data-inspect-discovered="${i}">
                     ${icon('open_in_new', 'icon-sm')}Link / Details
                   </button>
-                  <div class="row" style="gap:6px;align-items:center">
-                    <button class="btn btn-filled btn-xs" data-add-discovered="${i}" style="gap:4px">
+                  <div class="discovered-btn-group">
+                    <button class="btn btn-filled btn-xs" data-add-discovered="${i}">
                       ${icon('add', 'icon-sm')}Add
                     </button>
-                    <button class="btn btn-outlined btn-xs" data-ignore-discovered="${i}" style="gap:4px;color:var(--on-surface-variant);border-color:var(--outline-variant)">
+                    <button class="btn btn-outlined btn-xs" data-ignore-discovered="${i}" style="color:var(--on-surface-variant);border-color:var(--outline-variant)">
                       ${icon('visibility_off', 'icon-sm')}Ignore
                     </button>
                   </div>
@@ -1019,12 +1142,19 @@ export async function renderRules(container, app) {
 
     batchBarHost.querySelector('[data-batch-category]')?.addEventListener('click', () => {
       pickCategorySheet(app, categories, 'Shopping', (newCat) => {
+        const foundCat = categories.find((c) => c.name === newCat);
         selectedIndices.forEach((idx) => {
           const itm = filteredReview[idx];
           if (itm) {
             itm.chosenCategory = newCat;
-            const lbl = container.querySelector(`[data-cat-label="${idx}"]`);
+            if (foundCat && foundCat.type) itm.suggested_type = foundCat.type;
+            const btn = container.querySelector(`[data-pick-cat="${idx}"]`);
+            const lbl = btn?.querySelector('[data-cat-label]') || container.querySelector(`[data-cat-label="${idx}"]`);
             if (lbl) lbl.textContent = newCat;
+            if (foundCat && foundCat.icon && btn) {
+              const iconContainer = btn.querySelector('span:first-child');
+              if (iconContainer) iconContainer.innerHTML = icon(foundCat.icon, 'icon-sm');
+            }
           }
         });
         toast(`Updated category to "${newCat}" for ${selectedIndices.size} items.`, 'info');
@@ -1042,8 +1172,14 @@ export async function renderRules(container, app) {
         const current = item.chosenCategory || item.suggested_category || 'Shopping';
         pickCategorySheet(app, categories, current, (newCat) => {
           item.chosenCategory = newCat;
-          const lbl = parent.querySelector(`[data-cat-label="${idx}"]`);
+          const foundCat = categories.find((c) => c.name === newCat);
+          if (foundCat && foundCat.type) item.suggested_type = foundCat.type;
+          const lbl = btn.querySelector('[data-cat-label]') || container.querySelector(`[data-cat-label="${idx}"]`);
           if (lbl) lbl.textContent = newCat;
+          if (foundCat && foundCat.icon) {
+            const iconContainer = btn.querySelector('span:first-child');
+            if (iconContainer) iconContainer.innerHTML = icon(foundCat.icon, 'icon-sm');
+          }
         });
       });
     });
@@ -1149,6 +1285,94 @@ export async function renderRules(container, app) {
         }
       });
     });
+
+    parent.querySelectorAll('[data-discard-duplicate]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const item = filteredReview[Number(btn.dataset.discardDuplicate)];
+        if (!item) return;
+        btn.disabled = true;
+
+        const res = await Bridge.call('sms', {
+          action: 'mark_duplicate',
+          body: item.body,
+        });
+
+        if (res && res.status === 'success') {
+          toast('Discarded duplicate alert.', 'success');
+          app.refresh();
+        } else {
+          toast(res?.message || 'Could not discard alert.', 'error');
+          btn.disabled = false;
+        }
+      });
+    });
+
+    parent.querySelectorAll('[data-merge-duplicate]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const item = filteredReview[Number(btn.dataset.mergeDuplicate)];
+        if (!item) return;
+        btn.disabled = true;
+        const twin = item.duplicate_twin || {};
+        const targetId = twin.id || item.duplicate_of;
+
+        const res = await Bridge.call('sms', {
+          action: 'merge_alert',
+          transaction_id: targetId,
+          body: item.body,
+          raw_sms: item.body,
+          date: item.date,
+          amount: item.amount,
+          merchant: item.merchant || twin.merchant || '',
+          category: item.chosenCategory || item.suggested_category || twin.category || 'Shopping',
+          type: item.suggested_type || twin.type || 'Expense',
+          apply_to_all: true,
+        });
+
+        if (res && res.status === 'success') {
+          toast('Merged details into existing transaction.', 'success');
+          app.refresh();
+        } else {
+          toast(res?.message || 'Could not merge alert.', 'error');
+          btn.disabled = false;
+        }
+      });
+    });
+
+    parent.querySelectorAll('[data-keep-both]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const item = filteredReview[Number(btn.dataset.keepBoth)];
+        if (!item) return;
+        btn.disabled = true;
+
+        const chosenCat = item.chosenCategory || item.suggested_category || 'Shopping';
+        const res = await Bridge.call('sms', {
+          action: 'classify_alert',
+          body: item.body,
+          amount: item.amount,
+          category: chosenCat,
+          merchant: item.merchant || '',
+          type: item.suggested_type || item.type || 'Expense',
+          date: item.date,
+          apply_to_all: true,
+          override_duplicate: true,
+        });
+
+        if (res && res.status === 'success') {
+          toast(`Filed ${formatCurrency(item.amount, app.currency, app.locale)} under "${chosenCat}".`, 'success');
+          app.refresh();
+        } else {
+          toast(res?.message || 'Could not file transaction.', 'error');
+          btn.disabled = false;
+        }
+      });
+    });
+
+    parent.querySelectorAll('[data-compare-duplicate]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const item = filteredReview[Number(btn.dataset.compareDuplicate)];
+        if (item) openDuplicateCompareSheet(app, categories, item);
+      });
+    });
   };
 
   const renderNextBatch = () => {
@@ -1227,6 +1451,84 @@ export async function renderRules(container, app) {
     });
   }
 
+  const discardAllDupsBtn = container.querySelector('[data-discard-all-duplicates]');
+  if (discardAllDupsBtn) {
+    discardAllDupsBtn.addEventListener('click', async () => {
+      if (!dupList.length) return;
+      const confirmed = await confirmDialog(
+        'Discard All Duplicates?',
+        `Discard ${dupList.length} duplicate alert${dupList.length === 1 ? '' : 's'} and preserve existing ledger entries.`,
+        { confirmLabel: `Discard ${dupList.length}`, danger: true },
+      );
+      if (!confirmed) return;
+
+      discardAllDupsBtn.disabled = true;
+      const res = await Bridge.call('sms', {
+        action: 'ignore_batch',
+        bodies: dupList.map((i) => i.body),
+      });
+      if (res && res.status === 'success') {
+        toast(`Discarded ${res.ignored || dupList.length} duplicate alerts.`, 'success');
+        app.refresh();
+      } else {
+        toast(res?.message || 'Could not discard duplicates.', 'error');
+        discardAllDupsBtn.disabled = false;
+      }
+    });
+  }
+
+  const discardAllUnclearBtn = container.querySelector('[data-discard-all-unclear]');
+  if (discardAllUnclearBtn) {
+    discardAllUnclearBtn.addEventListener('click', async () => {
+      if (!unclearList.length) return;
+      const confirmed = await confirmDialog(
+        'Discard All Unclear Alerts?',
+        `Discard ${unclearList.length} alert${unclearList.length === 1 ? '' : 's'} with missing or unclear amounts.`,
+        { confirmLabel: `Discard ${unclearList.length}`, danger: true },
+      );
+      if (!confirmed) return;
+
+      discardAllUnclearBtn.disabled = true;
+      const res = await Bridge.call('sms', {
+        action: 'ignore_batch',
+        bodies: unclearList.map((i) => i.body),
+      });
+      if (res && res.status === 'success') {
+        toast(`Discarded ${res.ignored || unclearList.length} unclear alerts.`, 'success');
+        app.refresh();
+      } else {
+        toast(res?.message || 'Could not discard alerts.', 'error');
+        discardAllUnclearBtn.disabled = false;
+      }
+    });
+  }
+
+  const discardAllWaitingBtn = container.querySelector('[data-discard-all-waiting]');
+  if (discardAllWaitingBtn) {
+    discardAllWaitingBtn.addEventListener('click', async () => {
+      if (!allPendingList.length) return;
+      const confirmed = await confirmDialog(
+        'Discard All Waiting Alerts?',
+        `Discard all ${allPendingList.length} waiting alert${allPendingList.length === 1 ? '' : 's'}.`,
+        { confirmLabel: `Discard All (${allPendingList.length})`, danger: true },
+      );
+      if (!confirmed) return;
+
+      discardAllWaitingBtn.disabled = true;
+      const res = await Bridge.call('sms', {
+        action: 'ignore_batch',
+        bodies: allPendingList.map((i) => i.body),
+      });
+      if (res && res.status === 'success') {
+        toast(`Discarded ${res.ignored || allPendingList.length} alerts.`, 'success');
+        app.refresh();
+      } else {
+        toast(res?.message || 'Could not discard alerts.', 'error');
+        discardAllWaitingBtn.disabled = false;
+      }
+    });
+  }
+
   container.querySelectorAll('[data-forget-merchant]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const key = btn.dataset.forgetMerchant;
@@ -1267,6 +1569,191 @@ export async function renderRules(container, app) {
   });
 
   bindSelectFields(container);
+}
+
+async function openDuplicateCompareSheet(app, categories, item) {
+  if (!item) return;
+  const twin = item.duplicate_twin || {};
+  const isExactUtr = twin.match_reason === 'exact-utr';
+
+  const defaultMerchant = item.merchant || twin.merchant || '';
+  const defaultCategory = item.chosenCategory || item.suggested_category || twin.category || 'Shopping';
+  const defaultType = item.suggested_type || twin.type || 'Expense';
+  const defaultDesc = item.description || twin.description || '';
+
+  const incomingAmount = item.amount ? formatCurrency(item.amount, app.currency, app.locale) : '0';
+  const existingAmount = twin.amount ? formatCurrency(twin.amount, app.currency, app.locale) : incomingAmount;
+
+  await sheet('Duplicate Comparison', `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="card-flat" style="border-left:3px solid ${isExactUtr ? 'var(--income)' : 'var(--warning)'};padding:10px 12px;background:var(--surface-container-high)">
+        <div class="row-between" style="align-items:center;margin-bottom:2px">
+          <span style="font-weight:700;font-size:13.5px;color:var(--on-surface)">
+            ${isExactUtr ? 'Exact Reference Match (100%)' : 'Potential Duplicate Detected'}
+          </span>
+          <span class="badge ${isExactUtr ? 'badge-income' : 'badge-warning'}" style="font-size:10px">
+            ${isExactUtr ? 'UTR Match' : 'Same Amount & Date'}
+          </span>
+        </div>
+        <div class="caption" style="font-size:11.5px;color:var(--on-surface-variant)">
+          Existing transaction recorded on ${h(formatDate(twin.date || item.date))} for ${h(existingAmount)}.
+        </div>
+      </div>
+
+      <div class="twin-split-grid">
+        <!-- EXISTING -->
+        <div class="twin-panel existing">
+          <div class="twin-panel-header">
+            <span>Existing Record</span>
+            <span class="badge badge-tonal" style="font-size:9px">Ledger</span>
+          </div>
+          <div style="font-weight:700;font-size:14px;color:var(--on-surface)">-${h(existingAmount)}</div>
+          <div style="font-size:13px;font-weight:600">${h(twin.merchant || 'Recorded Transaction')}</div>
+          <div class="caption" style="font-size:11.5px">${h(twin.category || 'Uncategorized')} · ${h(twin.instrument_name || 'Cash/Account')}</div>
+          ${twin.raw_sms ? `
+            <div style="margin-top:4px">
+              <span class="caption" style="font-size:10.5px;font-weight:600">Original SMS:</span>
+              <div class="sms-raw-box">${h(twin.raw_sms)}</div>
+            </div>` : ''}
+        </div>
+
+        <!-- INCOMING -->
+        <div class="twin-panel incoming">
+          <div class="twin-panel-header">
+            <span>Incoming SMS</span>
+            <span class="badge badge-income" style="font-size:9px">New</span>
+          </div>
+          <div style="font-weight:700;font-size:14px;color:var(--on-surface)">-${h(incomingAmount)}</div>
+          <div style="font-size:13px;font-weight:600">${h(item.merchant || 'Unknown Merchant')}</div>
+          <div class="caption" style="font-size:11.5px">${h(item.suggested_category || 'Shopping')} · ${h(item.sender || 'SMS Alert')}</div>
+          <div style="margin-top:4px">
+            <span class="caption" style="font-size:10.5px;font-weight:600">Incoming Alert:</span>
+            <div class="sms-raw-box">${h(item.body)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section" style="margin-top:4px">
+        <div class="section-header" style="margin-bottom:6px">
+          <span class="title" style="font-size:13px">Merge Configuration</span>
+        </div>
+        <div class="field">
+          <label class="field-label" for="mergeMerchant">Merchant to Keep</label>
+          <input class="input" id="mergeMerchant" type="text" value="${h(defaultMerchant)}" placeholder="Merchant name">
+          ${twin.merchant && item.merchant && twin.merchant !== item.merchant ? `
+            <div class="row" style="gap:6px;margin-top:4px;flex-wrap:wrap">
+              <button type="button" class="chip chip-sm" data-pick-merchant="${h(item.merchant)}">Use "${h(item.merchant)}"</button>
+              <button type="button" class="chip chip-sm" data-pick-merchant="${h(twin.merchant)}">Use "${h(twin.merchant)}"</button>
+            </div>` : ''}
+        </div>
+
+        <div class="row" style="gap:12px;align-items:flex-end">
+          ${selectField({
+            key: 'category',
+            label: 'Category',
+            id: 'mergeCategory',
+            half: true,
+            value: defaultCategory,
+            options: categoryOptions(categories, defaultType),
+          })}
+          <div class="field" style="flex:1;min-width:0">
+            <label class="field-label" for="mergeNote">Note / Description</label>
+            <input class="input" id="mergeNote" type="text" value="${h(defaultDesc)}" placeholder="Optional note">
+          </div>
+        </div>
+
+        <label class="card-flat" style="margin-top:8px;display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--surface-container-high);border-radius:var(--radius-sm);cursor:pointer">
+          <div style="flex:1;margin-right:12px">
+            <div style="font-size:12.5px;font-weight:600">Apply rule to future alerts</div>
+            <div class="caption" style="font-size:11px;color:var(--on-surface-variant)">Auto-categorize matching merchant in future</div>
+          </div>
+          <input type="checkbox" id="mergeApplyRule" checked style="width:18px;height:18px;cursor:pointer;accent-color:var(--accent)">
+        </label>
+      </div>
+    </div>`, {
+    actions: `
+      <div style="display:flex;gap:6px;width:100%;flex-wrap:wrap;justify-content:space-between;align-items:center">
+        <button class="btn btn-tonal btn-sm" data-sheet-discard style="gap:4px">
+          ${icon('visibility_off', 'icon-sm')}Discard (Duplicate)
+        </button>
+        <div class="row" style="gap:6px">
+          <button class="btn btn-outlined btn-sm" data-sheet-keep-both style="gap:4px">
+            ${icon('add', 'icon-sm')}Keep Both
+          </button>
+          <button class="btn btn-filled btn-sm" data-sheet-merge style="gap:4px">
+            ${icon('autorenew', 'icon-sm')}Merge & Save
+          </button>
+        </div>
+      </div>`,
+    onMount(node, close) {
+      bindSelectFields(node);
+      node.querySelectorAll('[data-pick-merchant]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const input = node.querySelector('#mergeMerchant');
+          if (input) input.value = btn.dataset.pickMerchant;
+        });
+      });
+
+      node.querySelector('[data-sheet-discard]')?.addEventListener('click', async () => {
+        const res = await Bridge.call('sms', {
+          action: 'mark_duplicate',
+          body: item.body,
+        });
+        if (res && res.status === 'success') {
+          toast('Marked duplicate and discarded.', 'success');
+          close(true);
+          app.refresh();
+        } else {
+          toast(res?.message || 'Could not discard alert.', 'error');
+        }
+      });
+
+      node.querySelector('[data-sheet-keep-both]')?.addEventListener('click', async () => {
+        const res = await Bridge.call('sms', {
+          action: 'classify_alert',
+          body: item.body,
+          amount: item.amount,
+          category: node.querySelector('#mergeCategory')?.value || defaultCategory,
+          merchant: node.querySelector('#mergeMerchant')?.value.trim() || defaultMerchant,
+          description: node.querySelector('#mergeNote')?.value.trim() || '',
+          type: defaultType,
+          date: item.date,
+          apply_to_all: Boolean(node.querySelector('#mergeApplyRule')?.checked),
+          override_duplicate: true,
+        });
+        if (res && res.status === 'success') {
+          toast('Filed as separate transaction.', 'success');
+          close(true);
+          app.refresh();
+        } else {
+          toast(res?.message || 'Could not file transaction.', 'error');
+        }
+      });
+
+      node.querySelector('[data-sheet-merge]')?.addEventListener('click', async () => {
+        const res = await Bridge.call('sms', {
+          action: 'merge_alert',
+          transaction_id: twin.id || item.duplicate_of,
+          body: item.body,
+          raw_sms: item.body,
+          date: item.date,
+          amount: item.amount,
+          category: node.querySelector('#mergeCategory')?.value || defaultCategory,
+          merchant: node.querySelector('#mergeMerchant')?.value.trim() || defaultMerchant,
+          description: node.querySelector('#mergeNote')?.value.trim() || '',
+          type: defaultType,
+          apply_to_all: Boolean(node.querySelector('#mergeApplyRule')?.checked),
+        });
+        if (res && res.status === 'success') {
+          toast('Merged details into existing transaction.', 'success');
+          close(true);
+          app.refresh();
+        } else {
+          toast(res?.message || 'Could not merge alert.', 'error');
+        }
+      });
+    },
+  });
 }
 
 /**
@@ -1676,6 +2163,11 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
               value: '',
               options: existingTargetOptions,
             })}
+            ${item.last_4 ? `
+              <label class="row" style="gap:8px;align-items:center;margin-top:10px;cursor:pointer">
+                <input type="checkbox" id="chkCombineUpdateDigits" checked style="width:16px;height:16px">
+                <span style="font-size:12px">Update target card digits to ${h(item.last_4)} (Replacement Card)</span>
+              </label>` : ''}
             <button class="btn btn-outlined btn-block" data-action-combine style="margin-top:12px">
               ${icon('open_in_new', 'icon-sm')}Combine with Credit Card
             </button>
@@ -1707,6 +2199,11 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
               value: '',
               options: existingTargetOptions,
             })}
+            ${item.last_4 ? `
+              <label class="row" style="gap:8px;align-items:center;margin-top:10px;cursor:pointer">
+                <input type="checkbox" id="chkCombineUpdateDigits" checked style="width:16px;height:16px">
+                <span style="font-size:12px">Update target account digits to ${h(item.last_4)} (Replacement Account)</span>
+              </label>` : ''}
             <button class="btn btn-outlined btn-block" data-action-combine style="margin-top:12px">
               ${icon('open_in_new', 'icon-sm')}Combine with Bank Account
             </button>
@@ -1732,6 +2229,7 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
           bank: item.bank || 'Bank',
           last_4: item.last_4 || '',
           total_limit: item.total_limit || 0,
+          available_limit: item.available_limit !== null && item.available_limit !== undefined ? item.available_limit : 0,
           current_balance: item.current_balance || 0,
         } : {
           name: customName,
@@ -1771,6 +2269,8 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
           return;
         }
 
+        const updateLast4 = Boolean(node.querySelector('#chkCombineUpdateDigits')?.checked);
+
         const res = await Bridge.db('combine_discovered_account', {
           target_id: Number(targetId),
           target_type: isCredit ? 'card' : 'account',
@@ -1778,6 +2278,7 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
           bank: item.bank || item.institution || '',
           is_debit_card: isDebit,
           instrument_type: inst,
+          update_last_4: updateLast4,
         });
 
         if (res && res.status === 'success') {

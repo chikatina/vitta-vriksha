@@ -83,7 +83,7 @@ describe('StanChart, ECS Mandates & Comprehensive RBI Bank Knowledge Base', () =
           sender: 'ICICIB',
           expectedAmount: 1000,
           expectedType: 'Expense',
-          expectedCategory: 'Transport & Fuel',
+          expectedCategory: 'Transport',
         },
         {
           text: 'Salary credit of INR 1,50,000.00 deposited in your A/C 7766 on 31-Aug-2026.',

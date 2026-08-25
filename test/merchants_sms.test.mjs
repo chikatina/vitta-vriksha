@@ -64,9 +64,13 @@ describe('merchants.js keyword index & merchant parser', () => {
 
   it('categorizes merchant via keyword index', () => {
     assert.equal(categoryForMerchant('Swiggy'), 'Dining');
-    assert.equal(categoryForMerchant('Uber'), 'Transport & Fuel');
-    assert.equal(categoryForMerchant('Netflix'), 'Entertainment');
-    assert.equal(categoryForMerchant('Apollo Pharmacy'), 'Health');
+    assert.equal(categoryForMerchant('Uber'), 'Transport');
+    assert.equal(categoryForMerchant('Shell Petrol Pump'), 'Fuel');
+    assert.equal(categoryForMerchant('Netflix'), 'Subscriptions');
+    assert.equal(categoryForMerchant('Apollo Pharmacy'), 'Medical');
+    assert.equal(categoryForMerchant('Eurokids School Fee'), 'School');
+    assert.equal(categoryForMerchant('Cult Fit'), 'Fitness');
+    assert.equal(categoryForMerchant('Pet Shop'), 'Pets');
     assert.equal(categoryForMerchant('Amazon'), 'Shopping');
     assert.equal(categoryForMerchant('Unknown Vendor', 'Swiggy order delivered'), 'Dining');
     assert.equal(categoryForMerchant('', ''), '');
@@ -498,7 +502,7 @@ describe('sms.js SMS classifier and dispatcher', () => {
       {
         body: 'Rs 120 paid to UBER on 21-Aug-2026',
         amount: 120,
-        category: 'Transport & Fuel',
+        category: 'Transport',
         type: 'Expense',
         merchant: 'UBER',
         date: '2026-08-21',

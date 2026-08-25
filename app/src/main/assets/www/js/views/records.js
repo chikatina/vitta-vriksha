@@ -147,24 +147,27 @@ export const RECORD_CONFIG = {
     ],
     row: (r) => {
       let glyph = 'account_balance';
-      if (r.category === 'Meal Card') glyph = 'restaurant';
-      else if (r.category === 'Wallet') glyph = 'account_balance_wallet';
-      else if (r.category === 'Prepaid Card') glyph = 'credit_card';
-      else if (r.category === 'Cash') glyph = 'payments';
-      else if (r.category === 'Gold') glyph = 'savings';
-      else if (r.category === 'Property') glyph = 'home';
-      else if (r.category === 'Stock' || r.category === 'MF' || r.category === 'NPS') glyph = 'trending_up';
+      let avatarClass = 'avatar-bank';
+      if (r.category === 'Meal Card') { glyph = 'restaurant'; avatarClass = 'avatar-meal'; }
+      else if (r.category === 'Wallet') { glyph = 'account_balance_wallet'; avatarClass = 'avatar-wallet'; }
+      else if (r.category === 'Prepaid Card') { glyph = 'credit_card'; avatarClass = 'avatar-debit'; }
+      else if (r.debit_card_last_4 && (!r.account_number || r.name?.toLowerCase().includes('debit'))) { glyph = 'payments'; avatarClass = 'avatar-debit'; }
+      else if (r.category === 'Cash') { glyph = 'payments'; avatarClass = 'avatar-bank'; }
+      else if (r.category === 'Gold') { glyph = 'savings'; avatarClass = 'avatar-bank'; }
+      else if (r.category === 'Property') { glyph = 'home'; avatarClass = 'avatar-bank'; }
+      else if (r.category === 'Stock' || r.category === 'MF' || r.category === 'NPS') { glyph = 'trending_up'; avatarClass = 'avatar-bank'; }
 
       const isNpsLinked = r.linked_holding_type === 'nps';
       const details = [
         r.institution,
         r.account_number ? (r.category === 'NPS' ? `PRAN: ${r.account_number}` : `ending ${r.account_number}`) : '',
-        r.debit_card_last_4 ? `DC: ${r.debit_card_last_4}` : '',
+        r.debit_card_last_4 ? `Debit Card ···· ${r.debit_card_last_4}` : '',
         isNpsLinked ? 'Linked to CAS' : '',
       ].filter(Boolean).join(' · ');
 
       return {
         glyph,
+        avatarClass,
         title: r.name,
         sub: details || r.category,
         amount: r.balance,
@@ -311,8 +314,9 @@ export const RECORD_CONFIG = {
       const availSub = limit > 0 ? ` · Avl: ${money(avail)}` : '';
       return {
         glyph: 'credit_card',
+        avatarClass: 'avatar-credit',
         title: r.card_name,
-        sub: `${r.bank}${r.last_4 ? ` ···· ${r.last_4}` : ''} · ${used.toFixed(0)}% used${availSub}`,
+        sub: `${r.bank}${r.last_4 ? ` ···· ${r.last_4}` : ''} · Credit Card · ${used.toFixed(0)}% used${availSub}`,
         amount: r.current_balance,
         progress: { value: used, warn: used > 30 },
       };
@@ -664,37 +668,71 @@ export async function renderRecordPage(container, app, type) {
             Tap <strong>Link / Details</strong> to link a debit card to your bank account or combine with an existing card. Tap <strong>Ignore</strong> to remove alerts.
           </p>
           <div class="list" style="background:transparent;box-shadow:none;display:flex;flex-direction:column;gap:10px">
-            ${discovered.map((d, i) => `
+            ${discovered.map((d, i) => {
+              const isCredit = d.instrument_type === 'credit_card';
+              const isDebit = d.instrument_type === 'debit_card';
+              const isMeal = d.instrument_type === 'meal_card' || d.category === 'Meal Card';
+              const isWallet = d.instrument_type === 'wallet' || d.category === 'Wallet';
+              const isPrepaid = d.instrument_type === 'prepaid_card' || d.category === 'Prepaid Card';
+
+              let glyph = 'account_balance';
+              let avatarClass = 'avatar-bank';
+              let badgeClass = 'badge-income';
+              let label = 'Bank A/c';
+
+              if (isCredit) {
+                glyph = 'credit_card';
+                avatarClass = 'avatar-credit';
+                badgeClass = 'badge-gold';
+                label = 'Credit Card';
+              } else if (isDebit) {
+                glyph = 'payments';
+                avatarClass = 'avatar-debit';
+                badgeClass = 'badge-income';
+                label = 'Debit Card';
+              } else if (isMeal) {
+                glyph = 'restaurant';
+                avatarClass = 'avatar-meal';
+                badgeClass = 'badge-warning';
+                label = 'Meal Card';
+              } else if (isWallet) {
+                glyph = 'account_balance_wallet';
+                avatarClass = 'avatar-wallet';
+                badgeClass = 'badge-info';
+                label = 'Wallet';
+              } else if (isPrepaid) {
+                glyph = 'credit_card';
+                avatarClass = 'avatar-debit';
+                badgeClass = 'badge-income';
+                label = 'Prepaid';
+              }
+
+              return `
               <div class="card-flat" style="background:var(--surface-container-high);padding:14px;border-radius:var(--radius-md);border:1px solid var(--outline-variant);display:flex;flex-direction:column;gap:10px;width:100%;box-sizing:border-box">
                 <div style="display:flex;align-items:flex-start;gap:12px;cursor:pointer" data-inspect-discovered="${i}">
-                  <span class="avatar avatar-sm" style="background:var(--accent-container);color:var(--on-accent-container);flex-shrink:0;margin-top:2px">
-                    ${icon(
-                      d.instrument_type === 'debit_card' ? 'payments' :
-                      (d.instrument_type === 'credit_card' ? 'credit_card' :
-                      (d.instrument_type === 'meal_card' || d.category === 'Meal Card' ? 'restaurant' :
-                      (d.instrument_type === 'wallet' || d.category === 'Wallet' ? 'account_balance_wallet' :
-                      (d.instrument_type === 'prepaid_card' || d.category === 'Prepaid Card' ? 'credit_card' : 'account_balance')))),
-                      'icon-sm'
-                    )}
+                  <span class="avatar avatar-sm ${avatarClass}" style="flex-shrink:0;margin-top:2px">
+                    ${icon(glyph, 'icon-sm')}
                   </span>
                   <div style="flex:1;min-width:0">
                     <div class="row-between" style="align-items:center;gap:6px">
                       <div style="font-weight:700;font-size:13.5px;color:var(--on-surface);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
                         ${h(d.suggested_name || d.name || d.card_name)}
                       </div>
-                      <span class="badge ${d.instrument_type === 'credit_card' ? 'badge-tonal' : 'badge-income'}" style="font-size:10px;padding:1px 6px;text-transform:uppercase;letter-spacing:0.3px;flex-shrink:0">
-                        ${h(
-                          d.instrument_type === 'debit_card' ? 'Debit Card' :
-                          (d.instrument_type === 'credit_card' ? 'Credit Card' :
-                          (d.instrument_type === 'meal_card' || d.category === 'Meal Card' ? 'Meal Card' :
-                          (d.instrument_type === 'wallet' || d.category === 'Wallet' ? 'Wallet' :
-                          (d.instrument_type === 'prepaid_card' || d.category === 'Prepaid Card' ? 'Prepaid' : 'Bank A/c'))))
-                        )}
+                      <span class="badge ${badgeClass}" style="font-size:10px;padding:1px 6px;text-transform:uppercase;letter-spacing:0.3px;flex-shrink:0">
+                        ${h(label)}
                       </span>
                     </div>
                     <div class="caption" style="font-size:11.5px;margin-top:2px;color:var(--on-surface-variant)">
                       ${h(d.bank || d.institution || 'Bank')} · ending ${h(d.last_4)}
                     </div>
+                    ${d.balance ? `
+                      <div class="caption" style="color:var(--income);font-size:11px;font-weight:600;margin-top:3px">
+                        Latest Balance: ${h(formatCurrency(d.balance, app.currency, app.locale))}
+                      </div>` : ''}
+                    ${isCredit && (d.total_limit || d.current_balance) ? `
+                      <div class="caption" style="color:var(--expense);font-size:11px;font-weight:600;margin-top:3px">
+                        ${d.current_balance ? `Outstanding: ${h(formatCurrency(d.current_balance, app.currency, app.locale))}` : ''}${d.total_limit ? ` · Limit: ${h(formatCurrency(d.total_limit, app.currency, app.locale))}` : ''}
+                      </div>` : ''}
                     ${d.txn_count ? `
                       <div class="caption" style="color:var(--accent);font-size:11px;font-weight:600;margin-top:3px">
                         ${d.txn_count} alert${d.txn_count === 1 ? '' : 's'}${d.total_spent ? ` · ${h(formatCurrency(d.total_spent, app.currency, app.locale))}` : ''}${d.last_seen ? ` · Last active ${h(formatDate(d.last_seen))}` : ''}
@@ -702,20 +740,21 @@ export async function renderRecordPage(container, app, type) {
                   </div>
                 </div>
 
-                <div class="row-between" style="align-items:center;padding-top:8px;border-top:1px solid var(--outline-variant);gap:6px;flex-wrap:wrap">
-                  <button class="btn btn-tonal btn-xs" data-inspect-discovered="${i}" style="gap:4px">
+                <div class="discovered-card-actions">
+                  <button class="btn btn-tonal btn-xs" data-inspect-discovered="${i}">
                     ${icon('open_in_new', 'icon-sm')}Link / Details
                   </button>
-                  <div class="row" style="gap:6px;align-items:center;flex-wrap:wrap">
-                    <button class="btn btn-filled btn-xs" data-add-discovered="${i}" style="gap:4px">
+                  <div class="discovered-btn-group">
+                    <button class="btn btn-filled btn-xs" data-add-discovered="${i}">
                       ${icon('add', 'icon-sm')}Add
                     </button>
-                    <button class="btn btn-outlined btn-xs" data-ignore-discovered="${i}" style="gap:4px;color:var(--on-surface-variant);border-color:var(--outline-variant)">
+                    <button class="btn btn-outlined btn-xs" data-ignore-discovered="${i}" style="color:var(--on-surface-variant);border-color:var(--outline-variant)">
                       ${icon('visibility_off', 'icon-sm')}Ignore
                     </button>
                   </div>
                 </div>
-              </div>`).join('')}
+              </div>`;
+            }).join('')}
           </div>
         </div>`;
     } else {
@@ -732,7 +771,7 @@ export async function renderRecordPage(container, app, type) {
           const isCardRecord = Boolean(record.card_name || record.total_limit !== undefined);
           return `
             <button class="list-row" data-record="${record.id}" data-is-card="${isCardRecord ? '1' : '0'}" ${row.dim ? 'style="opacity:0.55"' : ''}>
-              <span class="avatar avatar-sm" style="background:var(--accent-container);color:var(--on-accent-container)">
+              <span class="avatar avatar-sm ${row.avatarClass || ''}">
                 ${icon(row.glyph)}
               </span>
               <span class="list-row-main">
@@ -809,15 +848,16 @@ export async function renderRecordPage(container, app, type) {
           card_name: item.suggested_name || item.name || `${bank} Credit Card`,
           bank,
           last_4: last4,
-          total_limit: 0,
-          current_balance: 0,
+          total_limit: item.total_limit || 0,
+          available_limit: item.available_limit !== null && item.available_limit !== undefined ? item.available_limit : 0,
+          current_balance: item.current_balance || 0,
         } : {
           name: item.suggested_name || item.name || `${bank} Account`,
           category: item.category || (isDebit ? 'Bank' : (item.instrument_type === 'meal_card' ? 'Meal Card' : (item.instrument_type === 'wallet' ? 'Wallet' : 'Bank'))),
           institution: bank,
           account_number: isDebit ? (item.account_number || '') : (last4 || item.account_number || ''),
           debit_card_last_4: isDebit ? (last4 || '') : (item.debit_card_last_4 || ''),
-          balance: 0,
+          balance: item.balance || 0,
         };
 
         const res = await Bridge.db('save_record', {
@@ -1076,11 +1116,24 @@ async function openRecordSheet(app, type, existing, preset = null) {
         : '')
   ) : '';
 
+  const mergeBtnHtml = existing ? (
+    type === 'card'
+      ? `<button type="button" class="btn btn-tonal btn-block" data-merge-card style="margin-top:8px">
+          ${icon('account_tree')}Merge into Another Card (Replacement Card)
+        </button>`
+      : (type === 'account'
+        ? `<button type="button" class="btn btn-tonal btn-block" data-merge-account style="margin-top:8px">
+            ${icon('account_tree')}Merge into Another Account
+          </button>`
+        : '')
+  ) : '';
+
   const body = presetBannerHtml + npsLinkBannerHtml + rows.map((row) => (row.fields.length > 1 || row.half
     ? `<div class="row" style="gap:12px;align-items:flex-end">${row.fields.map((f) => fieldHtml(f, initial(f))).join('')}</div>`
     : fieldHtml(row.fields[0], initial(row.fields[0])))).join('')
     + dcSuggestionsHtml
     + conversionBtnHtml
+    + mergeBtnHtml
     + (existing ? `<button class="btn btn-danger-text btn-block" data-delete style="margin-top:8px">${icon('delete')}Delete</button>` : '');
 
   const saved = await sheet(existing ? `Edit ${config.heading.toLowerCase().replace(/s$/, '')}` : config.addLabel, body, {
@@ -1221,6 +1274,237 @@ async function openRecordSheet(app, type, existing, preset = null) {
           await Bridge.db('delete_record', { record_type: 'card', record_id: existing.id });
           toast('Converted to Bank Account with Debit Card!', 'success');
           close(true);
+        });
+      }
+
+      // Merge Duplicate Card handler (New card number issue)
+      const mergeCardBtn = node.querySelector('[data-merge-card]');
+      if (mergeCardBtn && existing) {
+        mergeCardBtn.addEventListener('click', async () => {
+          const cardListRes = await Bridge.db('list_records', { record_type: 'card' });
+          const otherCards = (cardListRes?.records || []).filter((c) => c.id !== existing.id);
+          if (!otherCards.length) {
+            toast('No other cards found to merge with.', 'info');
+            return;
+          }
+
+          const targetCardResult = await sheet('Merge Duplicate Card', `
+            <div style="display:flex;flex-direction:column;gap:var(--gap-3)">
+              <div class="card-flat" style="background:var(--surface-container-high);padding:12px 14px;border-radius:var(--radius-md);border:1px solid var(--outline-variant)">
+                <div style="font-weight:600;font-size:13px;color:var(--on-surface-variant)">Source Card (will be merged & removed):</div>
+                <div style="font-weight:700;font-size:14px;margin-top:4px;color:var(--on-surface)">
+                  ${h(existing.card_name)} · ${h(existing.bank || 'Bank')} ${existing.last_4 ? `(ending ${h(existing.last_4)})` : ''}
+                </div>
+              </div>
+
+              <p class="caption" style="font-size:12px;line-height:1.45">
+                All past transactions, statements, and SMS history from this card will be moved to the target card.
+              </p>
+
+              <div class="field">
+                ${selectField({
+                  key: 'target_card',
+                  id: 'selectMergeTargetCard',
+                  label: 'Select Target Card to Merge Into',
+                  value: String(otherCards[0].id),
+                  options: otherCards.map((c) => ({
+                    value: String(c.id),
+                    label: `${c.card_name} (${c.bank || 'Bank'}${c.last_4 ? ` · ${c.last_4}` : ''})`,
+                  })),
+                })}
+              </div>
+
+              ${existing.last_4 ? `
+                <label class="card-flat" style="display:flex;align-items:flex-start;gap:10px;padding:12px;background:var(--surface-container-high);border-radius:var(--radius-sm);cursor:pointer">
+                  <input type="checkbox" id="chkUpdateTargetLast4" checked style="margin-top:2px;width:18px;height:18px;accent-color:var(--accent)">
+                  <div style="font-size:12px;line-height:1.35">
+                    <strong>Update target card digits to ${h(existing.last_4)}</strong>
+                    <div class="caption">Check this if "${h(existing.card_name)}" is a replacement/reissued card with a new card number.</div>
+                  </div>
+                </label>` : ''}
+
+              <div class="card-flat" style="padding:12px;background:var(--surface-container-high);border-radius:var(--radius-sm);display:flex;flex-direction:column;gap:8px">
+                <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+                  <input type="checkbox" id="chkAddCardBalance" style="margin-top:2px;width:18px;height:18px;accent-color:var(--accent)">
+                  <div style="font-size:12px;line-height:1.35">
+                    <strong>Add balance (${formatCurrency(existing.current_balance || 0, app.currency, app.locale)}) to target card</strong>
+                    <div class="caption">Check to sum outstanding balances. Leave unchecked to keep target card's current balance.</div>
+                  </div>
+                </label>
+
+                <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;border-top:1px solid var(--outline-variant);padding-top:8px">
+                  <input type="checkbox" id="chkOverwriteCardBalance" style="margin-top:2px;width:18px;height:18px;accent-color:var(--accent)">
+                  <div style="font-size:12px;line-height:1.35">
+                    <strong>Overwrite target card balance with this card's balance</strong>
+                    <div class="caption">Replace target card balance with ${formatCurrency(existing.current_balance || 0, app.currency, app.locale)}.</div>
+                  </div>
+                </label>
+              </div>
+            </div>`, {
+              actions: `
+                <button class="btn btn-outlined" data-cancel>Cancel</button>
+                <button class="btn btn-filled" data-confirm-merge>${icon('account_tree')}Merge Cards</button>`,
+              onMount(sheetNode, sheetClose) {
+                bindSelectFields(sheetNode);
+                const chkAdd = sheetNode.querySelector('#chkAddCardBalance');
+                const chkOvr = sheetNode.querySelector('#chkOverwriteCardBalance');
+                if (chkAdd && chkOvr) {
+                  chkAdd.addEventListener('change', () => { if (chkAdd.checked) chkOvr.checked = false; });
+                  chkOvr.addEventListener('change', () => { if (chkOvr.checked) chkAdd.checked = false; });
+                }
+
+                sheetNode.querySelector('[data-cancel]').addEventListener('click', () => sheetClose(null));
+                sheetNode.querySelector('[data-confirm-merge]').addEventListener('click', () => {
+                  const sel = sheetNode.querySelector('.select-button[data-field="target_card"]');
+                  const targetId = sel ? Number(sel.dataset.value) : 0;
+                  const updateLast4 = Boolean(sheetNode.querySelector('#chkUpdateTargetLast4')?.checked);
+                  const isAdd = Boolean(chkAdd?.checked);
+                  const isOvr = Boolean(chkOvr?.checked);
+                  const balanceAction = isOvr ? 'use_source' : (isAdd ? 'add' : 'keep_target');
+                  sheetClose({ targetId, updateLast4, balanceAction });
+                });
+              },
+            });
+
+          if (targetCardResult?.targetId) {
+            const mergeRes = await Bridge.db('merge_cards', {
+              source_card_id: existing.id,
+              target_card_id: targetCardResult.targetId,
+              update_last_4: targetCardResult.updateLast4,
+              balance_action: targetCardResult.balanceAction,
+            });
+            if (mergeRes.status === 'success') {
+              toast(`Merged card! (${mergeRes.moved_transactions || 0} transactions updated)`, 'success');
+              close(true);
+              app.refresh();
+            } else {
+              toast(mergeRes.message || 'Could not merge cards.', 'error');
+            }
+          }
+        });
+      }
+
+      // Merge Duplicate Account handler
+      const mergeAccBtn = node.querySelector('[data-merge-account]');
+      if (mergeAccBtn && existing) {
+        mergeAccBtn.addEventListener('click', async () => {
+          const accListRes = await Bridge.db('list_records', { record_type: 'account' });
+          const otherAccounts = (accListRes?.records || []).filter((a) => a.id !== existing.id);
+          if (!otherAccounts.length) {
+            toast('No other accounts found to merge with.', 'info');
+            return;
+          }
+
+          const targetAccResult = await sheet('Merge Duplicate Account', `
+            <div style="display:flex;flex-direction:column;gap:var(--gap-3)">
+              <div class="card-flat" style="background:var(--surface-container-high);padding:12px 14px;border-radius:var(--radius-md);border:1px solid var(--outline-variant)">
+                <div style="font-weight:600;font-size:13px;color:var(--on-surface-variant)">Source Account (will be merged & removed):</div>
+                <div style="font-weight:700;font-size:14px;margin-top:4px;color:var(--on-surface)">
+                  ${h(existing.name)} · ${h(existing.institution || 'Bank')} ${existing.account_number ? `(ending ${h(existing.account_number)})` : ''} · ${formatCurrency(existing.balance || 0, app.currency, app.locale)}
+                </div>
+              </div>
+
+              <p class="caption" style="font-size:12px;line-height:1.45">
+                All past transactions and SMS history from this account will be moved to the target account.
+              </p>
+
+              <div class="field">
+                ${selectField({
+                  key: 'target_account',
+                  id: 'selectMergeTargetAccount',
+                  label: 'Select Target Account to Merge Into',
+                  value: String(otherAccounts[0].id),
+                  options: otherAccounts.map((a) => ({
+                    value: String(a.id),
+                    label: `${a.name} (${a.institution || 'Bank'}${a.account_number ? ` · ${a.account_number}` : ''}${a.debit_card_last_4 ? ` · DC: ${a.debit_card_last_4}` : ''}) · ${formatCurrency(a.balance || 0, app.currency, app.locale)}`,
+                  })),
+                })}
+              </div>
+
+              ${existing.account_number || existing.debit_card_last_4 ? `
+                <div class="card-flat" style="padding:12px;background:var(--surface-container-high);border-radius:var(--radius-sm);display:flex;flex-direction:column;gap:8px">
+                  <div style="font-weight:600;font-size:12px;color:var(--on-surface-variant)">Account & Card Numbers:</div>
+                  
+                  <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+                    <input type="checkbox" id="chkLinkAsDebitCard" checked style="margin-top:2px;width:18px;height:18px;accent-color:var(--accent)">
+                    <div style="font-size:12px;line-height:1.35">
+                      <strong>Link digits (${h(existing.debit_card_last_4 || existing.account_number)}) as Target's Debit Card</strong>
+                      <div class="caption">Merges debit card tracking into target account without overwriting target account number.</div>
+                    </div>
+                  </label>
+
+                  <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;border-top:1px solid var(--outline-variant);padding-top:8px">
+                    <input type="checkbox" id="chkOverwriteAccNumber" style="margin-top:2px;width:18px;height:18px;accent-color:var(--accent)">
+                    <div style="font-size:12px;line-height:1.35">
+                      <strong>Overwrite target account number with ${h(existing.account_number || existing.debit_card_last_4)}</strong>
+                      <div class="caption">Replaces target account number. Leave unchecked to keep target account number intact.</div>
+                    </div>
+                  </label>
+                </div>` : ''}
+
+              <div class="card-flat" style="padding:12px;background:var(--surface-container-high);border-radius:var(--radius-sm);display:flex;flex-direction:column;gap:8px">
+                <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+                  <input type="checkbox" id="chkAddAccBalance" style="margin-top:2px;width:18px;height:18px;accent-color:var(--accent)">
+                  <div style="font-size:12px;line-height:1.35">
+                    <strong>Add balance (${formatCurrency(existing.balance || 0, app.currency, app.locale)}) to target balance</strong>
+                    <div class="caption">Check to sum both account balances. Leave unchecked to keep the target account's balance (avoids doubling balance on duplicate accounts).</div>
+                  </div>
+                </label>
+
+                <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;border-top:1px solid var(--outline-variant);padding-top:8px">
+                  <input type="checkbox" id="chkOverwriteAccBalance" style="margin-top:2px;width:18px;height:18px;accent-color:var(--accent)">
+                  <div style="font-size:12px;line-height:1.35">
+                    <strong>Overwrite target balance with this account's balance</strong>
+                    <div class="caption">Replace target account balance with ${formatCurrency(existing.balance || 0, app.currency, app.locale)}.</div>
+                  </div>
+                </label>
+              </div>
+            </div>`, {
+              actions: `
+                <button class="btn btn-outlined" data-cancel>Cancel</button>
+                <button class="btn btn-filled" data-confirm-merge>${icon('account_tree')}Merge Accounts</button>`,
+              onMount(sheetNode, sheetClose) {
+                bindSelectFields(sheetNode);
+                const chkAdd = sheetNode.querySelector('#chkAddAccBalance');
+                const chkOvr = sheetNode.querySelector('#chkOverwriteAccBalance');
+                if (chkAdd && chkOvr) {
+                  chkAdd.addEventListener('change', () => { if (chkAdd.checked) chkOvr.checked = false; });
+                  chkOvr.addEventListener('change', () => { if (chkOvr.checked) chkAdd.checked = false; });
+                }
+
+                sheetNode.querySelector('[data-cancel]').addEventListener('click', () => sheetClose(null));
+                sheetNode.querySelector('[data-confirm-merge]').addEventListener('click', () => {
+                  const sel = sheetNode.querySelector('.select-button[data-field="target_account"]');
+                  const targetId = sel ? Number(sel.dataset.value) : 0;
+                  const linkAsDebitCard = Boolean(sheetNode.querySelector('#chkLinkAsDebitCard')?.checked);
+                  const updateAcc = Boolean(sheetNode.querySelector('#chkOverwriteAccNumber')?.checked);
+                  const isAdd = Boolean(chkAdd?.checked);
+                  const isOvr = Boolean(chkOvr?.checked);
+                  const balanceAction = isOvr ? 'use_source' : (isAdd ? 'add' : 'keep_target');
+                  sheetClose({
+                    targetId, linkAsDebitCard, updateAcc, balanceAction,
+                  });
+                });
+              },
+            });
+
+          if (targetAccResult?.targetId) {
+            const mergeRes = await Bridge.db('merge_accounts', {
+              source_account_id: existing.id,
+              target_account_id: targetAccResult.targetId,
+              link_as_debit_card: targetAccResult.linkAsDebitCard,
+              update_account_number: targetAccResult.updateAcc,
+              update_debit_card: targetAccResult.linkAsDebitCard,
+              balance_action: targetAccResult.balanceAction,
+            });
+            if (mergeRes.status === 'success') {
+              toast(`Merged account! (${mergeRes.moved_transactions || 0} transactions updated)`, 'success');
+              close(true);
+              app.refresh();
+            } else {
+              toast(mergeRes.message || 'Could not merge accounts.', 'error');
+            }
+          }
         });
       }
 

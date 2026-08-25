@@ -195,80 +195,133 @@ export async function openPeriodSheet(app, {
 
   const rows = breakdown.status === 'success' ? breakdown.rows : [];
   const flowLabel = FLOWS.find((entry) => entry.value === flow)?.label || 'Spent';
+  const isNetPositive = Number(summary.net || 0) >= 0;
+  const periodLabel = describePeriod(bucket, granularity);
 
   const body = `
-    <div class="card-flat">
-      <div class="row-between">
-        <span class="caption">Spent</span>
-        <span class="title expense">${h(money(app, summary.expense))}</span>
-      </div>
-      <div class="row-between" style="margin-top:6px">
-        <span class="caption">Received</span>
-        <span class="title income">${h(money(app, summary.income))}</span>
-      </div>
-      ${summary.invested ? `
-        <div class="row-between" style="margin-top:6px">
-          <span class="caption">Invested</span>
-          <span class="title invested">${h(money(app, summary.invested))}</span>
-        </div>` : ''}
-      ${summary.transferred ? `
-        <div class="row-between" style="margin-top:6px">
-          <span class="caption">Moved (Transfers)</span>
-          <span class="title transfer">${h(money(app, summary.transferred))}</span>
-        </div>` : ''}
-      <div style="margin-top:10px">${deltaLine(summary.change.expense)}</div>
-    </div>
-
-    <div class="fact-grid">
-      ${fact('Kept', money(app, summary.net), summary.net >= 0 ? 'income' : 'expense')}
-      ${fact('Entries', String(summary.count))}
-      ${fact('A day', money(app, summary.average_daily))}
-      ${summary.savings_rate === null
-    ? fact('Kept of income', '-')
-    : fact('Kept of income', `${summary.savings_rate.toFixed(0)}%`)}
-      ${summary.top_category
-    ? fact('Biggest category', `${h(summary.top_category.name)}`)
-    : ''}
-      ${summary.busiest_day
-    ? fact('Heaviest day', h(formatRelativeDate(summary.busiest_day.date)))
-    : ''}
-    </div>
-
-    ${summary.biggest ? `
-      <div class="section-header" style="margin-top:6px"><span class="title">Largest single entry</span></div>
-      <div class="list">
-        <div class="list-row">
-          <span class="list-row-main">
-            <span class="list-row-title">${h(summary.biggest.merchant || summary.biggest.category)}</span>
-            <span class="list-row-sub">${h(summary.biggest.category)} · ${h(formatRelativeDate(summary.biggest.date))}</span>
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <!-- 1. Hero Cashflow & Net Flow Card -->
+      <div class="period-hero-card">
+        <div class="row-between" style="align-items:flex-start;gap:8px">
+          <div>
+            <span class="caption" style="font-size:12px;text-transform:uppercase;letter-spacing:0.5px;font-weight:600">Net Kept</span>
+            <div class="display ${isNetPositive ? 'income' : 'expense'}" style="font-size:26px;font-weight:800;margin-top:2px">
+              ${isNetPositive ? '+' : ''}${h(money(app, summary.net))}
+            </div>
+          </div>
+          <span class="badge ${isNetPositive ? 'badge-income' : 'badge-expense'}" style="flex-shrink:0;font-weight:700;padding:4px 8px">
+            ${summary.savings_rate !== null ? `${summary.savings_rate}% Kept` : (isNetPositive ? 'Surplus' : 'Deficit')}
           </span>
-          <span class="list-row-amount">${h(money(app, summary.biggest.amount))}</span>
         </div>
-      </div>` : ''}
 
-    <div class="section-header" style="margin-top:14px">
-      <span class="title">${h(flowLabel)} by category</span>
-      <span class="caption">${h(money(app, breakdown.total || 0))}</span>
-    </div>
-    <div data-categories>
-      ${rows.length ? barList(rows.map((row) => ({
-    key: row.key,
-    label: row.label,
-    value: row.total,
-    color: row.color,
-    formatted: money(app, row.total),
-    sub: `${row.count} ${row.count === 1 ? 'entry' : 'entries'} · ${row.share.toFixed(0)}%`,
-  })), { selectable: true })
-    : `<div class="card-flat"><div class="caption">No categorized entries in this period.</div></div>`}
-    </div>
+        <div style="padding-top:2px">
+          ${deltaLine(summary.change.expense)}
+        </div>
 
-    <button class="btn btn-tonal btn-block" data-all style="margin-top:16px">
-      ${icon('receipt_long')}View all entries in ${h(describePeriod(bucket, granularity))}
-    </button>`;
+        <div class="period-flow-grid">
+          <div class="period-flow-item">
+            <span class="caption" style="font-size:11px">Spent (Outflow)</span>
+            <span style="font-weight:700;font-size:15px;color:var(--expense)">${h(money(app, summary.expense))}</span>
+          </div>
+          <div class="period-flow-item">
+            <span class="caption" style="font-size:11px">Received (Income)</span>
+            <span style="font-weight:700;font-size:15px;color:var(--income)">${h(money(app, summary.income))}</span>
+          </div>
+          ${summary.invested ? `
+            <div class="period-flow-item">
+              <span class="caption" style="font-size:11px">Invested</span>
+              <span style="font-weight:700;font-size:15px;color:var(--investment)">${h(money(app, summary.invested))}</span>
+            </div>` : ''}
+          ${summary.transferred ? `
+            <div class="period-flow-item">
+              <span class="caption" style="font-size:11px">Transfers</span>
+              <span style="font-weight:700;font-size:15px;color:var(--accent)">${h(money(app, summary.transferred))}</span>
+            </div>` : ''}
+        </div>
+      </div>
+
+      <!-- 2. Financial Metrics Grid -->
+      <div class="fact-grid" style="margin:0">
+        <div class="fact">
+          <span class="fact-label">Daily Average</span>
+          <span class="fact-value">${h(money(app, summary.average_daily))} <span style="font-size:11px;font-weight:normal;color:var(--on-surface-variant)">/ day</span></span>
+        </div>
+        <div class="fact">
+          <span class="fact-label">Total Entries</span>
+          <span class="fact-value">${summary.count} <span style="font-size:11px;font-weight:normal;color:var(--on-surface-variant)">txns</span></span>
+        </div>
+        ${summary.top_category ? `
+          <div class="fact">
+            <span class="fact-label">Top Category</span>
+            <span class="fact-value" title="${h(summary.top_category.name)}">${h(summary.top_category.name)}</span>
+          </div>` : ''}
+        ${summary.busiest_day ? `
+          <div class="fact">
+            <span class="fact-label">Peak Spend Day</span>
+            <span class="fact-value">${h(formatRelativeDate(summary.busiest_day.date))}</span>
+          </div>` : ''}
+      </div>
+
+      <!-- 3. Largest Single Expense Card -->
+      ${summary.biggest ? `
+        <div>
+          <div class="section-header" style="margin-bottom:6px">
+            <span class="title" style="font-size:13.5px">Largest single entry</span>
+          </div>
+          <div class="period-spotlight-card" data-open-biggest="${summary.biggest.id}">
+            <span class="avatar avatar-sm avatar-expense" style="flex-shrink:0">
+              ${icon('trending_up', 'icon-sm')}
+            </span>
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:700;font-size:14px;color:var(--on-surface);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                ${h(summary.biggest.merchant || summary.biggest.category)}
+              </div>
+              <div class="caption" style="font-size:11.5px;color:var(--on-surface-variant);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                ${h(summary.biggest.category)}${summary.biggest.date ? ` · ${h(formatRelativeDate(summary.biggest.date))}` : ''}
+              </div>
+            </div>
+            <div style="font-size:15px;font-weight:700;color:var(--expense);font-variant-numeric:tabular-nums;flex-shrink:0;text-align:right">
+              ${h(money(app, summary.biggest.amount))}
+            </div>
+          </div>
+        </div>` : ''}
+
+      <!-- 4. Category Breakdown -->
+      <div>
+        <div class="section-header" style="margin-bottom:8px">
+          <span class="title">${h(flowLabel)} by category</span>
+          <span class="caption">${h(money(app, breakdown.total || 0))}</span>
+        </div>
+        <div data-categories>
+          ${rows.length ? barList(rows.map((row) => ({
+            key: row.key,
+            label: row.label,
+            value: row.total,
+            color: row.color,
+            formatted: money(app, row.total),
+            sub: `${row.count} ${row.count === 1 ? 'entry' : 'entries'} · ${row.share.toFixed(0)}%`,
+          })), { selectable: true })
+            : `<div class="card-flat"><div class="caption">No categorized entries in this period.</div></div>`}
+        </div>
+      </div>
+
+      <!-- 5. View All Entries Button -->
+      <button class="btn btn-tonal btn-block" data-all style="margin-top:4px">
+        ${icon('receipt_long')}View all entries in ${h(periodLabel)}
+      </button>
+    </div>`;
 
   await sheet(title, body, {
     autofocus: false,
     onMount(node, close) {
+      const openBiggestBtn = node.querySelector('[data-open-biggest]');
+      if (openBiggestBtn && summary.biggest) {
+        openBiggestBtn.addEventListener('click', async () => {
+          close(null);
+          await app.addTransaction(summary.biggest);
+        });
+      }
+
       bindChartSelect(node.querySelector('[data-categories]'), async (key) => {
         const row = rows.find((entry) => entry.key === key);
         if (!row) return;

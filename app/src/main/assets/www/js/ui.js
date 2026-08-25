@@ -387,7 +387,72 @@ export function sheet(title, bodyHtml, { onMount, actions, autofocus = true } = 
 
     node.querySelector('[data-dismiss]').addEventListener('click', () => close(null));
     if (onMount) onMount(node, close);
+    autoScrollChipScrollers(node);
     return node;
+  });
+}
+
+/**
+ * Automatically scrolls any selected chip, tab, or list item in horizontal/vertical scrollers into view.
+ */
+export function scrollSelectedIntoView(container, { behavior = 'smooth', block = 'center', inline = 'center' } = {}) {
+  if (!container) return;
+  const target = container.querySelector(
+    '.is-selected, [aria-selected="true"]:not([aria-selected="false"]), .chip.active, .selected, .list-row[data-selected="true"]',
+  );
+  if (!target) return;
+
+  const scroller = container.classList?.contains('chip-scroller') || container.hasAttribute?.('data-categories') || container.classList?.contains('menu')
+    ? container
+    : target.closest('.chip-scroller, .menu, [data-categories], .segmented, [data-filters], .list, [data-sub-filters], [data-classes], [data-dimensions], [data-charts]');
+
+  if (scroller) {
+    if (scroller.scrollWidth > scroller.clientWidth) {
+      const targetLeft = target.offsetLeft;
+      const targetWidth = target.offsetWidth;
+      const scrollerWidth = scroller.clientWidth;
+      const scrollTarget = Math.max(0, targetLeft - (scrollerWidth - targetWidth) / 2);
+      try {
+        scroller.scrollTo({ left: scrollTarget, behavior });
+      } catch {
+        scroller.scrollLeft = scrollTarget;
+      }
+    } else if (scroller.scrollHeight > scroller.clientHeight) {
+      try {
+        target.scrollIntoView({ behavior, block, inline });
+      } catch {
+        target.scrollIntoView();
+      }
+    }
+  } else {
+    try {
+      target.scrollIntoView({ behavior, block, inline });
+    } catch {
+      target.scrollIntoView();
+    }
+  }
+}
+
+/**
+ * Initializes automatic scrolling for all chip scrollers within `root`.
+ * Automatically scrolls to the selected chip on initial mount and on every click.
+ */
+export function autoScrollChipScrollers(root = document) {
+  if (!root || typeof root.querySelectorAll !== 'function') return;
+  root.querySelectorAll('.chip-scroller, [data-categories], [data-filters], [data-sub-filters], [data-types], .segmented, [data-classes], [data-dimensions], [data-charts]').forEach((scroller) => {
+    // Scroll selected chip on mount
+    scrollSelectedIntoView(scroller, { behavior: 'instant' });
+    setTimeout(() => scrollSelectedIntoView(scroller, { behavior: 'smooth' }), 60);
+
+    if (!scroller.dataset.scrollBound) {
+      scroller.dataset.scrollBound = '1';
+      scroller.addEventListener('click', (e) => {
+        const clickedChip = e.target.closest('.chip, button, [role="tab"]');
+        if (clickedChip && scroller.contains(clickedChip)) {
+          setTimeout(() => scrollSelectedIntoView(scroller, { behavior: 'smooth' }), 30);
+        }
+      });
+    }
   });
 }
 
@@ -604,6 +669,14 @@ export function openMenu(anchor, options, current) {
 
     requestAnimationFrame(() => {
       menu.classList.add('open');
+      const selectedItem = menu.querySelector('.menu-item.is-selected');
+      if (selectedItem) {
+        try {
+          selectedItem.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        } catch {
+          selectedItem.scrollIntoView();
+        }
+      }
     });
 
     let settled = false;

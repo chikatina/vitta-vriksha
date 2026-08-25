@@ -259,14 +259,15 @@ test('QOL: Interactive Driver.js-Style App Tour covers 8 granular section steps'
     assert.ok(Array.isArray(step.targetSelectors) && step.targetSelectors.length > 0, 'Step has targetSelectors for spotlight');
   }
 
-  // Verify Step 1 specifically targets SMS / Home widgets
-  assert.ok(TOUR_STEPS[0].targetSelectors.some((s) => s.includes('sms') || s.includes('card')));
+  // Verify Home steps target widgets and cards
+  assert.ok(TOUR_STEPS[0].targetSelectors.some((s) => s.includes('widget') || s.includes('card')));
+  assert.ok(TOUR_STEPS[1].targetSelectors.some((s) => s.includes('sms') || s.includes('card')));
 
-  // Verify Step 2 specifically targets Rules
-  assert.ok(TOUR_STEPS[1].targetSelectors.some((s) => s.includes('rules') || s.includes('card')));
+  // Verify Wealth CAS step targets CAS
+  assert.ok(TOUR_STEPS[5].targetSelectors.some((s) => s.includes('cas') || s.includes('investments')));
 
-  // Verify Step 3 specifically targets CAS / Imports
-  assert.ok(TOUR_STEPS[2].targetSelectors.some((s) => s.includes('cas') || s.includes('card') || s.includes('button')));
+  // Verify More Rules step targets Rules
+  assert.ok(TOUR_STEPS[6].targetSelectors.some((s) => s.includes('rules') || s.includes('list')));
 
   // Test interactive navigation runner
   const visitedTabs = [];

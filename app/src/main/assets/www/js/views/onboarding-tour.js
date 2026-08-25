@@ -3,89 +3,14 @@
 import { icon, h } from '../ui.js';
 
 export const TOUR_STEPS = [
-  // ── 1. SMS SCANNING & DISCOVERY ──
+  // ── 1. HOME: CASHFLOW & DASHBOARD ──
   {
     tab: 'home',
-    title: 'Bank SMS Auto-Scanning',
-    subtitle: 'Step 1 of 8 • SMS Scanning',
-    glyph: 'sms',
-    badge: 'SMS Scanner',
-    targetSelectors: ['[data-action-sms]', '[data-onboarding-card]', '.banner', '[data-widget="month_summary"]', '.card'],
-    description: 'Scans incoming debit and credit alerts directly from your SMS inbox on-device. Automatically detects UPI, card, ATM, and salary transactions with 100% offline privacy.',
-    highlights: [
-      { icon: 'sms', text: 'Auto-detect debits, credits & UPI' },
-      { icon: 'lock', text: '100% on-device private parsing' },
-    ],
-  },
-
-  // ── 2. RULES & AUTO-CATEGORIZATION ──
-  {
-    tab: 'more',
-    title: 'Merchant Rules & Auto-Categorization',
-    subtitle: 'Step 2 of 8 • Smart Rules',
-    glyph: 'rule',
-    badge: 'Rules Engine',
-    targetSelectors: ['[data-nav="rules"]', '.card-accent', '.list'],
-    description: 'Assigns categories and family members automatically using merchant matching rules (e.g. Swiggy, Uber, D-Mart) and regex patterns. You can customize or add your own rules anytime.',
-    highlights: [
-      { icon: 'label', text: 'Auto-categorization by merchant name' },
-      { icon: 'rule', text: 'Custom regex SMS rule editor & simulator' },
-    ],
-  },
-
-  // ── 3. CAS UPLOAD & PORTFOLIO IMPORTS ──
-  {
-    tab: 'wealth',
-    title: 'CAS Statements & Tradebook Imports',
-    subtitle: 'Step 3 of 8 • Portfolio Imports',
-    glyph: 'upload_file',
-    badge: 'CAS & Tradebooks',
-    targetSelectors: ['[data-nav="cas"]', '[data-import-csv]', '.card'],
-    description: 'Import CAMS/CDSL Consolidated Account Statement (eCAS) PDFs and broker tradebook CSVs (Zerodha, Groww) to automatically sync mutual funds, stocks, and demat holdings in one unified view.',
-    highlights: [
-      { icon: 'upload_file', text: 'CAMS & KFintech eCAS PDF auto-sync' },
-      { icon: 'bar_chart', text: 'Zerodha & Groww tradebook CSV import' },
-    ],
-  },
-
-  // ── 4. LEDGER: LIVE FILTER STREAMS & BATCH ACTIONS ──
-  {
-    tab: 'ledger',
-    title: 'Live Ledger & Filter Streams',
-    subtitle: 'Step 4 of 8 • Ledger Tab',
-    glyph: 'receipt_long',
-    badge: 'Ledger Tab',
-    targetSelectors: ['[data-filters]', '.chip-scroller', '[data-toggle-select]', '.ledger-search-box'],
-    description: 'Your complete financial ledger. Instantly isolate transactions by Spent, Received (Income), Invested, UPI payments, or high-value spends, and multi-select to bulk edit or split single charges.',
-    highlights: [
-      { icon: 'south_west', text: 'Income vs Spends vs Investments' },
-      { icon: 'check_circle', text: 'Batch actions & transaction splits' },
-    ],
-  },
-
-  // ── 5. BUDGETS: CEILING & SAFE RUN-RATE ──
-  {
-    tab: 'budgets',
-    title: 'Monthly Budget & Safe Run-Rate',
-    subtitle: 'Step 5 of 8 • Budgets Tab',
-    glyph: 'donut_small',
-    badge: 'Budgets Tab',
-    targetSelectors: ['[data-set-budget]', '[data-add-cap]', '.card:first-child'],
-    description: 'Set your overall monthly spending ceiling. The engine dynamically computes your daily Safe-to-Spend pacing allowance (₹X/day) and tracks category caps with visual meters.',
-    highlights: [
-      { icon: 'shield', text: 'Daily Safe-to-Spend pacing allowance' },
-      { icon: 'schedule', text: 'Category spending caps & salary trends' },
-    ],
-  },
-
-  // ── 6. HOME: CASHFLOW & CUSTOMIZATION ──
-  {
-    tab: 'home',
-    title: 'Cashflow & Customizable Home',
-    subtitle: 'Step 6 of 8 • Home Dashboard',
+    title: 'Live Cashflow & Net Kept',
+    subtitle: 'Step 1 of 8 • Home Dashboard',
     glyph: 'dashboard',
     badge: 'Home Tab',
-    targetSelectors: ['[data-widget="month_summary"]', '[data-customise]', '[data-customise-bottom]'],
+    targetSelectors: ['[data-widget="month_summary"]', '[data-widget="income_expense"]', '[data-panel]', '.card', '.home-top-bar'],
     description: 'Your financial heartbeat. Tracks this month\'s Income vs Expenses, live runway, and Net Kept savings rate. Tap "Customise" to reorder cards or add category spotlights.',
     highlights: [
       { icon: 'show_chart', text: 'Real-time Net Kept savings rate' },
@@ -93,18 +18,93 @@ export const TOUR_STEPS = [
     ],
   },
 
-  // ── 7. WEALTH: HOLDING PERIODS, CAPITAL GAINS & TAX HARVESTING ──
+  // ── 2. HOME: BANK SMS SCANNING & ALERTS ──
+  {
+    tab: 'home',
+    title: 'Bank SMS Auto-Scanning',
+    subtitle: 'Step 2 of 8 • SMS Tracking',
+    glyph: 'sms',
+    badge: 'SMS Scanner',
+    targetSelectors: ['[data-interactive-alert]', '[data-alert-tooltip]', '[data-onboarding-sms]', '[data-action-sms]'],
+    description: 'Scans incoming debit and credit alerts directly from your SMS inbox on-device. Automatically detects UPI, card, ATM, and salary transactions with 100% offline privacy.',
+    highlights: [
+      { icon: 'sms', text: 'Auto-detect debits, credits & UPI' },
+      { icon: 'lock', text: '100% on-device private parsing' },
+    ],
+  },
+
+  // ── 3. LEDGER: LIVE FILTER STREAMS & BATCH ACTIONS ──
+  {
+    tab: 'ledger',
+    title: 'Live Ledger & Filter Streams',
+    subtitle: 'Step 3 of 8 • Ledger Tab',
+    glyph: 'receipt_long',
+    badge: 'Ledger Tab',
+    targetSelectors: ['[data-filters]', '[data-scope-bar]', '.ledger-search-box', '[data-results]'],
+    description: 'Your complete financial ledger. Instantly isolate transactions by Spent, Received (Income), Invested, UPI payments, or high-value spends, and multi-select to bulk edit or split single charges.',
+    highlights: [
+      { icon: 'south_west', text: 'Income vs Spends vs Investments' },
+      { icon: 'check_circle', text: 'Batch actions & transaction splits' },
+    ],
+  },
+
+  // ── 4. BUDGETS: CEILING & SAFE RUN-RATE ──
+  {
+    tab: 'budgets',
+    title: 'Monthly Budget & Safe Run-Rate',
+    subtitle: 'Step 4 of 8 • Budgets Tab',
+    glyph: 'donut_small',
+    badge: 'Budgets Tab',
+    targetSelectors: ['.card:first-child', '[data-set-budget]', '[data-donut]'],
+    description: 'Set your overall monthly spending ceiling. The engine dynamically computes your daily Safe-to-Spend pacing allowance (₹X/day) and tracks category caps with visual meters.',
+    highlights: [
+      { icon: 'shield', text: 'Daily Safe-to-Spend pacing allowance' },
+      { icon: 'schedule', text: 'Category spending caps & salary trends' },
+    ],
+  },
+
+  // ── 5. WEALTH: NET WORTH MILESTONES & ASSET ALLOCATION ──
   {
     tab: 'wealth',
-    title: 'Wealth, Holding Periods & Capital Gains',
-    subtitle: 'Step 7 of 8 • Wealth Tab',
+    title: 'Wealth & Net Worth Milestones',
+    subtitle: 'Step 5 of 8 • Wealth Tab',
     glyph: 'savings',
     badge: 'Wealth Tab',
-    targetSelectors: ['[data-nav="cas"]', '[data-nav="goals"]', '[data-open-tax]', '.milestone-track'],
-    description: 'Track net worth across mutual funds, demat equities, NPS, SGBs and FDs. Inspect active tax lots with days held, LTCG maturity countdowns, Schedule CG & 112A capital gains tax reports, and ₹1.25L tax harvesting.',
+    targetSelectors: ['.card:first-child', '.milestone-track', '[data-page="investments"]', '[data-page="goals"]', '[data-page="fire"]'],
+    description: 'Track net worth across mutual funds, demat equities, NPS, SGBs and FDs. Watch your progression across financial milestones from ₹1 Lakh to ₹10 Crore.',
     highlights: [
-      { icon: 'savings', text: 'FIFO holding periods & LTCG maturity countdown' },
-      { icon: 'receipt_long', text: 'Schedule 112A ITR filing & tax harvesting' },
+      { icon: 'savings', text: 'Total assets, liabilities & net worth' },
+      { icon: 'trending_up', text: 'Progression to financial milestones' },
+    ],
+  },
+
+  // ── 6. WEALTH: CAS UPLOAD & PORTFOLIO IMPORTS ──
+  {
+    tab: 'wealth',
+    title: 'CAS Statements & Tradebook Imports',
+    subtitle: 'Step 6 of 8 • Portfolio Imports',
+    glyph: 'upload_file',
+    badge: 'CAS & Tradebooks',
+    targetSelectors: ['[data-page="cas"]', '[data-page="investments"]', '[data-nav="cas"]', '.list'],
+    description: 'Import CAMS/CDSL Consolidated Account Statement (eCAS) PDFs and broker tradebook CSVs (Zerodha, Groww) to automatically sync mutual funds, stocks, and demat holdings in one unified view.',
+    highlights: [
+      { icon: 'upload_file', text: 'CAMS & KFintech eCAS PDF auto-sync' },
+      { icon: 'bar_chart', text: 'Zerodha & Groww tradebook CSV import' },
+    ],
+  },
+
+  // ── 7. MORE: RULES & AUTO-CATEGORIZATION ──
+  {
+    tab: 'more',
+    title: 'Merchant Rules & Auto-Categorization',
+    subtitle: 'Step 7 of 8 • Smart Rules',
+    glyph: 'rule',
+    badge: 'Rules Engine',
+    targetSelectors: ['[data-page="rules"]', '[data-nav="rules"]', '.list'],
+    description: 'Assigns categories and family members automatically using merchant matching rules (e.g. Swiggy, Uber, D-Mart) and regex patterns. You can customize or add your own rules anytime.',
+    highlights: [
+      { icon: 'label', text: 'Auto-categorization by merchant name' },
+      { icon: 'rule', text: 'Custom regex SMS rule editor & simulator' },
     ],
   },
 
@@ -115,7 +115,7 @@ export const TOUR_STEPS = [
     subtitle: 'Step 8 of 8 • Security & Privacy',
     glyph: 'security',
     badge: 'More Tab',
-    targetSelectors: ['[data-nav="security"]', '[data-nav="backup"]', '.card-accent'],
+    targetSelectors: ['.card-accent', '[data-page="backup"]', '[data-page="security"]', '[data-nav="backup"]'],
     description: 'Zero network permissions — your records never leave this device. Encrypted locally with AES-GCM and unlocked via PIN or fingerprint. Export password-encrypted backups anytime.',
     highlights: [
       { icon: 'lock', text: 'Zero-network on-device AES-GCM vault' },
@@ -266,6 +266,15 @@ export function openOnboardingTour(app, startStep = 0) {
     window.addEventListener('resize', onScrollOrResize, { passive: true });
   }
 
+  const updateNavTabHighlight = (stepTab) => {
+    if (typeof document === 'undefined') return;
+    document.querySelectorAll?.('#navBar [data-tab], .nav-bar [data-tab]')?.forEach?.((btn) => {
+      const isTargetTab = btn.dataset.tab === stepTab;
+      btn.classList.toggle('tour-tab-active', isTargetTab);
+      btn.setAttribute('aria-selected', isTargetTab ? 'true' : 'false');
+    });
+  };
+
   const closeTour = (returnToHome = false) => {
     if (typeof window !== 'undefined' && window.removeEventListener) {
       window.removeEventListener('scroll', onScrollOrResize, { capture: true });
@@ -274,6 +283,10 @@ export function openOnboardingTour(app, startStep = 0) {
     if (typeof document !== 'undefined') {
       document.body?.classList?.remove?.('tour-active');
       document.querySelectorAll?.('.tour-highlight-target')?.forEach?.((el) => el.classList.remove('tour-highlight-target'));
+      document.querySelectorAll?.('.tour-tab-active')?.forEach?.((el) => el.classList.remove('tour-tab-active'));
+      document.querySelectorAll?.('#navBar [data-tab], .nav-bar [data-tab]')?.forEach?.((btn) => {
+        btn.setAttribute('aria-selected', btn.dataset.tab === (app?.tab || 'home') ? 'true' : 'false');
+      });
     }
     scrim.classList?.remove('open');
     scrim.classList?.remove('has-spotlight');
@@ -289,7 +302,7 @@ export function openOnboardingTour(app, startStep = 0) {
     }, 240);
   };
 
-  const renderStep = () => {
+  const renderStep = async () => {
     const step = TOUR_STEPS[currentStep];
 
     // Hide spotlight immediately while transitioning between steps
@@ -314,15 +327,19 @@ export function openOnboardingTour(app, startStep = 0) {
 
     // 3. Automatically navigate to the active tab in background
     if (app?.go) {
-      app.go(step.tab, null);
+      await app.go(step.tab, null);
     } else if (app?.render) {
-      app.render();
+      await app.render();
     }
 
-    // 4. Wait a tick for the view to render its elements, then spotlight the target
-    setTimeout(() => {
-      findTargetAndSpotlight(step);
-    }, 80);
+    // 4. Update the bottom navigation bar active tab highlight
+    updateNavTabHighlight(step.tab);
+
+    // 5. Progressive ticks to spotlight the target as soon as DOM paint occurs
+    findTargetAndSpotlight(step);
+    setTimeout(() => findTargetAndSpotlight(step), 60);
+    setTimeout(() => findTargetAndSpotlight(step), 160);
+    setTimeout(() => findTargetAndSpotlight(step), 320);
 
     container.innerHTML = `
       <div class="app-tour-card ${isMinimized ? 'minimized' : ''}">

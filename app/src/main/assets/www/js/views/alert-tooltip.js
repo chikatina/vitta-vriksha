@@ -68,7 +68,7 @@ export function renderAlertTooltip(alerts = [], categories = [], app) {
   ];
 
   return `
-    <div class="interactive-alert-card" data-interactive-alert data-index="${index}">
+    <div class="interactive-alert-card" data-interactive-alert data-alert-tooltip data-index="${index}">
       <div class="row-between" style="align-items:center;margin-bottom:8px">
         <div class="row" style="gap:8px;align-items:center;min-width:0">
           <span class="avatar avatar-sm" style="background:var(--accent-container);color:var(--on-accent-container);flex-shrink:0">
@@ -94,6 +94,10 @@ export function renderAlertTooltip(alerts = [], categories = [], app) {
       </div>
 
       <div class="alert-preview-body" style="background:var(--surface-container-high);padding:10px 12px;border-radius:var(--radius-sm);margin-bottom:10px;border:1px solid var(--outline-variant)">
+        ${alert.duplicate_of || alert.duplicate_warning ? `
+          <div class="row" style="gap:6px;align-items:center;background:var(--warning-container);color:var(--warning);padding:4px 8px;border-radius:var(--radius-xs);margin-bottom:8px;font-size:11px;font-weight:600">
+            ${icon('content_copy', 'icon-sm')}<span>Potential duplicate of existing transaction</span>
+          </div>` : ''}
         <div class="row-between" style="align-items:baseline;margin-bottom:4px">
           <span class="display ${typeClass}" style="font-size:22px;font-weight:700">
             ${sign}${h(formatCurrency(alert.amount || 0, app.currency, app.locale))}
@@ -128,8 +132,12 @@ export function renderAlertTooltip(alerts = [], categories = [], app) {
         </div>
 
         <div class="row" style="gap:6px;margin-top:2px;width:100%;display:flex;flex-wrap:wrap">
+          ${alert.duplicate_of ? `
+            <button type="button" class="btn btn-filled btn-xs" data-merge-alert style="flex:1;min-width:65px;gap:3px;justify-content:center;padding:5px 4px;font-size:11.5px;background:var(--accent);color:var(--on-accent)">
+              ${icon('autorenew', 'icon-sm')}Merge
+            </button>` : ''}
           <button type="button" class="btn btn-filled btn-xs" data-accept-alert style="flex:1;min-width:65px;gap:3px;justify-content:center;padding:5px 4px;font-size:11.5px">
-            ${icon('check', 'icon-sm')}Accept
+            ${icon('check', 'icon-sm')}${alert.duplicate_of ? 'Keep Both' : 'Accept'}
           </button>
           <button type="button" class="btn btn-tonal btn-xs" data-discard-alert style="flex:1;min-width:65px;gap:3px;justify-content:center;padding:5px 4px;font-size:11.5px">
             ${icon('visibility_off', 'icon-sm')}Discard
@@ -145,7 +153,7 @@ export function renderAlertTooltip(alerts = [], categories = [], app) {
 /**
  * Binds interactive events for the alert tooltip component.
  */
-export function bindAlertTooltip(container, app, { onUpdated = null } = {}) {
+export function bindAlertTooltip(container, app, { onUpdated = null, categories = [] } = {}) {
   const card = container.querySelector('[data-interactive-alert]');
   if (!card) return;
 
@@ -165,6 +173,45 @@ export function bindAlertTooltip(container, app, { onUpdated = null } = {}) {
   if (categorySelect) {
     categorySelect.addEventListener('change', () => {
       currentAlert.category = categorySelect.value;
+      const foundCat = categories.find((c) => c.name === categorySelect.value);
+      if (foundCat && foundCat.type) {
+        currentAlert.type = foundCat.type;
+      }
+    });
+  }
+
+  const mergeBtn = card.querySelector('[data-merge-alert]');
+  if (mergeBtn) {
+    mergeBtn.addEventListener('click', async () => {
+      mergeBtn.disabled = true;
+      const chosenCategory = categorySelect ? categorySelect.value : (currentAlert.category || 'Shopping');
+      const smsBody = currentAlert.raw_sms || currentAlert.body || '';
+      const targetId = currentAlert.duplicate_of || (currentAlert.duplicate_twin && currentAlert.duplicate_twin.id) || 0;
+
+      const res = await Bridge.call('sms', {
+        action: 'merge_alert',
+        transaction_id: targetId,
+        body: smsBody,
+        raw_sms: smsBody,
+        category: chosenCategory,
+        merchant: currentAlert.merchant || '',
+        type: currentAlert.type || 'Expense',
+        apply_to_all: true,
+      });
+
+      if (res && res.status === 'success') {
+        toast('Merged into existing transaction.', 'success');
+      } else {
+        toast(res?.message || 'Could not merge alert.', 'error');
+      }
+
+      alerts.splice(activeAlertIndex, 1);
+      app.pendingAlerts = alerts;
+      if (activeAlertIndex >= alerts.length) {
+        activeAlertIndex = Math.max(0, alerts.length - 1);
+      }
+      if (onUpdated) onUpdated();
+      else app.refresh();
     });
   }
 
@@ -173,10 +220,11 @@ export function bindAlertTooltip(container, app, { onUpdated = null } = {}) {
     acceptBtn.addEventListener('click', async () => {
       acceptBtn.disabled = true;
       const chosenCategory = categorySelect ? categorySelect.value : (currentAlert.category || 'Shopping');
+      const smsBody = currentAlert.raw_sms || currentAlert.body || '';
 
       const res = await Bridge.call('sms', {
         action: 'classify_alert',
-        body: currentAlert.raw_sms || '',
+        body: smsBody,
         amount: currentAlert.amount,
         category: chosenCategory,
         merchant: currentAlert.merchant || '',
@@ -185,18 +233,29 @@ export function bindAlertTooltip(container, app, { onUpdated = null } = {}) {
         account_id: currentAlert.account_id,
         card_id: currentAlert.card_id,
         apply_to_all: true,
+        override_duplicate: true,
       });
 
       if (res && res.status === 'success') {
         const merchantDisplay = currentAlert.merchant ? `for ${currentAlert.merchant}` : '';
         toast(`Filed ${formatCurrency(currentAlert.amount, app.currency, app.locale)} ${merchantDisplay} under "${chosenCategory}".`, 'success');
       } else {
-        // Fallback to save_transaction
-        await app.db('save_transaction', { transaction: payload });
+        await app.db('save_transaction', {
+          transaction: {
+            date: currentAlert.date || todayISO(),
+            amount: currentAlert.amount,
+            type: currentAlert.type || 'Expense',
+            category: chosenCategory,
+            merchant: currentAlert.merchant || '',
+            raw_sms: smsBody,
+            account_id: currentAlert.account_id || null,
+            card_id: currentAlert.card_id || null,
+            member_id: currentAlert.member_id || 1,
+          },
+        });
         toast(`Saved transaction under "${chosenCategory}".`, 'success');
       }
 
-      // Remove current alert from list
       alerts.splice(activeAlertIndex, 1);
       app.pendingAlerts = alerts;
 
@@ -213,10 +272,11 @@ export function bindAlertTooltip(container, app, { onUpdated = null } = {}) {
   if (discardBtn) {
     discardBtn.addEventListener('click', async () => {
       discardBtn.disabled = true;
-      if (currentAlert.raw_sms) {
+      const smsBody = currentAlert.raw_sms || currentAlert.body || '';
+      if (smsBody) {
         await Bridge.call('sms', {
           action: 'ignore_alert',
-          body: currentAlert.raw_sms,
+          body: smsBody,
           merchant: currentAlert.merchant || '',
         });
       }
@@ -238,13 +298,14 @@ export function bindAlertTooltip(container, app, { onUpdated = null } = {}) {
   if (editBtn) {
     editBtn.addEventListener('click', async () => {
       const chosenCategory = categorySelect ? categorySelect.value : (currentAlert.category || 'Shopping');
+      const smsBody = currentAlert.raw_sms || currentAlert.body || '';
       const draft = {
         amount: currentAlert.amount,
         type: currentAlert.type || 'Expense',
         category: chosenCategory,
         merchant: currentAlert.merchant || '',
         date: currentAlert.date || todayISO(),
-        raw_sms: currentAlert.raw_sms || '',
+        raw_sms: smsBody,
         account_id: currentAlert.account_id || null,
         card_id: currentAlert.card_id || null,
         member_id: currentAlert.member_id || 1,

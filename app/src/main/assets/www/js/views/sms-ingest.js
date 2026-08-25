@@ -209,33 +209,56 @@ export async function renderSmsIngest(container, app) {
             Detected bank accounts, food cards, and credit cards from your SMS alerts.
           </p>
           <div class="list" data-discovered-list style="background:transparent;box-shadow:none;display:flex;flex-direction:column;gap:8px">
-            ${discovered.map((d, i) => `
+            ${discovered.map((d, i) => {
+              const isCredit = d.instrument_type === 'credit_card';
+              const isDebit = d.instrument_type === 'debit_card';
+              const isMeal = d.instrument_type === 'meal_card' || d.category === 'Meal Card';
+              const isWallet = d.instrument_type === 'wallet' || d.category === 'Wallet';
+              const isPrepaid = d.instrument_type === 'prepaid_card' || d.category === 'Prepaid Card';
+
+              let glyph = 'account_balance';
+              let avatarClass = 'avatar-bank';
+              let label = 'Savings';
+
+              if (isCredit) {
+                glyph = 'credit_card';
+                avatarClass = 'avatar-credit';
+                label = 'Credit Card';
+              } else if (isDebit) {
+                glyph = 'payments';
+                avatarClass = 'avatar-debit';
+                label = 'Debit Card';
+              } else if (isMeal) {
+                glyph = 'restaurant';
+                avatarClass = 'avatar-meal';
+                label = 'Meal Card';
+              } else if (isWallet) {
+                glyph = 'account_balance_wallet';
+                avatarClass = 'avatar-wallet';
+                label = 'Wallet';
+              } else if (isPrepaid) {
+                glyph = 'credit_card';
+                avatarClass = 'avatar-debit';
+                label = 'Prepaid Card';
+              }
+
+              return `
               <div class="card-flat" style="background:var(--surface-container-high);padding:12px 14px;border-radius:var(--radius-md);border:1px solid var(--outline-variant);display:flex;align-items:center;gap:12px;width:100%;box-sizing:border-box">
-                <span class="avatar avatar-sm" style="background:var(--accent-container);color:var(--on-accent-container);flex-shrink:0">
-                  ${icon(
-                    d.instrument_type === 'debit_card' ? 'payments' :
-                    (d.instrument_type === 'credit_card' ? 'credit_card' :
-                    (d.instrument_type === 'meal_card' || d.category === 'Meal Card' ? 'restaurant' :
-                    (d.instrument_type === 'wallet' || d.category === 'Wallet' ? 'account_balance_wallet' :
-                    (d.instrument_type === 'prepaid_card' || d.category === 'Prepaid Card' ? 'credit_card' : 'account_balance')))),
-                    'icon-sm'
-                  )}
+                <span class="avatar avatar-sm ${avatarClass}" style="flex-shrink:0">
+                  ${icon(glyph, 'icon-sm')}
                 </span>
                 <span class="list-row-main" style="min-width:0">
                   <span class="list-row-title">${h(d.suggested_name || d.name || d.card_name)}</span>
-                  <span class="list-row-sub">${h(d.bank || d.institution)} · ${h(
-                    d.instrument_type === 'debit_card' ? 'Debit Card' :
-                    (d.instrument_type === 'credit_card' ? 'Credit Card' :
-                    (d.instrument_type === 'meal_card' || d.category === 'Meal Card' ? 'Meal Card' :
-                    (d.instrument_type === 'wallet' || d.category === 'Wallet' ? 'Wallet' :
-                    (d.instrument_type === 'prepaid_card' || d.category === 'Prepaid Card' ? 'Prepaid Card' : 'Savings'))))
-                  )} · ending ${h(d.last_4)}</span>
+                  <span class="list-row-sub">${h(d.bank || d.institution)} · ${h(label)} · ending ${h(d.last_4)}</span>
+                  ${d.balance ? `<span class="caption" style="color:var(--income);font-size:11.5px;margin-top:2px;display:block">Latest Bal: ${h(formatCurrency(d.balance, app.currency, app.locale))}</span>` : ''}
+                  ${isCredit && (d.total_limit || d.current_balance) ? `<span class="caption" style="color:var(--expense);font-size:11.5px;margin-top:2px;display:block">${d.current_balance ? `Bal: ${h(formatCurrency(d.current_balance, app.currency, app.locale))}` : ''}${d.total_limit ? ` · Limit: ${h(formatCurrency(d.total_limit, app.currency, app.locale))}` : ''}</span>` : ''}
                   ${d.txn_count ? `<span class="caption" style="color:var(--accent);font-size:11.5px;margin-top:2px;display:block">${d.txn_count} transaction${d.txn_count === 1 ? '' : 's'}${d.total_spent ? ` · ${h(formatCurrency(d.total_spent, app.currency, app.locale))}` : ''}</span>` : ''}
                 </span>
                 <button class="btn btn-filled btn-xs" data-ingest-add="${i}" style="flex-shrink:0;padding:6px 10px">
                   ${icon('add', 'icon-sm')}Add
                 </button>
-              </div>`).join('')}
+              </div>`;
+            }).join('')}
           </div>
         </div>`);
 
@@ -255,15 +278,16 @@ export async function renderSmsIngest(container, app) {
             card_name: item.suggested_name || item.name || `${bank} Credit Card`,
             bank,
             last_4: last4,
-            total_limit: 0,
-            current_balance: 0,
+            total_limit: item.total_limit || 0,
+            available_limit: item.available_limit !== null && item.available_limit !== undefined ? item.available_limit : 0,
+            current_balance: item.current_balance || 0,
           } : {
             name: item.suggested_name || item.name || `${bank} Account`,
             category: item.category || (isDebit ? 'Bank' : (item.instrument_type === 'meal_card' ? 'Meal Card' : (item.instrument_type === 'wallet' ? 'Wallet' : 'Bank'))),
             institution: bank,
             account_number: isDebit ? (item.account_number || '') : (last4 || item.account_number || ''),
             debit_card_last_4: isDebit ? (last4 || '') : (item.debit_card_last_4 || ''),
-            balance: 0,
+            balance: item.balance || 0,
           };
 
           const saveRes = await Bridge.db('save_record', {

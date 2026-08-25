@@ -2,7 +2,7 @@
 
 import { Bridge } from '../bridge.js';
 import {
-  sheet, icon, h, toast, confirmDialog, selectField, bindSelectFields, promptDialog,
+  sheet, icon, h, toast, confirmDialog, selectField, bindSelectFields, promptDialog, scrollSelectedIntoView,
 } from '../ui.js';
 import { formatCurrency, todayISO } from '../formatters.js';
 
@@ -224,6 +224,9 @@ export async function openTransactionSheet(app, existing = null) {
             ${icon(c.icon || 'sell')}${h(c.name)}
           </button>`).join('')}
           <button type="button" class="chip" data-new-category>${icon('add')}New</button>`;
+
+        scrollSelectedIntoView($('[data-categories]'), { behavior: 'smooth' });
+        setTimeout(() => scrollSelectedIntoView($('[data-categories]'), { behavior: 'smooth' }), 50);
 
         $('[data-categories]').querySelectorAll('[data-category]').forEach((chip) => {
           chip.addEventListener('click', () => {

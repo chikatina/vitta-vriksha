@@ -23,13 +23,14 @@ const APPEARANCES = [
 ];
 
 const ACCENTS = [
-  { id: 'olive', label: 'Olive', color: '#88A838' },
-  { id: 'ochre', label: 'Ochre Gold', color: '#F8C828' },
-  { id: 'bronze', label: 'Olive Bronze', color: '#988818' },
-  { id: 'forest', label: 'Deep Forest', color: '#083828' },
-  { id: 'amber', label: 'Warm Amber', color: '#96601C' },
-  { id: 'indigo', label: 'Indigo', color: '#4338CA' },
-  { id: 'rose', label: 'Rose', color: '#B32350' },
+  { id: 'jade', label: 'Emerald Jade', color: '#059669' },
+  { id: 'sapphire', label: 'Sapphire Blue', color: '#2563EB' },
+  { id: 'teal', label: 'Teal Cyan', color: '#0D9488' },
+  { id: 'violet', label: 'Amethyst Violet', color: '#7C3AED' },
+  { id: 'amber', label: 'Sunset Amber', color: '#D97706' },
+  { id: 'rose', label: 'Crimson Rose', color: '#E11D48' },
+  { id: 'forest', label: 'Pine Forest', color: '#15803D' },
+  { id: 'ochre', label: 'Warm Bronze', color: '#B45309' },
 ];
 
 /**

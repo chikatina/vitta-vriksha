@@ -17,7 +17,7 @@ const ICON_CHOICES = [
   'sports_soccer', 'headphones', 'menu_book', 'school', 'child_care', 'pets', 'cake',
   'celebration', 'redeem', 'volunteer_activism', 'shield', 'build', 'wifi', 'water_drop',
   'subscriptions', 'credit_card', 'real_estate_agent', 'work', 'computer', 'savings',
-  'trending_up', 'payments', 'receipt_long', 'sell', 'star',
+  'trending_up', 'payments', 'receipt_long', 'sell', 'star', 'storefront',
 ];
 
 const COLOR_CHOICES = [
