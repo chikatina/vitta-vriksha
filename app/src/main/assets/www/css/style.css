@@ -150,8 +150,10 @@
   --expense-container: #FEE2E2;
   --investment: #D97706;
   --investment-container: #FEF3C7;
-  --warning: #EA580C;
-  --warning-container: #FFEDD5;
+  --warning: #B45309;
+  --warning-container: #FEF3C7;
+  --on-warning-container: #78350F;
+  --warning-border: #FCD34D;
   --info: #0284C7;
   --info-container: #E0F2FE;
 
@@ -187,8 +189,10 @@
   --expense-container: #7F1D1D;
   --investment: #FBBF24;
   --investment-container: #78350F;
-  --warning: #FB923C;
-  --warning-container: #7C2D12;
+  --warning: #FBBF24;
+  --warning-container: rgba(245, 158, 11, 0.16);
+  --on-warning-container: #FEF08A;
+  --warning-border: rgba(245, 158, 11, 0.4);
   --info: #38BDF8;
   --info-container: #0C4A6E;
 
@@ -224,8 +228,10 @@
   --expense-container: #7F1D1D;
   --investment: #FBBF24;
   --investment-container: #78350F;
-  --warning: #FB923C;
-  --warning-container: #7C2D12;
+  --warning: #FBBF24;
+  --warning-container: rgba(245, 158, 11, 0.16);
+  --on-warning-container: #FEF08A;
+  --warning-border: rgba(245, 158, 11, 0.4);
   --info: #38BDF8;
   --info-container: #0C4A6E;
 
@@ -1464,6 +1470,63 @@ a { color: var(--accent); }
 
 .banner-title { display: block; font-size: 14px; font-weight: 620; }
 .banner-body { display: block; font-size: 12.5px; opacity: 0.9; }
+
+/* Dedicated Tax & Regulatory Disclaimers */
+.tax-disclaimer {
+  border: 1.5px solid var(--warning-border);
+  background: var(--warning-container);
+  color: var(--on-warning-container);
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  margin: 12px 0;
+}
+
+.tax-disclaimer-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.tax-disclaimer-title {
+  font-weight: 800;
+  font-size: 11.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--warning);
+}
+
+.tax-disclaimer-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--on-warning-container);
+  font-weight: 500;
+}
+
+.tax-disclaimer-compact {
+  border-left: 3.5px solid var(--warning);
+  background: var(--warning-container);
+  color: var(--on-warning-container);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  margin: 10px 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.tax-disclaimer-compact .banner-title {
+  font-weight: 700;
+  color: var(--warning);
+  font-size: 12px;
+}
+
+.tax-disclaimer-compact .banner-body {
+  font-size: 12px;
+  color: var(--on-warning-container);
+  line-height: 1.45;
+  font-weight: 500;
+}
 
 /* Interactive Transaction Alert Tooltip Card */
 .interactive-alert-card {

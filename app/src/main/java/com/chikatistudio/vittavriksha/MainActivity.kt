@@ -165,6 +165,18 @@ class MainActivity : AppCompatActivity() {
                         false
                     }
                 }
+                if (scheme == "http" || scheme == "https") {
+                    return try {
+                        leftForAnotherApp = true
+                        val intent = Intent(Intent.ACTION_VIEW, url).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(intent)
+                        true
+                    } catch (e: Exception) {
+                        false
+                    }
+                }
                 return false
             }
 

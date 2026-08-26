@@ -401,6 +401,18 @@ export function openEmail(email, subject = '', body = '') {
   return true;
 }
 
+/** Opens an external web URL in the system browser. */
+export function openUrl(url) {
+  if (isAndroid() && bridge().openUrl) {
+    return bridge().openUrl(url);
+  }
+  if (typeof window !== 'undefined') {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return true;
+  }
+  return false;
+}
+
 /** Reports whether the environment is a debug build / developer testing session. */
 export function isDebug() {
   if (isAndroid() && typeof bridge()?.isDebug === 'function') {

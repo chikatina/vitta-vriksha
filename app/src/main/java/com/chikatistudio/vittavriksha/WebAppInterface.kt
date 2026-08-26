@@ -464,6 +464,24 @@ class WebAppInterface(private val mContext: Context, private val webView: WebVie
     }
 
     /**
+     * Opens an external web URL in the device's default web browser.
+     */
+    @JavascriptInterface
+    fun openUrl(url: String): Boolean {
+        return try {
+            (mContext as? MainActivity)?.leavingForAnotherApp()
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            mContext.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
+    /**
      * Reports whether the app is running in a debug or test build.
      * Used to restrict internal debugging tools (e.g. sample demo data loading).
      */

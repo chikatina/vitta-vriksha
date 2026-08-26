@@ -1920,8 +1920,24 @@ function deleteRecord(db, args) {
   if (!spec) return fail('RECORD_TYPE_UNKNOWN', 'That kind of record does not exist.');
 
   if (spec[0] === 'asset_accounts') {
+    const acc = db.get('SELECT account_number, debit_card_last_4, institution FROM asset_accounts WHERE id = ?', [args.record_id]);
+    if (acc) {
+      const acc4 = acc.account_number ? String(acc.account_number).trim().slice(-4) : '';
+      const dc4 = acc.debit_card_last_4 ? String(acc.debit_card_last_4).trim().slice(-4) : '';
+      if (acc4) {
+        db.run('DELETE FROM ignored_discovered_accounts WHERE last_4 = ? OR identifier LIKE ?', [acc4, `%${acc4}`]);
+      }
+      if (dc4) {
+        db.run('DELETE FROM ignored_discovered_accounts WHERE last_4 = ? OR identifier LIKE ?', [dc4, `%${dc4}`]);
+      }
+    }
     db.run('UPDATE transactions SET account_id = NULL WHERE account_id = ?', [args.record_id]);
   } else if (spec[0] === 'credit_cards') {
+    const card = db.get('SELECT last_4, bank FROM credit_cards WHERE id = ?', [args.record_id]);
+    if (card && card.last_4) {
+      const last4 = String(card.last_4).trim().slice(-4);
+      db.run('DELETE FROM ignored_discovered_accounts WHERE last_4 = ? OR identifier LIKE ?', [last4, `%${last4}`]);
+    }
     db.run('UPDATE transactions SET card_id = NULL WHERE card_id = ?', [args.record_id]);
   }
   db.run(`DELETE FROM ${spec[0]} WHERE id = ?`, [args.record_id]);
@@ -4188,7 +4204,7 @@ export function addDiscoveredAccounts(db, args = {}) {
       const isCard = item.kind === 'card' || item.instrument_type === 'credit_card';
       const isDebit = Boolean(item.is_debit_card || item.instrument_type === 'debit_card');
       const bank = String(item.bank || item.institution || 'Bank').trim();
-      const last4 = String(item.last_4 || '').trim();
+      const last4 = String(item.last_4 || item.account_number || item.debit_card_last_4 || '').trim().slice(-4);
 
       if (isCard) {
         const cardName = String(item.suggested_name || item.card_name || item.name || `${bank} Credit Card`).trim();
@@ -4353,6 +4369,155 @@ export function combineDiscoveredAccount(db, args = {}) {
   });
 
   return { status: 'success', combined: true };
+}
+
+export function resyncAccountFromSms(db, args = {}) {
+  const accountId = Number(args.account_id);
+  const cardId = Number(args.card_id);
+  const resyncAll = Boolean(args.all);
+
+  if (!accountId && !cardId && !resyncAll) {
+    return fail('BAD_REQUEST', 'Please provide an account_id, card_id, or all: true.');
+  }
+
+  const results = [];
+
+  db.transaction(() => {
+    const accountsToResync = accountId
+      ? db.all('SELECT * FROM asset_accounts WHERE id = ?', [accountId])
+      : (resyncAll ? db.all("SELECT * FROM asset_accounts WHERE category IN ('Bank', 'Meal Card', 'Wallet', 'Prepaid Card')") : []);
+
+    const cardsToResync = cardId
+      ? db.all('SELECT * FROM credit_cards WHERE id = ?', [cardId])
+      : (resyncAll ? db.all('SELECT * FROM credit_cards') : []);
+
+    // 1. Process Bank/Asset Accounts
+    for (const acc of accountsToResync) {
+      const accNum = acc.account_number ? String(acc.account_number).trim().slice(-4) : '';
+      const dcNum = acc.debit_card_last_4 ? String(acc.debit_card_last_4).trim().slice(-4) : '';
+
+      let remapped = 0;
+      if (accNum && accNum.length >= 4) {
+        const r1 = db.run(
+          "UPDATE transactions SET account_id = ? WHERE (account_id IS NULL OR account_id = 0) AND raw_sms LIKE '%' || ? || '%'",
+          [acc.id, accNum],
+        );
+        remapped += r1.changes || 0;
+      }
+      if (dcNum && dcNum.length >= 4) {
+        const r2 = db.run(
+          "UPDATE transactions SET account_id = ? WHERE (account_id IS NULL OR account_id = 0) AND raw_sms LIKE '%' || ? || '%'",
+          [acc.id, dcNum],
+        );
+        remapped += r2.changes || 0;
+      }
+
+      // Fetch all SMS transactions linked to or matching this account ordered by date DESC, id DESC
+      const txns = db.all(
+        `SELECT raw_sms, date, amount, type FROM transactions
+         WHERE (account_id = ? OR (raw_sms IS NOT NULL AND (
+           (? != '' AND raw_sms LIKE '%' || ? || '%') OR
+           (? != '' AND raw_sms LIKE '%' || ? || '%')
+         )))
+         ORDER BY date DESC, id DESC`,
+        [acc.id, accNum, accNum, dcNum, dcNum],
+      );
+
+      let latestBalance = null;
+      let latestBalanceDate = null;
+
+      for (const t of txns) {
+        if (!t.raw_sms) continue;
+        const info = parseAccountDetailsFromText(t.raw_sms);
+        if (info.account_balance !== null && info.account_balance !== undefined && info.account_balance >= 0) {
+          latestBalance = info.account_balance;
+          latestBalanceDate = t.date;
+          break;
+        }
+      }
+
+      if (latestBalance !== null) {
+        db.run('UPDATE asset_accounts SET balance = ?, updated_at = ? WHERE id = ?', [latestBalance, today(), acc.id]);
+      }
+
+      results.push({
+        id: acc.id,
+        name: acc.name,
+        type: 'account',
+        balance: latestBalance !== null ? latestBalance : acc.balance,
+        previous_balance: acc.balance,
+        balance_updated: latestBalance !== null && latestBalance !== acc.balance,
+        remapped_transactions: remapped,
+        total_transactions: txns.length,
+        latest_date: latestBalanceDate,
+      });
+    }
+
+    // 2. Process Credit Cards
+    for (const card of cardsToResync) {
+      const last4 = card.last_4 ? String(card.last_4).trim().slice(-4) : '';
+      let remapped = 0;
+      if (last4 && last4.length >= 4) {
+        const r = db.run(
+          "UPDATE transactions SET card_id = ? WHERE (card_id IS NULL OR card_id = 0) AND raw_sms LIKE '%' || ? || '%'",
+          [card.id, last4],
+        );
+        remapped += r.changes || 0;
+      }
+
+      const txns = db.all(
+        `SELECT raw_sms, date, amount, type FROM transactions
+         WHERE (card_id = ? OR (raw_sms IS NOT NULL AND ? != '' AND raw_sms LIKE '%' || ? || '%'))
+         ORDER BY date DESC, id DESC`,
+        [card.id, last4, last4],
+      );
+
+      let latestAvail = null;
+      let latestTotal = null;
+      let latestBal = null;
+
+      for (const t of txns) {
+        if (!t.raw_sms) continue;
+        const info = parseAccountDetailsFromText(t.raw_sms);
+        if (info.available_limit !== null && info.available_limit !== undefined && latestAvail === null) {
+          latestAvail = info.available_limit;
+        }
+        if (info.total_limit && info.total_limit > 0 && latestTotal === null) {
+          latestTotal = info.total_limit;
+        }
+        if (info.current_outstanding !== null && info.current_outstanding !== undefined && latestBal === null) {
+          latestBal = info.current_outstanding;
+        }
+        if (latestAvail !== null && latestTotal !== null && latestBal !== null) break;
+      }
+
+      const newAvail = latestAvail !== null ? latestAvail : card.available_limit;
+      const newTotal = latestTotal !== null ? latestTotal : card.total_limit;
+      const newBal = latestBal !== null ? latestBal : card.current_balance;
+
+      db.run(
+        'UPDATE credit_cards SET available_limit = ?, total_limit = ?, current_balance = ?, updated_at = ? WHERE id = ?',
+        [newAvail, newTotal, newBal, new Date().toISOString(), card.id],
+      );
+
+      results.push({
+        id: card.id,
+        name: card.card_name,
+        type: 'card',
+        available_limit: newAvail,
+        current_balance: newBal,
+        total_limit: newTotal,
+        remapped_transactions: remapped,
+        total_transactions: txns.length,
+      });
+    }
+  });
+
+  return {
+    status: 'success',
+    resynced: results.length,
+    results,
+  };
 }
 
 export function mergeCards(db, args = {}) {
@@ -5030,6 +5195,7 @@ const ACTIONS = {
   discover_accounts_from_sms: discoverAccountsFromSms,
   add_discovered_accounts: addDiscoveredAccounts,
   combine_discovered_account: combineDiscoveredAccount,
+  resync_account_from_sms: resyncAccountFromSms,
   merge_cards: mergeCards,
   merge_accounts: mergeAccounts,
   ignore_discovered_account: ignoreDiscoveredAccount,

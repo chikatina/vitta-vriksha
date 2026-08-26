@@ -262,12 +262,22 @@ export function promptDialog(title, {
  * Displays an active progress modal for heavy background processing (CAS parsing, bulk SMS ingestion, CSV imports).
  * Returns a controller with .update({ percent, message, detail }), .complete(message, delayMs), .fail(message), and .close().
  */
-export function showProgressModal(title, {
-  message = 'Processing...',
-  initialPercent = 0,
-  indeterminate = false,
-  detail = '',
-} = {}) {
+export function showProgressModal(title, options = {}) {
+  let modalTitle = title;
+  let modalOptions = options;
+
+  if (typeof title === 'object' && title !== null) {
+    modalOptions = title;
+    modalTitle = modalOptions.title || 'Processing';
+  }
+
+  const {
+    message = modalOptions.subtitle || 'Processing...',
+    initialPercent = 0,
+    indeterminate = false,
+    detail = '',
+  } = modalOptions;
+
   closeOpenMenus();
   document.querySelectorAll('.scrim, .dialog, .sheet, .progress-dialog-overlay').forEach((el) => el.remove());
 
@@ -285,7 +295,7 @@ export function showProgressModal(title, {
   node.innerHTML = `
     <div class="progress-dialog-header">
       <span class="spinner"></span>
-      <span class="progress-dialog-title">${h(title)}</span>
+      <span class="progress-dialog-title">${h(modalTitle)}</span>
     </div>
     <div class="progress-dialog-status" data-progress-message>${h(message)}</div>
     <div class="progress" style="margin:4px 0">
@@ -358,6 +368,7 @@ export function showProgressModal(title, {
   return {
     update,
     complete,
+    finish: (msg = 'Done!', delay = 350) => complete(msg, delay),
     fail,
     close,
   };
@@ -863,32 +874,28 @@ export function emptyState(glyph, title, body, actionHtml = '') {
  * Prominent, bold and unmissable disclaimer card for tax calculations and capital gains.
  */
 export function taxDisclaimerCard({ compact = false, customText = '' } = {}) {
-  const defaultText = 'Vitta Vriksha is an offline personal productivity enablement tool and is NOT a financial institution, SEBI-registered advisor, or Chartered Accountant. All capital gains, holding periods, grandfathering values, and tax projections are estimates generated strictly for personal tracking based on user-provided data and statutory formulas. Tax rules are complex, subject to regulatory changes, and vary based on your individual tax regime, deductions, and slab. Users must independently verify all calculations and consult a certified Chartered Accountant (CA) or check against official broker capital gains statements before filing Income Tax Returns.';
+  const defaultText = 'Vitta Vriksha is an offline personal productivity tool and NOT a financial institution, SEBI-registered advisor, or Chartered Accountant. All capital gains, holding periods, grandfathering values, and tax projections are estimates generated strictly for personal tracking based on user-provided data and statutory formulas. Always verify calculations with a certified Chartered Accountant (CA) or broker statements before filing Income Tax Returns.';
   const text = customText || defaultText;
 
   if (compact) {
     return `
-      <div class="banner banner-warning" style="margin:10px 0;border-left:4px solid var(--warning,#F59E0B);background:var(--warning-container,#FFF3CD);color:var(--on-warning-container,#664D03);padding:8px 12px">
-        ${icon('warning', 'icon-sm')}
-        <span class="banner-main" style="margin-left:6px">
-          <strong class="banner-title" style="font-weight:700">Productivity Tool Only — No Financial/Tax Advice:</strong>
-          <span class="banner-body" style="font-size:11.5px"> Estimates for personal reference only. Verify independently with a Chartered Accountant (CA) before filing.</span>
-        </span>
+      <div class="tax-disclaimer-compact" role="note">
+        <span style="color:var(--warning);display:flex;flex-shrink:0;margin-top:1px">${icon('warning', 'icon-sm')}</span>
+        <div>
+          <strong class="banner-title">Productivity Tool Only — No Financial or Tax Advice:</strong>
+          <span class="banner-body"> ${h(text)}</span>
+        </div>
       </div>`;
   }
 
   return `
-    <div class="card" style="border:2px solid var(--warning,#F59E0B);background:var(--warning-container,#FFFBEB);color:var(--on-warning-container,#78350F);padding:14px;border-radius:var(--radius);margin:12px 0">
-      <div class="row" style="gap:10px;align-items:flex-start">
-        ${icon('warning', 'icon')}
-        <div style="flex:1">
-          <div style="font-weight:800;font-size:13px;letter-spacing:0.3px;text-transform:uppercase;color:var(--warning-dark,#B45309);margin-bottom:6px">
-            IMPORTANT NOTICE: ESTIMATOR & PRODUCTIVITY TOOL ONLY — NO FINANCIAL OR TAX ADVICE
-          </div>
-          <div style="font-size:11.5px;line-height:1.45;color:inherit;font-weight:500">
-            ${h(text)}
-          </div>
-        </div>
+    <div class="tax-disclaimer" role="note">
+      <div class="tax-disclaimer-header">
+        <span style="color:var(--warning);display:flex;flex-shrink:0">${icon('warning', 'icon-sm')}</span>
+        <span class="tax-disclaimer-title">Notice: Estimator & Productivity Tool Only — No Tax Advice</span>
+      </div>
+      <div class="tax-disclaimer-text">
+        ${h(text)}
       </div>
     </div>`;
 }

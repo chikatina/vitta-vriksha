@@ -913,26 +913,29 @@ export async function renderRecordPage(container, app, type) {
         addAllBtn.disabled = true;
         addAllBtn.textContent = 'Adding...';
 
-        const progressModal = showProgressModal({
-          title: 'Adding Discovered Accounts',
-          subtitle: 'Creating accounts & linking transactions...',
-          total: discovered.length,
-          indeterminate: false,
+        const progress = showProgressModal('Adding Discovered Accounts', {
+          message: `Saving ${discovered.length} accounts & cards to vault...`,
+          initialPercent: 40,
+          detail: 'Writing records into encrypted SQLite database',
         });
 
         try {
-          const res = await Bridge.db('add_discovered_accounts', { accounts: discovered });
-          progressModal.finish();
+          const res = await Bridge.db('add_discovered_accounts', {
+            accounts: discovered,
+            member_id: app.memberFilter === 'all' ? 1 : Number(app.memberFilter || 1),
+          });
           if (res && res.status === 'success') {
+            progress.complete(`Added ${res.added || discovered.length} accounts!`, 350);
             toast(`Added ${res.added || discovered.length} accounts!`, 'success');
             app.refresh();
           } else {
+            progress.fail('Failed to add accounts.');
             toast(res?.message || 'Failed to add accounts.', 'error');
             addAllBtn.disabled = false;
             addAllBtn.textContent = 'Add All';
           }
         } catch (err) {
-          progressModal.finish();
+          progress.fail('Failed to add accounts.');
           toast('Failed to add accounts.', 'error');
           addAllBtn.disabled = false;
           addAllBtn.textContent = 'Add All';
@@ -1128,10 +1131,17 @@ async function openRecordSheet(app, type, existing, preset = null) {
         : '')
   ) : '';
 
+  const resyncBtnHtml = existing && (type === 'card' || type === 'account')
+    ? `<button type="button" class="btn btn-outlined btn-block" data-resync-sms style="margin-top:8px">
+        ${icon('refresh')}Resync Balance & Transactions from SMS
+      </button>`
+    : '';
+
   const body = presetBannerHtml + npsLinkBannerHtml + rows.map((row) => (row.fields.length > 1 || row.half
     ? `<div class="row" style="gap:12px;align-items:flex-end">${row.fields.map((f) => fieldHtml(f, initial(f))).join('')}</div>`
     : fieldHtml(row.fields[0], initial(row.fields[0])))).join('')
     + dcSuggestionsHtml
+    + resyncBtnHtml
     + conversionBtnHtml
     + mergeBtnHtml
     + (existing ? `<button class="btn btn-danger-text btn-block" data-delete style="margin-top:8px">${icon('delete')}Delete</button>` : '');
@@ -1220,6 +1230,35 @@ async function openRecordSheet(app, type, existing, preset = null) {
       if (kindField) {
         kindField.addEventListener('change', applyKind);
         applyKind();
+      }
+
+      // Resync Account/Card from SMS handler
+      const resyncBtn = node.querySelector('[data-resync-sms]');
+      if (resyncBtn && existing) {
+        resyncBtn.addEventListener('click', async () => {
+          resyncBtn.disabled = true;
+          toast('Resyncing from SMS...', 'info');
+          const res = await Bridge.db('resync_account_from_sms', type === 'card' ? { card_id: existing.id } : { account_id: existing.id });
+          resyncBtn.disabled = false;
+          if (res && res.status === 'success' && res.results?.length) {
+            const item = res.results[0];
+            if (type === 'account') {
+              const balInput = node.querySelector('[data-field="balance"]');
+              if (balInput && item.balance !== undefined) balInput.value = item.balance;
+              toast(`Resynced! Balance updated to ${formatCurrency(item.balance, app.currency, app.locale)} (${item.remapped_transactions} txns linked).`, 'success');
+            } else {
+              const curBalInput = node.querySelector('[data-field="current_balance"]');
+              const availInput = node.querySelector('[data-field="available_limit"]');
+              const totInput = node.querySelector('[data-field="total_limit"]');
+              if (curBalInput && item.current_balance !== undefined) curBalInput.value = item.current_balance;
+              if (availInput && item.available_limit !== null && item.available_limit !== undefined) availInput.value = item.available_limit;
+              if (totInput && item.total_limit) totInput.value = item.total_limit;
+              toast(`Resynced! Card updated (${item.remapped_transactions} txns linked).`, 'success');
+            }
+          } else {
+            toast(res?.message || 'Could not resync from SMS.', 'error');
+          }
+        });
       }
 
       // 2-Way Conversion handlers

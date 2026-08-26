@@ -14,7 +14,7 @@
 import { db, invoke } from './backend/index.js';
 import {
   checkPermission, isAndroid, isBiometricAvailable, openAppSettings, permissionIsBlocked,
-  requestPermission, saveFile, shareFile, triggerBiometricAuth, verifyBiometric, openEmail, isSmsTrackingEnabled, setSmsTrackingEnabled,
+  requestPermission, saveFile, shareFile, triggerBiometricAuth, verifyBiometric, openEmail, openUrl, isSmsTrackingEnabled, setSmsTrackingEnabled,
   isDebug,
 } from './backend/native.js';
 
@@ -43,6 +43,7 @@ export const Bridge = {
   saveFile,
   shareFile,
   openEmail,
+  openUrl,
   isSmsTrackingEnabled,
   setSmsTrackingEnabled,
 };

@@ -133,7 +133,10 @@ const seriesNeed = (metric, options) => {
   return `series:${metric}:${granularity}:${periods}`;
 };
 
-const breakdownNeed = (dimension, options) => `breakdown:${dimension}:${options.window || 'month'}:${options.flow || 'spend'}`;
+const breakdownNeed = (dimension, options = {}) => {
+  const win = options.window || (options.span ? options.span.split(':')[0] : 'month');
+  return `breakdown:${dimension}:${win}:${options.flow || 'spend'}`;
+};
 
 const periodNeed = (options) => `period:${options.window || 'month'}`;
 
@@ -917,17 +920,60 @@ export const WIDGETS = {
 
   spend_by_category: {
     label: 'Spending by category',
-    description: 'Category breakdown by period',
-    icon: 'stacked_bar_chart',
-    options: [SPAN_OPTION],
-    needs: (options) => [seriesNeed('spend_by_category', options)],
+    description: 'Category breakdown pie chart',
+    icon: 'pie_chart',
+    options: [WINDOW_OPTION, FLOW_OPTION],
+    needs: (options) => [breakdownNeed('category', options)],
     render(data, app, options) {
-      return chartPanel({
-        data, app, options, metric: 'spend_by_category', title: 'Spending by category', style: 'bars',
-      });
+      const breakdown = data[breakdownNeed('category', options)] || data[seriesNeed('spend_by_category', options)];
+      if (!breakdown || breakdown.status !== 'success') return '';
+      const rows = breakdown.rows || [];
+      if (!rows.length) return '';
+      const slices = rows.slice(0, 7);
+
+      return card(`Spending by category ${describePeriod(breakdown.bucket, breakdown.granularity)}`, `
+        <div data-donut>
+          ${donutChart(slices.map((row) => ({
+    key: row.key,
+    label: row.label,
+    value: row.total,
+    color: row.color,
+    formatted: money(app, row.total),
+  })), {
+    centerLabel: 'Spent',
+    centerValue: money(app, breakdown.total),
+    selectable: true,
+  })}
+        </div>`, { action: drillAction() });
     },
     bind(node, data, app, options) {
-      bindChartPanel(node, app, options, 'spend_by_category');
+      const breakdown = data[breakdownNeed('category', options)];
+      if (!breakdown || breakdown.status !== 'success') return;
+      bindChartSelect(node.querySelector('[data-donut]'), (key) => {
+        const row = breakdown.rows.find((entry) => entry.key === key);
+        if (!row) return;
+        openSliceSheet(app, {
+          dimension: 'category',
+          key: row.key,
+          label: row.label,
+          granularity: breakdown.granularity,
+          bucket: breakdown.bucket,
+          flow: options.flow || 'spend',
+        });
+      });
+
+      const drill = node.querySelector('[data-drill]');
+      if (drill) {
+        drill.addEventListener('click', () => {
+          focusInsights({
+            flow: options.flow || 'spend',
+            granularity: breakdown.granularity,
+            dimension: 'category',
+            offset: 0,
+          });
+          app.go('home', 'insights');
+        });
+      }
     },
   },
 

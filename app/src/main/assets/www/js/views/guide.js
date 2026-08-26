@@ -102,65 +102,64 @@ const SECTIONS = [
     ],
   },
   {
-    title: 'Getting your investments in',
+    title: 'Getting your investments in (CAS Statements)',
     body: [
-      'Ask CAMS or KFintech for a consolidated account statement and they email you a '
-      + 'password-protected PDF covering your mutual funds. Ask NSDL or CDSL instead and '
-      + 'you get the same funds plus your demat account: shares, bonds, and any National '
-      + 'Pension System holdings.',
-      'Import it under Wealth, Account statement. It is read on this device. The password '
-      + 'is usually your PAN in capitals.',
-      'Your name and PAN appear in these statements. Neither is stored: the app has no '
-      + 'use for them and not keeping them is the safer default.',
+      'Ask CAMS, KFintech, or MF Central for a consolidated account statement (CAS) and they email you a password-protected PDF covering your mutual funds. Ask NSDL or CDSL instead and you get the same funds plus your demat account: shares, bonds, and any National Pension System (NPS) holdings.',
+      'Import it under Wealth &rarr; Account statement. It is read entirely on this device. The password is usually your PAN in uppercase (e.g. ABCDE1234F).',
+      'Your name and PAN appear in these statements. Neither is ever stored or uploaded: the app is completely offline and has zero internet permissions.',
     ],
     faqs: [
-      ['Which statement should I ask for?',
-        'A depository one, from NSDL or CDSL, if you have a demat account, because it '
-        + 'covers everything. A registrar one, from CAMS or KFintech, if you only hold '
-        + 'mutual funds, because it carries the full transaction history that capital '
-        + 'gains are worked out from.'],
-      ['How do I get the detailed one, with every transaction?',
-        'Go to camsonline.com, choose Investor Services and then Statements, and ask for '
-        + 'the CAS. Two things matter on that form. Pick the detailed statement rather '
-        + 'than the summary, and set the period from 01-01-1990, or whenever you started, '
-        + 'rather than the last year it offers by default. KFintech has the same thing at '
-        + 'kfintech.com under Investor Services, and mfcentral.com serves both registrars '
-        + 'from one place. The file arrives by email within a few minutes, locked with '
-        + 'your PAN in capitals.'],
-      ['What does the detailed statement give me that the summary does not?',
-        'Every purchase, redemption, dividend and switch, with the date and the price. A '
-        + 'summary says what you hold today and nothing about how it got there, so it '
-        + 'cannot tell you what you paid, what you have made, or how long you have held '
-        + 'anything. Import a detailed one and each holding grows a history, and the '
-        + 'amount invested stops being something you have to type in.'],
+      ['Where can I download my Mutual Fund CAS?',
+        'You can request a free Detailed CAS statement online directly from:<br>'
+        + '· <button class="btn btn-tonal btn-xs" data-open-url="https://www.camsonline.com/Investors/Statements/Consolidated-Account-Statement">CAMS Online CAS</button><br>'
+        + '· <button class="btn btn-tonal btn-xs" data-open-url="https://mfs.kfintech.com/investor/General/CAS">KFintech CAS Portal</button><br>'
+        + '· <button class="btn btn-tonal btn-xs" data-open-url="https://www.mfcentral.com">MF Central (Unified CAMS + KFintech)</button><br><br>'
+        + '<strong>Key settings when requesting:</strong><br>'
+        + '1. Choose <strong>Detailed Statement</strong> (includes all transactions) rather than Summary.<br>'
+        + '2. Set the start date back to when you began investing (e.g. <code>01-01-1990</code>) so your entire purchase history is included.<br>'
+        + '3. Choose your preferred PDF password (usually your PAN in capitals). The statement arrives in your email inbox within a few minutes.'],
+      ['Where can I download my CDSL or NSDL Demat eCAS?',
+        'For a consolidated view of all demat shares, ETFs, bonds, mutual funds and NPS:<br>'
+        + '· <button class="btn btn-tonal btn-xs" data-open-url="https://www.cdslindia.com/cas/logincas.aspx">CDSL eCAS Login</button> (Log in with your 16-digit Demat BO ID & PAN)<br>'
+        + '· <button class="btn btn-tonal btn-xs" data-open-url="https://eservices.nsdl.com/kyc-web/#/casLogin">NSDL eCAS Portal</button> (Log in with DP ID + Client ID or CAS ID & PAN)<br><br>'
+        + 'Download the monthly or annual eCAS PDF and import it under Wealth &rarr; Account statement.'],
+      ['What does the detailed statement give me that a summary does not?',
+        'Every SIP purchase, redemption, dividend, and switch, with the exact date, NAV, and stamp duty. A summary statement only lists what you hold today, so it cannot calculate your profit/loss, holding periods, or capital gains. A detailed statement builds your full historical ledger.'],
       ['It says the file has no readable text.',
-        'The file is a scan or a photograph rather than the original. Import the PDF that '
-        + 'was emailed to you.'],
-      ['A number looks wrong after an import.',
-        'The statement prints a running balance after every transaction, and the importer '
-        + 'checks its own arithmetic against it. Where they disagree it says so rather '
-        + 'than staying quiet, so look for the note after the import.'],
+        'The file is a scanned image or picture rather than the original PDF generated by CAMS/KFintech/CDSL/NSDL. Import the original digital PDF received via email.'],
     ],
   },
   {
-    title: 'Capital gains',
+    title: 'Equity trades & stock capital gains',
     body: [
-      'From a detailed registrar statement the app can work out what you actually realised: '
-      + 'units matched first in, first out, grandfathering applied to anything bought on '
-      + 'or before 31 January 2018, purchase-side stamp duty counted as part of the cost, '
-      + 'and the securities transaction tax correctly left out of it.',
-      'It produces the Schedule 112A file the filing utility takes, and the split of the '
-      + 'year into the five advance-tax windows.',
-      'Check it against your registrar’s own capital gains statement before you file. '
-      + 'This is arithmetic, not advice.',
+      'Depository eCAS statements from NSDL and CDSL provide a snapshot of current demat holdings (shares held and closing valuation), but they do NOT include historical buy/sell execution prices, trade dates, or broker brokerage fees.',
+      'To calculate exact stock capital gains, FIFO lot allocations, and Schedule 112A filings, you can import your broker’s Tradebook CSV directly in Vitta Vriksha under Wealth &rarr; Investments &rarr; Import CSV.',
+    ],
+    faqs: [
+      ['Why does NSDL/CDSL eCAS not have stock trade history?',
+        'Depositories (CDSL/NSDL) act as custody vaults holding your shares. Your actual buy and sell orders, brokerage charges, STT taxes, and order executions occur with your stock broker (Zerodha, Groww, Upstox, etc.). Depositories only record the net daily share transfers in and out of your demat account.'],
+      ['How do I download my Broker Tradebook CSV?',
+        'Log in to your broker console and download your all-time Tradebook report as a CSV or Excel file:<br>'
+        + '· <button class="btn btn-tonal btn-xs" data-open-url="https://console.zerodha.com/reports/tradebook">Zerodha Console</button>: Reports &rarr; Tradebook &rarr; Select Date Range &rarr; Download CSV.<br>'
+        + '· <button class="btn btn-tonal btn-xs" data-open-url="https://groww.in/user/profile/reports">Groww</button>: Profile &rarr; Reports &rarr; Stocks &rarr; Download Tradebook / P&L Excel or CSV.<br>'
+        + '· <button class="btn btn-tonal btn-xs" data-open-url="https://login.upstox.com">Upstox</button>: Account &rarr; Reports &rarr; Tradebook CSV.<br>'
+        + '· <button class="btn btn-tonal btn-xs" data-open-url="https://trade.angelone.in">Angel One</button>: Reports &rarr; Tradebook / Transaction Summary CSV.<br>'
+        + '· <strong>Dhan / Kotak Neo / ICICI Direct / Shoonya / HDFC Sky</strong>: Statements / Tradebook CSV.<br><br>'
+        + 'Then open <strong>Wealth &rarr; Investments</strong> and tap <strong>Import CSV</strong>.'],
+    ],
+  },
+  {
+    title: 'Capital gains & tax calculations',
+    body: [
+      'From detailed mutual fund statements and broker tradebooks, the app computes your exact statutory realised gains: First-In First-Out (FIFO) matching, Section 112A Grandfathering (Jan 31, 2018 benchmark NAVs), purchase-side stamp duty inclusion, and STT exclusion.',
+      'It also applies the Budget 2024 statutory regime split: 15% vs 20% STCG and 10% vs 12.5% LTCG with the ₹1.25 Lakh exemption limit for trades executed on or after July 23, 2024.',
+      'You can export the official Schedule 112A CSV to verify against your broker’s tax statements or attach for CA filing.',
     ],
     faqs: [
       ['It says the statement does not go back far enough.',
-        'Gains need the purchases a sale is matched against. Ask for a statement that '
-        + 'starts before your first purchase, not just the current year.'],
+        'Capital gains calculations need the purchase lots a sale is matched against. Request a CAS or Tradebook with a start date before your earliest purchase.'],
       ['A scheme was left out of the report.',
-        'Usually gifted units: their cost and holding period belong to whoever gave them '
-        + 'to you and are not in your statement. The gift itself is still listed.'],
+        'Usually gifted units or off-market transfers: their original cost basis and holding period belong to the donor and are not in the statement.'],
     ],
   },
   {
@@ -276,7 +275,7 @@ export async function renderGuide(container, app) {
                 ${icon('expand_more', 'icon-sm')}
               </span>
             </summary>
-            <p class="caption" style="margin-top:10px">${h(answer)}</p>
+            <div class="caption" style="margin-top:10px;line-height:1.5">${answer}</div>
           </details>`).join('')}
       </div>`).join('')}
 
@@ -294,6 +293,14 @@ export async function renderGuide(container, app) {
         </button>
       </div>
     </div>`;
+
+  container.querySelectorAll('[data-open-url]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      const url = el.dataset.openUrl;
+      if (url) Bridge.openUrl(url);
+    });
+  });
 
   const tourBtn = container.querySelector('[data-guide-tour]');
   if (tourBtn) {

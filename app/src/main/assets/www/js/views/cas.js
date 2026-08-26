@@ -89,6 +89,39 @@ export async function renderCas(container, app) {
       <div class="caption" data-status style="margin-top:12px"></div>
     </div>
 
+    <!-- Download CAS & eCAS Helper Card -->
+    <div class="card" style="border:1px solid var(--outline-variant);background:var(--surface-container-low)">
+      <div class="row-between" style="align-items:center;margin-bottom:8px">
+        <div class="row" style="gap:8px;align-items:center">
+          <span style="color:var(--accent);display:flex">${icon('description', 'icon-sm')}</span>
+          <span style="font-weight:700;font-size:13.5px">Download CAS &amp; eCAS Reports</span>
+        </div>
+      </div>
+      <p class="caption" style="margin-bottom:12px;font-size:12px;line-height:1.45">
+        Request a <strong>Detailed CAS</strong> (dated from your earliest investment, e.g. 01-01-1990) to import full mutual fund SIPs, redemptions &amp; capital gains.
+      </p>
+      <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:10px">
+        <button type="button" class="btn btn-tonal btn-xs" data-open-url="https://www.camsonline.com/Investors/Statements/Consolidated-Account-Statement">
+          ${icon('open_in_new', 'icon-sm')} CAMS Online
+        </button>
+        <button type="button" class="btn btn-tonal btn-xs" data-open-url="https://mfs.kfintech.com/investor/General/CAS">
+          ${icon('open_in_new', 'icon-sm')} KFintech CAS
+        </button>
+        <button type="button" class="btn btn-tonal btn-xs" data-open-url="https://www.mfcentral.com">
+          ${icon('open_in_new', 'icon-sm')} MF Central
+        </button>
+        <button type="button" class="btn btn-tonal btn-xs" data-open-url="https://www.cdslindia.com/cas/logincas.aspx">
+          ${icon('open_in_new', 'icon-sm')} CDSL eCAS
+        </button>
+        <button type="button" class="btn btn-tonal btn-xs" data-open-url="https://eservices.nsdl.com/kyc-web/#/casLogin">
+          ${icon('open_in_new', 'icon-sm')} NSDL eCAS
+        </button>
+      </div>
+      <div style="font-size:11.5px;color:var(--on-surface-variant);line-height:1.4;border-top:1px solid var(--outline-variant);padding-top:8px">
+        <strong>Looking for stock/equity trades?</strong> NSDL/CDSL eCAS only provides holding snapshots. Download your broker's tradebook CSV (Zerodha, Groww, Upstox, etc.) and import it under <strong>Wealth &rarr; Investments &rarr; Import CSV</strong>.
+      </div>
+    </div>
+
     ${lastUpload ? `<div class="caption" style="text-align:center">Last imported ${h(formatDate(lastUpload))}</div>` : ''}
 
     ${holdingsSection('Funds', 'trending_up', folios.map((folio) => ({
@@ -151,6 +184,14 @@ export async function renderCas(container, app) {
         app.refresh();
       }
     });
+
+  container.querySelectorAll('[data-open-url]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      const url = el.dataset.openUrl;
+      if (url) Bridge.openUrl(url);
+    });
+  });
 }
 
 /** Modal to link NPS holdings to an account */
@@ -460,10 +501,9 @@ function gainsBlock(report, app) {
   if (!report.summary.length) {
     return `
       ${taxDisclaimerCard({ compact: true })}
-      <div class="card-flat" style="margin-top:12px">
-        <div class="card-title">Nothing was sold</div>
-        <div class="caption">This statement records no redemptions, so there is no
-        realised gain to report.</div>
+      <div class="card" style="margin-top:12px;border:1px solid var(--outline-variant);padding:16px">
+        <div style="font-weight:700;font-size:14px;color:var(--on-surface);margin-bottom:4px">Nothing was sold</div>
+        <div style="font-size:12px;color:var(--on-surface-variant)">This statement records no redemptions, so there is no realised gain to report.</div>
       </div>`;
   }
 
@@ -472,35 +512,33 @@ function gainsBlock(report, app) {
 
   return `
     ${taxDisclaimerCard({ compact: false })}
-    <div class="card-flat" style="margin-top:12px">
-      <div class="card-title">Realised gains, ${h(report.financial_year)}</div>
+    <div class="card" style="margin-top:12px;border:1px solid var(--outline-variant);padding:16px">
+      <div style="font-weight:700;font-size:14px;color:var(--on-surface);margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--outline-variant)">
+        Realised gains (${h(report.financial_year)})
+      </div>
       ${rows.map((row) => `
-        <div class="row-between" style="padding:4px 0">
-          <span class="caption">${h(row.fund)}</span>
-          <span class="caption" style="color:var(--on-surface);font-weight:600">
+        <div class="row-between" style="padding:6px 0">
+          <span style="font-size:12.5px;color:var(--on-surface)">${h(row.fund)}</span>
+          <span class="numeric" style="color:var(--on-surface);font-weight:700;font-size:12.5px">
             ${h(money(row.ltcg + row.stcg))}
           </span>
         </div>`).join('')}
-      <div class="row-between" style="padding:8px 0 0">
-        <span class="caption">Long term, taxable</span>
-        <span class="caption" style="color:var(--on-surface);font-weight:600">${h(money(total('ltcg_taxable')))}</span>
+      <div class="row-between" style="padding:8px 0 4px;margin-top:6px;border-top:1px solid var(--outline-variant)">
+        <span style="font-size:12.5px;font-weight:600;color:var(--on-surface)">Long term, taxable</span>
+        <span class="numeric" style="color:var(--on-surface);font-weight:700;font-size:12.5px">${h(money(total('ltcg_taxable')))}</span>
       </div>
-      <div class="row-between" style="padding:3px 0">
-        <span class="caption">Short term</span>
-        <span class="caption" style="color:var(--on-surface);font-weight:600">${h(money(total('stcg')))}</span>
+      <div class="row-between" style="padding:4px 0">
+        <span style="font-size:12.5px;font-weight:600;color:var(--on-surface)">Short term</span>
+        <span class="numeric" style="color:var(--on-surface);font-weight:700;font-size:12.5px">${h(money(total('stcg')))}</span>
       </div>
       ${report.errors.length ? `
-        <div class="caption" style="margin-top:10px">
+        <div style="font-size:11.5px;color:var(--expense);margin-top:10px;line-height:1.4">
           ${report.errors.length} scheme${report.errors.length === 1 ? '' : 's'} could not be
           computed, usually because the statement does not go back far enough.
         </div>` : ''}
       <button class="btn btn-tonal btn-block" data-112a style="margin-top:14px">
         ${icon('download')}Save the Schedule 112A file
       </button>
-      <div class="caption" style="margin-top:10px">
-        Worked out the way the registrars work it out. Check it against their own capital
-        gains statement before you file.
-      </div>
     </div>`;
 }
 

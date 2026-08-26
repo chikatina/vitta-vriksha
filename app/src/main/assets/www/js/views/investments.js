@@ -305,6 +305,14 @@ export async function renderInvestments(container, app) {
     const taxBtn = container.querySelector('[data-open-tax]');
     if (taxBtn) taxBtn.addEventListener('click', () => openCapitalGainsModal(container, app));
 
+    container.querySelectorAll('[data-open-url]').forEach((el) => {
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        const url = el.dataset.openUrl;
+        if (url) Bridge.openUrl(url);
+      });
+    });
+
   paintList();
 }
 
@@ -1064,64 +1072,75 @@ async function openCapitalGainsModal(container, app) {
         </div>` : ''}
 
       ${fyData ? `
-        <div class="card-flat" style="background:var(--surface-container-high);padding:14px;border-radius:var(--radius);margin-top:10px">
-          <div class="row-between">
-            <span class="caption">Realised Gains for ${h(selectedFy)}</span>
-            <span class="caption" style="font-weight:700;color:var(--on-surface)">Net: ${money(fyData.netGain)}</span>
+        <div class="card" style="margin-top:10px;padding:16px;border:1px solid var(--outline-variant);box-shadow:none">
+          <div class="row-between" style="align-items:center;padding-bottom:10px;border-bottom:1px solid var(--outline-variant)">
+            <span style="font-weight:700;font-size:13.5px;color:var(--on-surface)">Realised Gains (${h(selectedFy)})</span>
+            <span class="numeric" style="font-weight:800;font-size:14px;color:${fyData.netGain >= 0 ? 'var(--income)' : 'var(--expense)'}">
+              ${fyData.netGain >= 0 ? '+' : ''}${money(fyData.netGain)}
+            </span>
           </div>
 
-          <div class="row-between" style="padding:6px 0;margin-top:6px;border-top:1px solid var(--outline)">
-            <span class="caption">Short-Term (Sec 111A, &le;1 yr)</span>
-            <span class="caption numeric" style="font-weight:600">${money(fyData.stcgEquityBe + fyData.stcgEquityAe)}</span>
+          <div class="row-between" style="padding:10px 0 4px">
+            <span style="font-weight:600;font-size:13px;color:var(--on-surface)">Short-Term (Sec 111A, &le;1 yr)</span>
+            <span class="numeric" style="font-weight:700;font-size:13px;color:var(--on-surface)">${money(fyData.stcgEquityBe + fyData.stcgEquityAe)}</span>
           </div>
           ${fyData.stcgEquityAe ? `
-            <div class="caption" style="font-size:11px;color:var(--on-surface-variant);padding-left:8px">
-              · Post-23-Jul-2024 (@20%): ${money(fyData.stcgEquityAe)}
+            <div class="row-between" style="font-size:11.5px;color:var(--on-surface-variant);padding:2px 0 2px 8px">
+              <span>· Post-23-Jul-2024 (@20%)</span>
+              <span class="numeric">${money(fyData.stcgEquityAe)}</span>
             </div>` : ''}
           ${fyData.stcgEquityBe ? `
-            <div class="caption" style="font-size:11px;color:var(--on-surface-variant);padding-left:8px">
-              · Pre-23-Jul-2024 (@15%): ${money(fyData.stcgEquityBe)}
+            <div class="row-between" style="font-size:11.5px;color:var(--on-surface-variant);padding:2px 0 2px 8px">
+              <span>· Pre-23-Jul-2024 (@15%)</span>
+              <span class="numeric">${money(fyData.stcgEquityBe)}</span>
             </div>` : ''}
 
-          <div class="row-between" style="padding:6px 0;margin-top:4px">
-            <span class="caption">Long-Term (Sec 112A, &gt;1 yr)</span>
-            <span class="caption numeric" style="font-weight:600">${money(fyData.ltcgEquityBe + fyData.ltcgEquityAe)}</span>
+          <div class="row-between" style="padding:10px 0 4px;border-top:1px solid var(--outline-variant);margin-top:6px">
+            <span style="font-weight:600;font-size:13px;color:var(--on-surface)">Long-Term (Sec 112A, &gt;1 yr)</span>
+            <span class="numeric" style="font-weight:700;font-size:13px;color:var(--on-surface)">${money(fyData.ltcgEquityBe + fyData.ltcgEquityAe)}</span>
           </div>
-          <div class="caption" style="font-size:11px;color:var(--on-surface-variant);padding-left:8px">
-            · Annual Exemption: ${money(fyData.ltcgExemption)}
+          <div class="row-between" style="font-size:11.5px;color:var(--on-surface-variant);padding:2px 0 2px 8px">
+            <span>· Annual Exemption</span>
+            <span class="numeric">${money(fyData.ltcgExemption)}</span>
           </div>
-          <div class="row-between" style="padding:4px 0;padding-left:8px">
-            <span class="caption" style="font-size:11px">Taxable LTCG (after exemption):</span>
-            <span class="caption numeric" style="font-size:11px;font-weight:600">${money(fyData.taxableLtcg)}</span>
+          <div class="row-between" style="font-size:11.5px;color:var(--on-surface-variant);padding:2px 0 2px 8px">
+            <span>· Taxable LTCG (after exemption)</span>
+            <span class="numeric" style="font-weight:600;color:var(--on-surface)">${money(fyData.taxableLtcg)}</span>
           </div>
 
           ${fyData.debtGains ? `
-            <div class="row-between" style="padding:6px 0">
-              <span class="caption">Debt / Slab Rate Gains</span>
-              <span class="caption numeric" style="font-weight:600">${money(fyData.debtGains)}</span>
+            <div class="row-between" style="padding:10px 0 4px;border-top:1px solid var(--outline-variant);margin-top:6px">
+              <span style="font-weight:600;font-size:13px;color:var(--on-surface)">Debt / Slab Rate Gains</span>
+              <span class="numeric" style="font-weight:700;font-size:13px;color:var(--on-surface)">${money(fyData.debtGains)}</span>
             </div>` : ''}
 
-          <div class="row-between" style="padding:8px 0 0;margin-top:8px;border-top:1px solid var(--outline)">
-            <span class="caption" style="font-weight:700">Estimated Capital Gains Tax</span>
-            <span class="caption numeric" style="font-weight:700;color:var(--primary)">${money(fyData.estimatedTax)}</span>
+          <div class="row-between" style="padding:12px;margin-top:12px;border-radius:var(--radius-sm);background:var(--surface-container-highest);border:1px solid var(--outline-variant);align-items:center">
+            <div>
+              <div style="font-weight:700;font-size:13px;color:var(--on-surface)">Estimated Tax Due</div>
+              <div style="font-size:11px;color:var(--on-surface-variant)">Subject to slab, cess & surcharge</div>
+            </div>
+            <div class="numeric" style="font-weight:800;font-size:16px;color:var(--primary)">${money(fyData.estimatedTax)}</div>
           </div>
         </div>
 
         <!-- 5-Quarter Advance Tax Distribution -->
-        <div class="section-header" style="margin-top:14px"><span class="title">Advance Tax 5-Quarter Distribution (Schedule CG Sec F)</span></div>
-        <div class="list" style="margin-top:6px">
+        <div class="section-header" style="margin-top:18px"><span class="title">Advance Tax 5-Quarter Split (Schedule CG)</span></div>
+        <div class="list" style="margin-top:6px;border:1px solid var(--outline-variant)">
           ${fyData.quarterlyGains.map((qVal, qIdx) => `
             <div class="list-row">
-              <span class="list-row-main"><span class="list-row-sub">${['Upto 15 Jun (15%)', '16 Jun to 15 Sep (45%)', '16 Sep to 15 Dec (75%)', '16 Dec to 15 Mar (100%)', '16 Mar to 31 Mar (100%)'][qIdx]}</span></span>
-              <span class="list-row-amount numeric">${money(qVal)}</span>
+              <span class="list-row-main">
+                <span style="font-weight:600;font-size:12.5px;color:var(--on-surface)">${['Q1: Upto 15 Jun', 'Q2: 16 Jun – 15 Sep', 'Q3: 16 Sep – 15 Dec', 'Q4: 16 Dec – 15 Mar', 'Q5: 16 Mar – 31 Mar'][qIdx]}</span>
+                <span class="list-row-sub" style="font-size:11px;color:var(--on-surface-variant)">${['Cumulative 15%', 'Cumulative 45%', 'Cumulative 75%', 'Cumulative 100%', 'Final 100%'][qIdx]}</span>
+              </span>
+              <span class="list-row-amount numeric" style="font-weight:600;font-size:13px;color:var(--on-surface)">${money(qVal)}</span>
             </div>`).join('')}
         </div>
 
         <button class="btn btn-tonal btn-block" data-download-112a style="margin-top:16px">
           ${icon('download')} Export Schedule 112A CSV
         </button>` : `
-        <div class="card-flat" style="margin-top:14px">
-          <div class="caption">No trade redemptions or realized capital gains recorded in ${h(selectedFy)}.</div>
+        <div class="card" style="margin-top:14px;border:1px solid var(--outline-variant);padding:16px;text-align:center">
+          <span style="font-size:13px;color:var(--on-surface-variant)">No trade redemptions or realized capital gains recorded in ${h(selectedFy)}.</span>
         </div>`}`;
   };
 

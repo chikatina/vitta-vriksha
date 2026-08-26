@@ -385,4 +385,149 @@ describe('Bank Account Balance Extraction & Card/Account Merging', () => {
     assert.equal(parsedItRefund.last4, '1486');
     assert.equal(parsedItRefund.instrument_type, 'bank_account');
   });
+
+  it('resyncs bank account balance and links unassigned transactions from SMS history', async () => {
+    // 1. Create an asset account with 0 initial balance
+    const createRes = await call('save_record', {
+      record_type: 'account',
+      record: {
+        name: 'HDFC Savings',
+        category: 'Bank',
+        institution: 'HDFC Bank',
+        account_number: '123456789012',
+        debit_card_last_4: '9988',
+        balance: 1000,
+      },
+    });
+    assert.equal(createRes.status, 'success');
+    const accId = createRes.record_id;
+
+    // 2. Insert older and newer SMS transactions (some unassigned, some matching debit card, some account number)
+    db.run(
+      "INSERT INTO transactions (account_id, type, amount, date, raw_sms, category) VALUES (NULL, 'Expense', 500, '2026-08-20', 'HDFC Bank: Rs 500 debited from A/C **9012 on 20-08-26. Avl Bal: INR 45,000.00', 'Groceries')",
+    );
+    db.run(
+      "INSERT INTO transactions (account_id, type, amount, date, raw_sms, category) VALUES (NULL, 'Expense', 1200, '2026-08-22', 'HDFC Bank: Rs 1200 spent on Debit Card **9988. Avl Bal: INR 43,800.00', 'Shopping')",
+    );
+    db.run(
+      "INSERT INTO transactions (account_id, type, amount, date, raw_sms, category) VALUES (NULL, 'Expense', 300, '2026-08-24', 'HDFC Bank: Rs 300 debited from A/C **9012 on 24-08-26. Avl Bal: INR 43,500.00', 'Dining')",
+    );
+
+    // 3. Trigger resync_account_from_sms
+    const resyncRes = await call('resync_account_from_sms', { account_id: accId });
+    assert.equal(resyncRes.status, 'success');
+    assert.equal(resyncRes.resynced, 1);
+    assert.equal(resyncRes.results[0].balance, 43500, 'Balance must be updated to the newest SMS balance (43,500)');
+    assert.equal(resyncRes.results[0].remapped_transactions, 3, 'All 3 unlinked matching SMS transactions must be remapped');
+
+    // 4. Verify in database
+    const updatedAcc = db.get('SELECT * FROM asset_accounts WHERE id = ?', [accId]);
+    assert.equal(updatedAcc.balance, 43500);
+
+    const linkedTxns = db.all('SELECT * FROM transactions WHERE account_id = ?', [accId]);
+    assert.equal(linkedTxns.length, 3);
+  });
+
+  it('resyncs credit card limits and balance from SMS history', async () => {
+    // 1. Create a credit card record
+    const createRes = await call('save_record', {
+      record_type: 'card',
+      record: {
+        card_name: 'ICICI Sapphiro',
+        bank: 'ICICI Bank',
+        last_4: '7766',
+        total_limit: 200000,
+        available_limit: 150000,
+        current_balance: 50000,
+      },
+    });
+    assert.equal(createRes.status, 'success');
+    const cardId = createRes.record_id;
+
+    // 2. Insert SMS transactions with updated card limits
+    db.run(
+      "INSERT INTO transactions (card_id, type, amount, date, raw_sms, category) VALUES (NULL, 'Expense', 5000, '2026-08-25', 'ICICI Bank: INR 5,000.00 spent on Credit Card ending 7766. Avail Limit: INR 1,45,000.00, Total Limit: INR 2,00,000.00', 'Shopping')",
+    );
+
+    // 3. Trigger resync for card
+    const resyncRes = await call('resync_account_from_sms', { card_id: cardId });
+    assert.equal(resyncRes.status, 'success');
+    assert.equal(resyncRes.results[0].available_limit, 145000);
+    assert.equal(resyncRes.results[0].total_limit, 200000);
+    assert.equal(resyncRes.results[0].remapped_transactions, 1);
+
+    const updatedCard = db.get('SELECT * FROM credit_cards WHERE id = ?', [cardId]);
+    assert.equal(updatedCard.available_limit, 145000);
+  });
+
+  it('resyncs all accounts and cards in batch with { all: true }', async () => {
+    await call('save_record', {
+      record_type: 'account',
+      record: {
+        name: 'Axis Bank',
+        category: 'Bank',
+        institution: 'Axis Bank',
+        account_number: '5544',
+        balance: 0,
+      },
+    });
+
+    db.run(
+      "INSERT INTO transactions (account_id, type, amount, date, raw_sms, category) VALUES (NULL, 'Expense', 1000, '2026-08-25', 'Axis Bank: Rs 1000 debited from A/C 5544. Avail Bal Rs 18,500.00', 'Bills')",
+    );
+
+    const resyncAllRes = await call('resync_account_from_sms', { all: true });
+    assert.equal(resyncAllRes.status, 'success');
+    assert.ok(resyncAllRes.resynced >= 1);
+
+    const axisAcc = db.get("SELECT * FROM asset_accounts WHERE account_number = '5544'");
+    assert.equal(axisAcc.balance, 18500);
+  });
+
+  it('cleans up ignored identifiers on account deletion so re-adding from SMS works cleanly', async () => {
+    // 1. Add discovered account
+    const addRes = await call('add_discovered_accounts', {
+      accounts: [{
+        name: 'HDFC Account',
+        category: 'Bank',
+        institution: 'HDFC Bank',
+        account_number: '7788',
+        balance: 25000,
+        instrument_type: 'bank_account',
+      }],
+    });
+    assert.equal(addRes.status, 'success');
+    assert.equal(addRes.added, 1);
+
+    const acc = db.get("SELECT * FROM asset_accounts WHERE account_number = '7788'");
+    assert.ok(acc);
+
+    // Verify ignored_discovered_accounts has the entry
+    const ignored = db.all("SELECT * FROM ignored_discovered_accounts WHERE last_4 = '7788'");
+    assert.ok(ignored.length > 0);
+
+    // 2. Delete the account
+    const delRes = await call('delete_record', { record_type: 'account', record_id: acc.id });
+    assert.equal(delRes.status, 'success');
+
+    // Verify ignored_discovered_accounts entry is cleared on account deletion
+    const ignoredAfter = db.all("SELECT * FROM ignored_discovered_accounts WHERE last_4 = '7788'");
+    assert.equal(ignoredAfter.length, 0);
+
+    // 3. Re-add account from discovered list
+    const reAddRes = await call('add_discovered_accounts', {
+      accounts: [{
+        name: 'HDFC Account',
+        category: 'Bank',
+        institution: 'HDFC Bank',
+        account_number: '7788',
+        balance: 25000,
+        instrument_type: 'bank_account',
+      }],
+    });
+    assert.equal(reAddRes.status, 'success');
+    assert.equal(reAddRes.added, 1);
+    const reAcc = db.get("SELECT * FROM asset_accounts WHERE account_number = '7788'");
+    assert.ok(reAcc);
+  });
 });

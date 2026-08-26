@@ -24,7 +24,7 @@ import {
   describePeriod, formatRelativeDate,
 } from '../formatters.js';
 import {
-  barSeriesChart, lineSeriesChart, barList, heatCalendar, bindChartSelect,
+  barSeriesChart, lineSeriesChart, barList, donutChart, heatCalendar, bindChartSelect,
 } from '../charts.js';
 import { memberChips, bindMemberChips } from './shared.js';
 import {
@@ -597,14 +597,28 @@ async function paintBody(host, app) {
       </div>
 
       <div data-breakdown style="margin-top:14px">
-        ${rows.length ? barList(rows.slice(0, 12).map((row) => ({
+        ${rows.length ? `
+          <div style="margin-bottom:16px">
+            ${donutChart(rows.slice(0, 7).map((row) => ({
+    key: row.key,
+    label: row.label,
+    value: row.total,
+    color: row.color,
+    formatted: money(app, row.total),
+  })), {
+    centerLabel: 'Total',
+    centerValue: money(app, breakdown.total || 0),
+    selectable: true,
+  })}
+          </div>
+          ${barList(rows.slice(0, 12).map((row) => ({
     key: row.key,
     label: row.label,
     value: row.total,
     color: row.color,
     formatted: money(app, row.total),
     sub: `${row.count} ${row.count === 1 ? 'entry' : 'entries'} · ${row.share.toFixed(0)}%`,
-  })), { selectable: true })
+  })), { selectable: true })}`
     : `<div class="caption" style="text-align:center;padding:20px 0">
          Nothing to break up in this period.
        </div>`}

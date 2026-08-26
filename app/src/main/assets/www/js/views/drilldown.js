@@ -20,7 +20,9 @@ import {
   formatBucketLabel, formatBucketTitle, formatCurrency, formatDelta, formatRelativeDate,
   describePeriod,
 } from '../formatters.js';
-import { barList, barSeriesChart, bindChartSelect } from '../charts.js';
+import {
+  barList, barSeriesChart, bindChartSelect, donutChart,
+} from '../charts.js';
 import { categoryIndex, transactionRow, bindTransactionRows } from './shared.js';
 
 /** Which flow a screen is looking at, and how each is worded. */
@@ -293,14 +295,28 @@ export async function openPeriodSheet(app, {
           <span class="caption">${h(money(app, breakdown.total || 0))}</span>
         </div>
         <div data-categories>
-          ${rows.length ? barList(rows.map((row) => ({
-            key: row.key,
-            label: row.label,
-            value: row.total,
-            color: row.color,
-            formatted: money(app, row.total),
-            sub: `${row.count} ${row.count === 1 ? 'entry' : 'entries'} · ${row.share.toFixed(0)}%`,
-          })), { selectable: true })
+          ${rows.length ? `
+            <div style="margin-bottom:12px">
+              ${donutChart(rows.slice(0, 7).map((row) => ({
+    key: row.key,
+    label: row.label,
+    value: row.total,
+    color: row.color,
+    formatted: money(app, row.total),
+  })), {
+    centerLabel: 'Total',
+    centerValue: money(app, breakdown.total || 0),
+    selectable: true,
+  })}
+            </div>
+            ${barList(rows.map((row) => ({
+    key: row.key,
+    label: row.label,
+    value: row.total,
+    color: row.color,
+    formatted: money(app, row.total),
+    sub: `${row.count} ${row.count === 1 ? 'entry' : 'entries'} · ${row.share.toFixed(0)}%`,
+  })), { selectable: true })}`
             : `<div class="card-flat"><div class="caption">No categorized entries in this period.</div></div>`}
         </div>
       </div>
