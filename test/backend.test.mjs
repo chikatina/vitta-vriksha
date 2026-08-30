@@ -1535,7 +1535,7 @@ describe('backup', () => {
     assert.equal(restored.restored, 4);
     assert.equal((await ok(t, 'get_transactions')).transactions.length, 1);
     const ver = await ok(t, 'get_version_info');
-    assert.equal(ver.schema_version, 9);
+    assert.equal(ver.schema_version, 11);
   });
 
   it('rejects a backup created with a newer app version than the running build', async (t) => {
@@ -2132,12 +2132,15 @@ describe('the calculators', () => {
   });
 
   it('reports a stale statement and an instalment about to be debited', async (t) => {
+    const now = new Date();
+    const daysInThisMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const debitDay = now.getDate() + 2 <= daysInThisMonth ? now.getDate() + 2 : 2;
     await ok(t, 'save_record', {
       record_type: 'sip',
       record: {
         scheme_name: 'An index fund',
         monthly_amount: 10000,
-        debit_day: Math.min(28, new Date().getDate() + 2),
+        debit_day: debitDay,
       },
     });
     const result = await reminders.checkReminders();

@@ -125,8 +125,9 @@ describe('the dashboard panels', () => {
       // A panel that has data and still draws nothing is a panel that has gone wrong.
       // Panels that require specialised data the basic seed does not provide are skipped:
       // spend_by_member needs family, accounts_summary needs asset_accounts,
-      // investments_summary needs holdings, debt_summary needs credit cards/loans.
-      if (['spend_by_member', 'accounts_summary', 'investments_summary', 'debt_summary'].includes(entry.id)) continue;
+      // investments_summary needs holdings, debt_summary needs credit cards/loans,
+      // financial_runway needs asset_accounts/holdings.
+      if (['spend_by_member', 'accounts_summary', 'investments_summary', 'debt_summary', 'financial_runway'].includes(entry.id)) continue;
       assert.ok(entry.html.length > 0, `${entry.id} drew nothing`);
       assert.ok(!entry.html.includes('undefined'), `${entry.id} rendered "undefined"`);
       assert.ok(!entry.html.includes('NaN'), `${entry.id} rendered "NaN"`);
@@ -469,6 +470,33 @@ describe('category_card (Category spotlight) widget', () => {
 
     assert.equal(mockApp.ledgerSearch, 'Shopping');
     assert.equal(mockApp.page, 'ledger');
+  });
+});
+
+describe('financial_runway widget', () => {
+  it('renders runway duration and liquid/investment tiers when accounts exist', async (t) => {
+    await ok(t, 'save_record', {
+      table: 'asset_accounts',
+      record: { name: 'Savings Bank', category: 'Bank', balance: 150000 },
+    });
+    await ok(t, 'save_transaction', {
+      transaction: { date: '2026-08-01', amount: 3000, category: 'Dining', type: 'Expense', merchant: 'Dinner' },
+    });
+
+    const app = fakeApp();
+    const layout = [{ id: 'financial_runway', uid: 'runway-1', options: {} }];
+    const data = await loadWidgetData(app, layout);
+    const html = WIDGETS.financial_runway.render(data, app, {});
+
+    assert.ok(html.length > 0, 'should render financial runway card');
+    assert.ok(html.includes('Financial Runway'), 'should contain title');
+    assert.ok(html.includes('Liquid Cash Runway'), 'should contain liquid cash runway tier');
+  });
+
+  it('returns empty string when no assets exist', async () => {
+    const app = fakeApp();
+    const html = WIDGETS.financial_runway.render({ custom_runway: { status: 'success', net_runway_funds: 0, selected_assets_total: 0 } }, app, {});
+    assert.equal(html, '');
   });
 });
 

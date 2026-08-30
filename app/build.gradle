@@ -11,17 +11,17 @@ if (keystorePropertiesFile.exists()) {
 }
 
 android {
-    namespace 'com.chikatistudio.vittavriksha'
-    compileSdk 37
+    namespace = 'com.chikatistudio.vittavriksha'
+    compileSdk = 37
 
     defaultConfig {
-        applicationId "com.chikatistudio.vittavriksha"
-        minSdk 24
-        targetSdk 37
-        versionCode 10
-        versionName "1.0.5"
+        applicationId = "com.chikatistudio.vittavriksha"
+        minSdk = 24
+        targetSdk = 37
+        versionCode = 11
+        versionName = "1.0.5"
 
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // No abiFilters and no ndk block. The app carries no native code of its own, so
         // one universal APK serves every device.
@@ -51,32 +51,32 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix ".debug"
-            versionNameSuffix "-debug"
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
         }
         release {
-            minifyEnabled true
-            shrinkResources true
+            minifyEnabled = true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             if (keystorePropertiesFile.exists()) {
-                signingConfig signingConfigs.release
+                signingConfig = signingConfigs.release
             }
         }
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     buildFeatures {
-        buildConfig true
+        buildConfig = true
     }
 
     lint {
-        warningsAsErrors false
-        abortOnError false
-        checkReleaseBuilds true
+        warningsAsErrors = false
+        abortOnError = false
+        checkReleaseBuilds = true
     }
 
     androidResources {

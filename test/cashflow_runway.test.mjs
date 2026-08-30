@@ -144,4 +144,74 @@ describe('cashflow.js: Safe-to-Spend, Runway, Salary Checklist & Weekend Analysi
     assert.ok(analysis.weekend.top_categories.length > 0);
     assert.equal(analysis.weekend.top_categories[0].category, 'Dining');
   });
+
+  it('calculates custom runway using the EMI pattern for loan debt', async (t) => {
+    // Liquid: 60,000
+    await ok(t, 'save_record', {
+      table: 'asset_accounts',
+      record: { name: 'HDFC Savings', category: 'Bank', balance: 60000 },
+    });
+
+    // Fixed Deposit: 120,000
+    await ok(t, 'save_record', {
+      table: 'asset_accounts',
+      record: { name: 'SBI Fixed Deposit', category: 'FD', balance: 120000 },
+    });
+
+    // Mutual Funds: 300,000
+    await ok(t, 'save_record', {
+      table: 'mf_folios',
+      record: { folio_number: '12345/6', scheme_name: 'Nifty 50 Index Fund', current_value: 300000, invested_amount: 250000 },
+    });
+
+    // Loan: ₹5,00,000 principal, ₹10,000/month EMI (~₹329/day)
+    await ok(t, 'save_record', {
+      table: 'loans',
+      record: {
+        name: 'Car Loan',
+        principal: 500000,
+        current_outstanding: 400000,
+        interest_rate: 9.0,
+        monthly_emi: 10000,
+        direction: 'borrowed',
+      },
+    });
+
+    // Credit Card: ₹10,000 statement balance
+    await ok(t, 'save_record', {
+      table: 'credit_cards',
+      record: { card_name: 'Axis Bank CC', credit_limit: 100000, current_balance: 10000, due_day: 15 },
+    });
+
+    // Daily living expense override: ₹1,000/day (= ₹30,416/month)
+    const runway = await ok(t, 'get_custom_runway', {
+      custom_daily_burn: 1000,
+      subtract_liabilities: true,
+    });
+
+    assert.equal(runway.status, 'success');
+    assert.equal(runway.daily_living_burn, 1000);
+    assert.equal(runway.monthly_loan_emis, 10000);
+    // Total monthly burn = 30,416 + 10,000 = 40,416 (~1329/day)
+    assert.equal(runway.monthly_burn, 40416);
+    assert.equal(runway.daily_burn, 1329);
+
+    // Liquid funds = 60,000 - 10,000 (card dues) = 50,000
+    // Liquid runway = 50,000 / 1329 ≈ 37 days (1.2 months)
+    assert.equal(runway.tiers.liquid_only.net_amount, 50000);
+    assert.equal(runway.tiers.liquid_only.runway_days, 37);
+    assert.equal(runway.tiers.liquid_only.runway_months, 1.2);
+
+    // Emergency pool = (60k + 120k) - 10k = 170,000
+    // Emergency runway = 170,000 / 1329 ≈ 127 days (4.2 months)
+    assert.equal(runway.tiers.emergency_pool.net_amount, 170000);
+    assert.equal(runway.tiers.emergency_pool.runway_days, 127);
+    assert.equal(runway.tiers.emergency_pool.runway_months, 4.2);
+
+    // Investable = (60k + 120k + 300k) - 10k = 470,000
+    // Investable runway = 470,000 / 1329 ≈ 353 days (11.6 months)
+    assert.equal(runway.tiers.investable.net_amount, 470000);
+    assert.equal(runway.tiers.investable.runway_days, 353);
+    assert.equal(runway.tiers.investable.runway_months, 11.6);
+  });
 });

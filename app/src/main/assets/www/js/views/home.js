@@ -79,7 +79,7 @@ export async function renderHome(container, app) {
       </div>
 
       <button class="btn btn-filled btn-block" data-take-tour style="display:flex;align-items:center;justify-content:center;gap:8px;padding:10px 14px;font-size:13px;font-weight:650;margin-bottom:var(--gap-3)">
-        ${icon('rocket_launch', 'icon-sm')}Start Step-by-Step Guided Tour
+        ${icon('rocket_launch', 'icon-sm')}Start Tour
       </button>
 
       <div class="list" style="margin-bottom:2px;background:var(--surface-container-high);padding:var(--gap-1) var(--gap-3);border-radius:var(--radius-md);box-shadow:none">
@@ -110,9 +110,9 @@ export async function renderHome(container, app) {
           </span>
           <span class="list-row-main" style="margin-left:8px">
             <span class="list-row-title" style="font-size:13px">Mutual Funds & Demat</span>
-            <span class="caption">${hasInvestments ? 'Holdings imported' : 'Upload CAMS / CDSL statement PDF'}</span>
+            <span class="caption">${hasInvestments ? 'Holdings imported' : 'Import CAMS or CDSL statement PDF'}</span>
           </span>
-          ${!hasInvestments ? `<button class="btn btn-sm btn-tonal" data-action-cas>Upload</button>` : ''}
+          ${!hasInvestments ? `<button class="btn btn-sm btn-tonal" data-action-cas>Import</button>` : ''}
         </div>
 
         <div class="list-row" data-onboarding-budget style="padding:10px 0;background:transparent">

@@ -17,7 +17,7 @@ export const TAX_DISCLAIMER_TEXT =
   'IMPORTANT NOTICE: Vitta Vriksha is an offline personal productivity enablement tool and is NOT a financial institution, SEBI-registered investment advisor, or Chartered Accountant. All capital gains, holding periods, grandfathering values, and tax calculations are estimates generated strictly for personal tracking based on user-provided data and standard statutory formulas. Tax rules are complex, subject to regulatory changes, and vary based on your individual tax regime, deductions, and slab. Users must independently verify all calculations and consult a certified Chartered Accountant (CA) or check against official broker capital gains statements before filing Income Tax Returns.';
 
 export const TAX_DISCLAIMER_SHORT =
-  'Productivity Estimator Tool Only — No Financial or Tax Advice. Verify independently with a Chartered Accountant before filing.';
+  'Productivity Estimator Tool Only · No Financial or Tax Advice. Verify independently with a Chartered Accountant before filing.';
 
 export const LTCG_REGIME_CUTOFF = '2024-07-23';
 export const GRANDFATHER_CUTOFF = '2018-01-31';

@@ -45,7 +45,7 @@ export function calculateDebtPayoffRoadmap(db, args = {}) {
       status: 'success',
       debt_count: 0,
       total_debt: 0,
-      message: 'You have zero active debt obligations!',
+      message: 'No active debt records.',
     };
   }
 

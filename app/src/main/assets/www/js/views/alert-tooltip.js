@@ -200,9 +200,9 @@ export function bindAlertTooltip(container, app, { onUpdated = null, categories 
       });
 
       if (res && res.status === 'success') {
-        toast('Merged into existing transaction.', 'success');
+        toast('Merged into existing transaction', 'success');
       } else {
-        toast(res?.message || 'Could not merge alert.', 'error');
+        toast(res?.message || 'Could not merge alert', 'error');
       }
 
       alerts.splice(activeAlertIndex, 1);
@@ -238,7 +238,7 @@ export function bindAlertTooltip(container, app, { onUpdated = null, categories 
 
       if (res && res.status === 'success') {
         const merchantDisplay = currentAlert.merchant ? `for ${currentAlert.merchant}` : '';
-        toast(`Filed ${formatCurrency(currentAlert.amount, app.currency, app.locale)} ${merchantDisplay} under "${chosenCategory}".`, 'success');
+        toast(`Filed ${formatCurrency(currentAlert.amount, app.currency, app.locale)} ${merchantDisplay} under ${chosenCategory}`, 'success');
       } else {
         await app.db('save_transaction', {
           transaction: {
@@ -253,7 +253,7 @@ export function bindAlertTooltip(container, app, { onUpdated = null, categories 
             member_id: currentAlert.member_id || 1,
           },
         });
-        toast(`Saved transaction under "${chosenCategory}".`, 'success');
+        toast(`Saved transaction under ${chosenCategory}`, 'success');
       }
 
       alerts.splice(activeAlertIndex, 1);
@@ -281,7 +281,7 @@ export function bindAlertTooltip(container, app, { onUpdated = null, categories 
         });
       }
 
-      toast('Alert discarded / ignored.', 'info');
+      toast('Alert discarded', 'info');
       alerts.splice(activeAlertIndex, 1);
       app.pendingAlerts = alerts;
 

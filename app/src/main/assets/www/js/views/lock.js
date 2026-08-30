@@ -584,7 +584,7 @@ export function renderSetup(app) {
             if (current) {
               localStorage.removeItem('biometric_enabled');
               localStorage.removeItem('bio_vault_pin');
-              toast('Fingerprint unlock disabled.', 'info');
+              toast('Fingerprint unlock disabled', 'info');
               paintPermissions();
             } else {
               const pin = chosenPin || localStorage.getItem('bio_vault_pin');
@@ -593,14 +593,14 @@ export function renderSetup(app) {
               if (auth.success) {
                 localStorage.setItem('biometric_enabled', '1');
                 if (pin) localStorage.setItem('bio_vault_pin', pin);
-                toast('Fingerprint unlock verified and enabled!', 'success');
+                toast('Fingerprint unlock verified and enabled', 'success');
               } else {
                 localStorage.removeItem('biometric_enabled');
                 localStorage.removeItem('bio_vault_pin');
                 if (auth.message && auth.message !== 'CANCELED' && !auth.message.toLowerCase().includes('cancel')) {
                   toast(auth.message, 'error');
                 } else {
-                  toast('Fingerprint verification cancelled.', 'info');
+                  toast('Fingerprint verification cancelled', 'info');
                 }
               }
               paintPermissions();
@@ -700,7 +700,7 @@ function promptBiometricEnrollment(pin) {
           if (auth.message && auth.message !== 'CANCELED' && !auth.message.toLowerCase().includes('cancel')) {
             toast(auth.message, 'error');
           } else {
-            toast('Fingerprint verification cancelled.', 'info');
+            toast('Fingerprint verification cancelled', 'info');
           }
         }
       });

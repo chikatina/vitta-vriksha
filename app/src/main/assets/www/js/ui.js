@@ -881,18 +881,18 @@ export function taxDisclaimerCard({ compact = false, customText = '' } = {}) {
     return `
       <div class="tax-disclaimer-compact" role="note">
         <span style="color:var(--warning);display:flex;flex-shrink:0;margin-top:1px">${icon('warning', 'icon-sm')}</span>
-        <div>
-          <strong class="banner-title">Productivity Tool Only — No Financial or Tax Advice:</strong>
-          <span class="banner-body"> ${h(text)}</span>
+        <div class="tax-disclaimer-content">
+          <strong class="banner-title">Productivity Tool Only · No Financial or Tax Advice:</strong>
+          <span>${h(text)}</span>
         </div>
       </div>`;
   }
 
   return `
-    <div class="tax-disclaimer" role="note">
-      <div class="tax-disclaimer-header">
-        <span style="color:var(--warning);display:flex;flex-shrink:0">${icon('warning', 'icon-sm')}</span>
-        <span class="tax-disclaimer-title">Notice: Estimator & Productivity Tool Only — No Tax Advice</span>
+    <div class="card tax-disclaimer-card" style="margin-top:16px">
+      <div class="row" style="gap:10px;align-items:flex-start">
+        ${icon('info', 'icon-sm')}
+        <span class="tax-disclaimer-title">Notice: Estimator & Productivity Tool Only · No Tax Advice</span>
       </div>
       <div class="tax-disclaimer-text">
         ${h(text)}

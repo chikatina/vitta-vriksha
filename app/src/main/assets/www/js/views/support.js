@@ -28,7 +28,7 @@ export async function renderSupport(container, app) {
           <span class="banner-main">
             <span class="title">How can we help?</span>
             <span class="caption" style="color:inherit;opacity:0.9">
-              Questions, bug reports or feedback — we're here to assist you.
+              Questions, bug reports, and feedback.
             </span>
           </span>
         </div>
@@ -37,7 +37,7 @@ export async function renderSupport(container, app) {
       <div class="card">
         <div class="card-title">Contact Support</div>
         <p class="caption" style="margin-bottom:var(--gap-3)">
-          Send an email directly to our support team. We usually respond within 24–48 hours.
+          Send an email directly to help@chikatistudio.com.
         </p>
 
         <div class="field" style="margin-bottom:var(--gap-3)">
@@ -64,12 +64,12 @@ export async function renderSupport(container, app) {
         </div>
 
         <button type="button" class="btn btn-filled btn-block" data-compose-email>
-          ${icon('arrow_forward')}Send Email (${SUPPORT_EMAIL})
+          ${icon('arrow_forward')}Send Email
         </button>
       </div>
 
       <div class="card">
-        <div class="card-title">Self-Service Resources</div>
+        <div class="card-title">Resources</div>
         <div class="list" style="box-shadow:none;background:transparent">
           <button type="button" class="list-row" data-open-faq style="padding-left:0;padding-right:0">
             <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface)">
@@ -111,7 +111,7 @@ export async function renderSupport(container, app) {
           if (navigator.clipboard?.writeText) {
             await navigator.clipboard.writeText(SUPPORT_EMAIL);
           }
-          toast(`Copied ${SUPPORT_EMAIL} to clipboard!`, 'success');
+          toast(`Copied ${SUPPORT_EMAIL}`, 'info');
         } catch {
           toast(SUPPORT_EMAIL, 'info');
         }

@@ -15,6 +15,16 @@
 
 import { h } from './ui.js';
 
+const PALETTE = ['#3B82F6', '#8B5CF6', '#14B8A6', '#F59E0B', '#EC4899', '#06B6D4', '#94A3B8'];
+
+const ROLE_COLORS = {
+  expense: 'var(--expense)',
+  income: 'var(--income)',
+  investment: 'var(--investment)',
+  accent: 'var(--accent)',
+  transfer: '#2563EB',
+};
+
 let gradientSeq = 0;
 
 /** The band behind the chosen bucket, drawn under the bars so it reads as a backdrop. */
@@ -277,14 +287,15 @@ export function donutChart(slices, {
   const circumference = 2 * Math.PI * radius;
   let offset = 0;
 
-  const arcs = usable.map((slice) => {
+  const arcs = usable.map((slice, i) => {
+    const color = slice.color || PALETTE[i % PALETTE.length];
     const fraction = Number(slice.value) / total;
     // A hairline gap between slices reads as separation without a stroke.
     const length = Math.max(0, fraction * circumference - 2);
     const arc = `
       <circle cx="${size / 2}" cy="${size / 2}" r="${radius}"
         ${selectable ? `class="chart-hit" data-bucket="${h(slice.key ?? slice.label)}"` : ''}
-        fill="none" stroke="${h(slice.color)}" stroke-width="${thickness}"
+        fill="none" stroke="${h(color)}" stroke-width="${thickness}"
         stroke-dasharray="${length} ${circumference - length}"
         stroke-dashoffset="${-offset * circumference}" stroke-linecap="round">
         <title>${h(slice.label)}: ${h(slice.formatted ?? Math.round(Number(slice.value)))}</title>
@@ -295,9 +306,10 @@ export function donutChart(slices, {
 
   // A legend row is the easier target of the two, so when the chart leads somewhere the
   // rows lead there as well.
-  const legend = usable.map((slice) => {
+  const legend = usable.map((slice, i) => {
+    const color = slice.color || PALETTE[i % PALETTE.length];
     const body = `
-      <span class="legend-dot" style="background:${h(slice.color)}"></span>
+      <span class="legend-dot" style="background:${h(color)}"></span>
       <span class="legend-label">${h(slice.label)}</span>
       <span class="legend-value">${((Number(slice.value) / total) * 100).toFixed(0)}%</span>`;
     return selectable
@@ -391,15 +403,7 @@ export function columnChart(points, {
     </svg>`;
 }
 
-const ROLE_COLORS = {
-  income: 'var(--income)',
-  expense: 'var(--expense)',
-  investment: 'var(--investment)',
-  invested: 'var(--investment)',
-  accent: 'var(--accent)',
-};
 
-const PALETTE = ['#3B82F6', '#8B5CF6', '#14B8A6', '#F59E0B', '#EC4899', '#06B6D4', '#94A3B8'];
 
 /** A series carries either an explicit colour or a semantic role. */
 function seriesColor(series, index) {

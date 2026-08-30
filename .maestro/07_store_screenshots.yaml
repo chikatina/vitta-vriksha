@@ -65,15 +65,15 @@ appId: com.chikatistudio.vittavriksha.debug
 
 # 4. Wait for Main Dashboard to be active
 - extendedWaitUntil:
-    visible: "WEALTH & NET WORTH"
+    visible: "Home"
     timeout: 10000
 
 # 5. Seed Realistic Demonstration Data via Settings
 - tapOn: "More"
 - extendedWaitUntil:
-    visible: ".*Settings Theme.*"
+    visible: ".*Settings.*"
     timeout: 5000
-- tapOn: ".*Settings Theme.*"
+- tapOn: ".*Settings.*"
 - scrollUntilVisible:
     element: "Load Sample Data"
     direction: DOWN
@@ -82,14 +82,14 @@ appId: com.chikatistudio.vittavriksha.debug
 # 6. Capture Home Dashboard (Net Worth, Assets, Liabilities, Spending Trends)
 - tapOn: "Home"
 - extendedWaitUntil:
-    visible: "WEALTH & NET WORTH"
+    visible: ".*Safe-to-Spend Allowance.*"
     timeout: 5000
 - takeScreenshot: screenshots/01_home_networth
 
 # 7. Capture Ledger View (Categorized Transactions & Search)
 - tapOn: "Ledger"
 - extendedWaitUntil:
-    visible: "Transactions"
+    visible: ".*Transactions.*"
     timeout: 5000
 - takeScreenshot: screenshots/02_ledger_expenses
 
@@ -108,40 +108,48 @@ appId: com.chikatistudio.vittavriksha.debug
 - takeScreenshot: screenshots/04_wealth_portfolio
 
 # 10. Capture Investments Screen (Holdings, Returns, Asset Allocation)
-- tapOn: ".*Investments Portfolio.*"
+- tapOn: ".*Investments.*"
 - extendedWaitUntil:
     visible: ".*Total value.*"
     timeout: 5000
 - takeScreenshot: screenshots/05_investments_portfolio
 
 # 11. Capture Loan Comparison Screen (Prepay vs Stay Invested)
-- tapOn: "Wealth"
+- tapOn:
+    id: "backButton"
+- swipe:
+    start: 50%, 70%
+    end: 50%, 30%
 - extendedWaitUntil:
-    visible: ".*Loans Outstanding.*"
+    visible: ".*Loans.*"
     timeout: 5000
-- tapOn: ".*Loans Outstanding.*"
-- scrollUntilVisible:
-    element: "Run comparison"
-    direction: DOWN
-- tapOn: "Run comparison"
-- scrollUntilVisible:
-    element: ".*Stay Invested.*"
-    direction: DOWN
+- tapOn: ".*Loans.*"
+- extendedWaitUntil:
+    visible: ".*Run comparison.*|.*Prepay.*"
+    timeout: 5000
+- swipe:
+    start: 50%, 70%
+    end: 50%, 30%
+- tapOn: ".*Run comparison.*"
+- extendedWaitUntil:
+    visible: ".*Stay Invested.*"
+    timeout: 5000
 - takeScreenshot: screenshots/06_loan_comparison
 
 # 12. Capture Settings Theming Screen (Themes, Accents, Preferences)
 - tapOn: "More"
+- scrollUntilVisible:
+    element: ".*Settings.*"
+    direction: DOWN
+- tapOn: ".*Settings.*"
 - extendedWaitUntil:
-    visible: ".*Settings Theme.*"
-    timeout: 5000
-- tapOn: ".*Settings Theme.*"
-- extendedWaitUntil:
-    visible: "Theme"
+    visible: ".*Theme.*"
     timeout: 5000
 - takeScreenshot: screenshots/07_settings_theming
 
 # 13. Capture More Hub (100% Offline Badge, SMS Rules, Backup)
-- tapOn: "More"
+- tapOn:
+    id: "backButton"
 - extendedWaitUntil:
     visible: "Analytics"
     timeout: 5000

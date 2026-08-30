@@ -108,21 +108,283 @@ export function calculateSafeToSpend(db, args = {}) {
 }
 
 /**
+ * Calculates rolling average daily expense burn over a specified number of days (e.g., 30, 90, 180, 365).
+ */
+export function calculateDailyExpenseAverage(db, args = {}) {
+  const memberId = args.member_id;
+  const [clause, params] = memberClause(memberId, 'AND');
+  const targetDays = Math.max(1, Number(args.days) || 90);
+
+  const now = new Date();
+  const pastDate = new Date(now.getTime() - (targetDays * 86400000));
+  const pastISO = `${pastDate.getFullYear()}-${String(pastDate.getMonth() + 1).padStart(2, '0')}-${String(pastDate.getDate()).padStart(2, '0')}`;
+
+  const row = db.get(
+    `SELECT SUM(amount) AS total, COUNT(*) AS count, MIN(date) AS earliest, MAX(date) AS latest
+     FROM transactions
+     WHERE date >= ? AND ${flowClause(db, 'spend')}${clause}`,
+    [pastISO, ...params],
+  );
+
+  const total = number(row?.total);
+  const count = Number(row?.count || 0);
+
+  let effectiveDays = targetDays;
+  if (row?.earliest && count > 0) {
+    const earliestDate = new Date(row.earliest);
+    if (!Number.isNaN(earliestDate.getTime())) {
+      const daysSinceEarliest = Math.max(1, Math.round((now - earliestDate) / 86400000) + 1);
+      effectiveDays = Math.min(targetDays, daysSinceEarliest);
+    }
+  }
+
+  const dailyAverage = effectiveDays > 0 ? Math.round(total / effectiveDays) : 0;
+  const monthlyAverage = Math.round(dailyAverage * 30.416);
+  const annualAverage = Math.round(dailyAverage * 365.25);
+
+  return {
+    status: 'success',
+    days_requested: targetDays,
+    effective_days: effectiveDays,
+    total_spend: Math.round(total),
+    transaction_count: count,
+    daily_average: dailyAverage,
+    monthly_average: monthlyAverage,
+    annual_average: annualAverage,
+  };
+}
+
+/**
+ * Calculates customized financial runway based on average daily expenses across configurable asset tiers.
+ */
+export function getCustomRunway(db, args = {}) {
+  const memberId = args.member_id;
+  const [clause, params] = memberClause(memberId, 'WHERE');
+
+  // 1. Asset categories breakdown
+  const accounts = db.all(`SELECT id, name, category, linked_holding_type, balance FROM asset_accounts${clause}`, params);
+  const npsTotal = number(db.value(`SELECT SUM(current_value) FROM nps_holdings${clause}`, params));
+  const folioTotal = number(db.value(`SELECT SUM(current_value) FROM mf_folios${clause}`, params));
+  const dematTotal = number(db.value(`SELECT SUM(current_value) FROM demat_holdings${clause}`, params));
+
+  let liquid = 0;
+  let deposits = 0;
+  let mutualFunds = folioTotal;
+  let stocks = dematTotal;
+  let gold = 0;
+  let retirement = npsTotal;
+  let other = 0;
+
+  for (const acc of accounts) {
+    if (acc.linked_holding_type === 'nps' || (String(acc.category || '').toUpperCase() === 'NPS' && npsTotal > 0)) {
+      continue;
+    }
+    const cat = String(acc.category || '').toLowerCase();
+    const bal = number(acc.balance);
+
+    if (LIQUID_CATEGORIES.has(cat) || !cat) {
+      liquid += bal;
+    } else if (cat.includes('fd') || cat.includes('rd') || cat.includes('deposit') || cat.includes('debt') || cat.includes('fixed')) {
+      deposits += bal;
+    } else if (cat.includes('gold') || cat.includes('sgb') || cat.includes('silver')) {
+      gold += bal;
+    } else if (cat.includes('equity') || cat.includes('stock') || cat.includes('demat') || cat.includes('share')) {
+      stocks += bal;
+    } else if (cat.includes('mf') || cat.includes('mutual')) {
+      mutualFunds += bal;
+    } else if (cat.includes('nps') || cat.includes('pf') || cat.includes('epf') || cat.includes('ppf') || cat.includes('pension') || cat.includes('provident')) {
+      retirement += bal;
+    } else {
+      other += bal;
+    }
+  }
+
+  // Recoverable loans lent
+  const lent = number(db.value(
+    `SELECT SUM(current_outstanding) FROM loans${clause}${clause ? ' AND' : ' WHERE'} direction = 'lent'`,
+    params,
+  ));
+  if (lent) deposits += lent;
+
+  // 2. Liabilities & Debt commitments breakdown (EMI pattern)
+  const loans = db.all(
+    `SELECT name, monthly_emi, current_outstanding FROM loans${clause}`
+    + `${clause ? ' AND' : ' WHERE'} COALESCE(direction, 'borrowed') != 'lent' AND current_outstanding > 0`,
+    params,
+  );
+  let monthlyLoanEmis = 0;
+  let totalLoanPrincipal = 0;
+  for (const l of loans) {
+    monthlyLoanEmis += number(l.monthly_emi);
+    totalLoanPrincipal += number(l.current_outstanding);
+  }
+  const cardDues = number(db.value(`SELECT SUM(current_balance) FROM credit_cards${clause}`, params));
+  const dailyLoanEmi = monthlyLoanEmis > 0 ? Math.round(monthlyLoanEmis / 30.416) : 0;
+
+  // 3. Historical Daily Living Burn Benchmarks (30d, 90d, 180d, 365d)
+  const burn30 = calculateDailyExpenseAverage(db, { days: 30, member_id: memberId });
+  const burn90 = calculateDailyExpenseAverage(db, { days: 90, member_id: memberId });
+  const burn180 = calculateDailyExpenseAverage(db, { days: 180, member_id: memberId });
+  const burn365 = calculateDailyExpenseAverage(db, { days: 365, member_id: memberId });
+
+  // Selected Daily Living Burn
+  let dailyLivingBurn = 0;
+  let burnPeriod = Number(args.burn_period_days) || 90;
+  let burnBasis = '90-Day Average';
+
+  if (args.custom_daily_burn !== undefined && args.custom_daily_burn !== null && number(args.custom_daily_burn) > 0) {
+    dailyLivingBurn = Math.round(number(args.custom_daily_burn));
+    burnBasis = 'Custom Input';
+    burnPeriod = 0;
+  } else if (burnPeriod === 30) {
+    dailyLivingBurn = burn30.daily_average;
+    burnBasis = '30-Day Average';
+  } else if (burnPeriod === 180) {
+    dailyLivingBurn = burn180.daily_average;
+    burnBasis = '180-Day Average';
+  } else if (burnPeriod === 365) {
+    dailyLivingBurn = burn365.daily_average;
+    burnBasis = '1-Year Average';
+  } else {
+    dailyLivingBurn = burn90.daily_average || burn30.daily_average || 1000;
+    burnBasis = '90-Day Average (Smoothed)';
+    burnPeriod = 90;
+  }
+
+  if (dailyLivingBurn <= 0) {
+    dailyLivingBurn = Math.max(100, Math.round(number(args.custom_daily_burn) || 1000));
+  }
+
+  const monthlyLivingBurn = Math.round(dailyLivingBurn * 30.416);
+
+  const incLiquid = args.include_liquid !== undefined ? Boolean(args.include_liquid) : true;
+  const incDeposits = args.include_deposits !== undefined ? Boolean(args.include_deposits) : true;
+  const incMutualFunds = args.include_mutual_funds !== undefined ? Boolean(args.include_mutual_funds) : true;
+  const incStocks = args.include_stocks !== undefined ? Boolean(args.include_stocks) : true;
+  const incGold = args.include_gold !== undefined ? Boolean(args.include_gold) : true;
+  const incRetirement = args.include_retirement !== undefined ? Boolean(args.include_retirement) : false;
+  const incOther = args.include_other !== undefined ? Boolean(args.include_other) : false;
+  const subtractLiabilities = args.subtract_liabilities !== undefined ? Boolean(args.subtract_liabilities) : true;
+
+  // Emergency Runway Burn via EMI pattern:
+  // Immediate statement debts (Credit cards) are cleared from the asset pool.
+  // Ongoing loan commitments are serviced as recurring Monthly EMIs added to the living burn rate.
+  const totalDailyBurn = dailyLivingBurn + (subtractLiabilities ? dailyLoanEmi : 0);
+  const totalMonthlyBurn = monthlyLivingBurn + (subtractLiabilities ? monthlyLoanEmis : 0);
+  const annualBurn = totalMonthlyBurn * 12;
+
+  let selectedAssetsTotal = 0;
+  if (incLiquid) selectedAssetsTotal += liquid;
+  if (incDeposits) selectedAssetsTotal += deposits;
+  if (incMutualFunds) selectedAssetsTotal += mutualFunds;
+  if (incStocks) selectedAssetsTotal += stocks;
+  if (incGold) selectedAssetsTotal += gold;
+  if (incRetirement) selectedAssetsTotal += retirement;
+  if (incOther) selectedAssetsTotal += other;
+
+  const immediateDebt = subtractLiabilities ? cardDues : 0;
+  const netRunwayFunds = Math.max(0, selectedAssetsTotal - immediateDebt);
+
+  const runwayDays = totalDailyBurn > 0 ? Math.floor(netRunwayFunds / totalDailyBurn) : 0;
+  const runwayMonths = totalMonthlyBurn > 0 ? Math.round((netRunwayFunds / totalMonthlyBurn) * 10) / 10 : 0;
+  const runwayYears = totalMonthlyBurn > 0 ? Math.round((netRunwayFunds / (totalMonthlyBurn * 12)) * 10) / 10 : 0;
+
+  let depletionDate = null;
+  if (runwayDays > 0 && runwayDays <= 36500) {
+    const dep = new Date(Date.now() + (runwayDays * 86400000));
+    depletionDate = `${dep.getFullYear()}-${String(dep.getMonth() + 1).padStart(2, '0')}-${String(dep.getDate()).padStart(2, '0')}`;
+  }
+
+  const calcTier = (poolAmount, id, label, iconName) => {
+    const net = Math.max(0, poolAmount - immediateDebt);
+    const d = totalDailyBurn > 0 ? Math.floor(net / totalDailyBurn) : 0;
+    const m = totalMonthlyBurn > 0 ? Math.round((net / totalMonthlyBurn) * 10) / 10 : 0;
+    const y = totalMonthlyBurn > 0 ? Math.round((net / (totalMonthlyBurn * 12)) * 10) / 10 : 0;
+    return {
+      id,
+      label,
+      icon: iconName,
+      gross_amount: Math.round(poolAmount),
+      net_amount: Math.round(net),
+      runway_days: d,
+      runway_months: m,
+      runway_years: y,
+    };
+  };
+
+  const totalAllAssets = liquid + deposits + mutualFunds + stocks + gold + retirement + other;
+
+  const tiers = {
+    liquid_only: calcTier(liquid, 'liquid_only', 'Liquid Cash Only', 'account_balance_wallet'),
+    emergency_pool: calcTier(liquid + deposits, 'emergency_pool', 'Liquid + Deposits', 'shield'),
+    investable: calcTier(liquid + deposits + mutualFunds + stocks + gold, 'investable', 'Investable Assets', 'trending_up'),
+    net_worth: calcTier(totalAllAssets, 'net_worth', 'Total Net Worth', 'balance'),
+  };
+
+  return {
+    status: 'success',
+    daily_living_burn: dailyLivingBurn,
+    monthly_living_burn: monthlyLivingBurn,
+    monthly_loan_emis: Math.round(monthlyLoanEmis),
+    daily_loan_emi: dailyLoanEmi,
+    daily_burn: totalDailyBurn,
+    monthly_burn: totalMonthlyBurn,
+    annual_burn: annualBurn,
+    burn_period_days: burnPeriod,
+    burn_basis_label: burnBasis,
+    historical_burn: {
+      days_30: burn30,
+      days_90: burn90,
+      days_180: burn180,
+      days_365: burn365,
+    },
+    asset_breakdown: {
+      liquid: Math.round(liquid),
+      deposits: Math.round(deposits),
+      mutual_funds: Math.round(mutualFunds),
+      stocks: Math.round(stocks),
+      gold: Math.round(gold),
+      retirement: Math.round(retirement),
+      other: Math.round(other),
+      total_assets: Math.round(totalAllAssets),
+    },
+    liabilities_breakdown: {
+      credit_cards: Math.round(cardDues),
+      monthly_loan_emis: Math.round(monthlyLoanEmis),
+      total_loan_principal: Math.round(totalLoanPrincipal),
+      total_liabilities: Math.round(totalLoanPrincipal + cardDues),
+    },
+    custom_configuration: {
+      include_liquid: incLiquid,
+      include_deposits: incDeposits,
+      include_mutual_funds: incMutualFunds,
+      include_stocks: incStocks,
+      include_gold: incGold,
+      include_retirement: incRetirement,
+      include_other: incOther,
+      subtract_liabilities: subtractLiabilities,
+    },
+    selected_assets_total: Math.round(selectedAssetsTotal),
+    immediate_debt_dues: Math.round(immediateDebt),
+    net_runway_funds: Math.round(netRunwayFunds),
+    runway_days: runwayDays,
+    runway_months: runwayMonths,
+    runway_years: runwayYears,
+    depletion_date: depletionDate,
+    tiers,
+  };
+}
+
+/**
  * Projects day-by-day cashflow trajectory for the next 30 days.
  */
 export function getCashflowRunway(db, args = {}) {
   const safe = calculateSafeToSpend(db, args);
+  const custom = getCustomRunway(db, args);
   const memberId = args.member_id;
   const [clause, params] = memberClause(memberId, 'WHERE');
 
-  // Estimate average daily discretionary burn from past 30 days
-  const [currentFrom, currentTo] = monthBounds(0);
-  const totalRecentSpend = number(db.value(
-    `SELECT SUM(amount) FROM transactions WHERE date >= ? AND date < ? AND ${flowClause(db, 'spend')}`,
-    [currentFrom, currentTo],
-  ));
-  const daysElapsed = Math.max(1, new Date().getDate());
-  const dailyBurn = Math.max(100, Math.round(totalRecentSpend / daysElapsed));
+  const dailyBurn = custom.daily_burn;
 
   // Collect scheduled debits with their calendar days
   const sips = db.all(`SELECT COALESCE(scheme_name, '') AS fund_name, monthly_amount, debit_day FROM sips${clause}${clause ? ' AND' : ' WHERE'} is_active = 1`, params);
@@ -188,6 +450,10 @@ export function getCashflowRunway(db, args = {}) {
     min_projected_balance: Math.round(minBalance),
     is_runway_safe: minBalance >= 5000,
     estimated_daily_burn: dailyBurn,
+    runway_days: custom.runway_days,
+    runway_months: custom.runway_months,
+    runway_years: custom.runway_years,
+    tiers: custom.tiers,
     timeline,
   };
 }

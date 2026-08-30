@@ -225,6 +225,10 @@ export async function renderSettings(container, app) {
       if (window.seedDemoData) {
         await window.seedDemoData();
       }
+      const sRes = await Bridge.db('get_settings');
+      if (sRes?.status === 'success' && sRes.settings) {
+        app.settings = sRes.settings;
+      }
       seedBtn.disabled = false;
       if (app?.refresh) await app.refresh();
     });

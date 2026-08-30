@@ -203,11 +203,16 @@ export async function seedDemoData(app) {
     { name: 'Health', limit: 5000 },
     { name: 'Rent & Housing', limit: 40000 },
   ];
+  const existingCatsRes = await Bridge.db('get_categories');
+  const existingCats = existingCatsRes?.categories || [];
+
   for (const cat of categories) {
+    const existing = existingCats.find((c) => c.name === cat.name);
     await Bridge.db('save_category', {
       category: {
+        id: existing?.id,
         name: cat.name,
-        budget_limit: cat.limit,
+        monthly_budget: cat.limit,
       },
     });
   }
@@ -337,6 +342,14 @@ export async function seedDemoData(app) {
 
   for (const t of txs) {
     await Bridge.db('save_transaction', { transaction: t });
+  }
+
+  // Set overall monthly budget & dismiss onboarding checklist for clean screenshots
+  await Bridge.db('update_setting', { key: 'monthly_budget', value: '75000' });
+  await Bridge.db('update_setting', { key: 'onboarding_dismissed', value: '1' });
+  if (app?.settings) {
+    app.settings.monthly_budget = '75000';
+    app.settings.onboarding_dismissed = '1';
   }
 
   if (app?.render) {

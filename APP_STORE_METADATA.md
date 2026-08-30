@@ -1,6 +1,6 @@
-# Vitta Vriksha (Moneytree) — App Store & Google Play Metadata
+# Vitta Vriksha (Moneytree) - App Store & Google Play Metadata
 
-> 100% Offline-First, Private Personal Wealth, Portfolio & SMS Expense Tracker  
+> Offline-first, private personal net worth, portfolio, and SMS expense tracker  
 > Official Website: [chikatistudio.com/vitta-vriksha](https://chikatistudio.com/vitta-vriksha/)  
 > Privacy Policy: [chikatistudio.com/vitta-vriksha/privacy.html](https://chikatistudio.com/vitta-vriksha/privacy.html)  
 > Interactive Web Assets & Mockups: [chikatistudio.com/vitta-vriksha/store-assets.html](https://chikatistudio.com/vitta-vriksha/store-assets.html)  
@@ -10,8 +10,8 @@
 
 ## 1. Store Titles & Short Info
 
-- **App Name / Title**: `Vitta Vriksha — Private Net Worth & Portfolio` (48 chars)
-- **Short Description**: `100% Private, offline-first net worth, portfolio, budget & SMS expense tracker.` (79 chars)
+- **App Name / Title**: `Vitta Vriksha - Net Worth & Portfolio Tracker` (46 chars)
+- **Short Description**: `Private, offline-first net worth, portfolio, budget, and SMS expense tracker.` (76 chars)
 - **Category**: `Finance / Personal Finance`
 - **Content Rating**: `Everyone (PEGI 3 / USK 0)`
 
@@ -20,37 +20,37 @@
 ## 2. Full Store Description
 
 ```markdown
-Nurture Your Wealth. Watch Your Financial Tree Flourish.
+A personal finance tracker for Indian households that keeps all data on your device. Free, open source, and built without network access.
 
-Say goodbye to sterile, anxiety-inducing spreadsheets and ad-riddled finance apps. Vitta Vriksha (Moneytree) translates your entire financial life — net worth, mutual funds, stocks, loans, and daily expenses — into a serene, private, and beautiful living ecosystem.
+The app declares no INTERNET permission. Calculations, statement parsing, and database storage happen entirely on your phone.
 
-🔒 100% PRIVATE & OFFLINE-FIRST
-• Zero servers, zero telemetry, zero advertisements.
-• All financial records are stored exclusively on your phone, encrypted with local AES-256 SQL cipher.
-• Biometric (Fingerprint / Face) quick unlock with Zerodha-style graceful auto-lock protection.
+PRIVATE & OFFLINE-FIRST
+• No internet permission, no telemetry, no advertisements.
+• All records stored locally in an encrypted database using AES-GCM and PBKDF2.
+• Fast biometric (fingerprint) unlock with configurable auto-lock.
 
-📈 COMPLETE PORTFOLIO & CAS STATEMENT IMPORT
-• 1-Click CAMS & KFintech Consolidated Account Statement (CAS) PDF import.
-• Track Mutual Funds, Equities, SGBs, PPF, NPS, Real Estate, and Bank accounts in one unified dashboard.
-• Interactive valuation charts, XIRR returns, and annual SIP step-up compounding forecasting.
+PORTFOLIO & CAS STATEMENT IMPORT
+• Import CAMS and KFintech Consolidated Account Statements (CAS) with full transaction history.
+• Import NSDL and CDSL eCAS files covering mutual funds, demat equities, bonds, and NPS holdings.
+• Import broker tradebook CSVs (Zerodha, Groww, Upstox) for stock capital gains.
+• Track valuation, allocation, XIRR returns, and SIP step-up projections.
 
-⚡ ZERO-PERMISSION SMART ON-DEVICE SMS EXPENSE TRACKING
-• Real-time automated transaction parsing directly from banking SMS alerts on your device.
-• Day-by-Day heatmap spending calendar to understand your monthly rhythms.
-• Weekend vs Weekday intensity analysis to master discretionary expenses.
+OPTIONAL ON-DEVICE SMS EXPENSE TRACKING
+• Parse transaction alerts directly on your device.
+• Match transactions against customizable classification rules.
+• Review detected recurring subscriptions, EMIs, and SIP debits.
 
-🎯 STRATEGIC WEALTH & DEBT CALCULATORS
-• Prepay Loan vs Stay Invested Comparator: Evaluate whether aggressive prepayment or compounding market returns yields higher terminal wealth.
-• FIRE (Financial Independence, Retire Early) Progress & Runway Forecaster.
-• Debt Snowball & Avalanche payoff roadmaps.
+CAPITAL GAINS & TAX ESTIMATES
+• First-in first-out (FIFO) lot matching with Section 112A grandfathering (Jan 31, 2018 benchmark NAVs).
+• Budget 2024 tax regime support (12.5% LTCG, 20% STCG, ₹1.25L exemption).
+• Export Schedule 112A CSV reports.
 
-🌟 DESIGNED FOR MINDFUL MASTERY
-• Interactive Allocation, Assets, and Debt breakdown widgets.
-• Multi-currency & multi-family member tagging.
-• Clean, dark-mode native interface crafted for speed and elegance.
+HOUSEHOLDS & BACKUP
+• Multi-profile support for household members.
+• Single-file encrypted backups with PBKDF2 key derivation.
 
-Crafted with care by Chikati Studio.
-Visit us: https://chikatistudio.com/vitta-vriksha/
+Source code and issue tracker: https://github.com/chikatina/vitta-vriksha
+Chikati Studio: https://chikatistudio.com/vitta-vriksha/
 ```
 
 ---
@@ -67,8 +67,8 @@ personal finance, net worth tracker, mutual fund portfolio, CAS reader, expense 
 
 | Slide # | Headline | Highlight Feature |
 | :--- | :--- | :--- |
-| **Slide 1** | **Track Your Entire Net Worth** | Interactive Allocation / Assets / Liabilities breakdown card |
-| **Slide 2** | **Automated CAS & Portfolio Intelligence** | CAMS/KFintech import, P&L gains, SVG history curves |
-| **Slide 3** | **Smart On-Device SMS & Heat Calendar** | Offline bank SMS parsing, 7-column day-by-day heatmap |
-| **Slide 4** | **FIRE Freedom & Loan Prepay Planner** | Stay Invested vs Prepay Loan wealth comparison curve |
-| **Slide 5** | **100% Private, Local-First Vault** | AES-256 SQL cipher, Zerodha-style biometric unlock, Zero ads |
+| **Slide 1** | **Track Net Worth** | Allocation, assets, and liabilities breakdown |
+| **Slide 2** | **CAS & Portfolio Import** | CAMS and KFintech import, P&L gains, and history curves |
+| **Slide 3** | **On-Device SMS & Ledger** | Offline bank SMS parsing and daily spending calendar |
+| **Slide 4** | **FIRE & Loan Prepay Planner** | Stay invested vs loan prepayment comparison |
+| **Slide 5** | **Private Local Vault** | AES-GCM encryption, biometric unlock, zero ads |

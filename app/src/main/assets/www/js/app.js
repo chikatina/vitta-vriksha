@@ -429,6 +429,10 @@ class App {
   }
 
   async render({ preserveScroll = false } = {}) {
+    const sRes = await Bridge.db('get_settings');
+    if (sRes?.status === 'success' && sRes.settings) {
+      this.settings = sRes.settings;
+    }
     const scrollPos = preserveScroll && this.view ? this.view.scrollTop : 0;
     const config = this.page ? PAGES[this.page] : null;
     const tab = TABS.find((t) => t.id === this.tab) || TABS[0];

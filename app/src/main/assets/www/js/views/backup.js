@@ -59,7 +59,7 @@ export async function renderBackup(container, app) {
       return;
     }
 
-    progress.complete('Backup encrypted!', 300);
+    progress.complete('Backup encrypted', 300);
 
     const filename = `vitta-vriksha-${todayISO()}.vittavriksha`;
     const saveRes = saveFile(filename, res.backup_payload, 'application/octet-stream');
@@ -118,7 +118,7 @@ export async function renderBackup(container, app) {
       return;
     }
 
-    progress.complete(`Restored ${res.restored} records!`, 400);
+    progress.complete(`Restored ${res.restored} records`, 400);
 
     toast(`Restored ${res.restored} records.`, 'success');
     setTimeout(() => window.location.reload(), 300);

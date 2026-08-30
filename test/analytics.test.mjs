@@ -895,6 +895,43 @@ describe('exclude_investments_from_expenses toggle', () => {
     assert.equal(bseSip.amount, 2500);
     assert.equal(bseSip.cadence, 'monthly');
   });
+
+  it('guarantees valid color on every breakdown row across all dimensions', async (t) => {
+    await spend(t, { date: '2026-08-05', amount: 500, merchant: 'Amazon', category: 'Shopping' });
+    await spend(t, { date: '2026-08-10', amount: 800, merchant: 'Swiggy', category: 'Dining' });
+
+    for (const dim of ['category', 'merchant', 'weekday', 'type']) {
+      const res = await ok(t, 'get_breakdown', { dimension: dim, granularity: 'month', bucket: '2026-08' });
+      assert.ok(res.rows.length > 0, `Dimension ${dim} should have rows`);
+      for (const row of res.rows) {
+        assert.ok(row.color, `Row ${row.label} in dimension ${dim} must have a valid color`);
+        assert.ok(typeof row.color === 'string' && row.color.length > 0);
+      }
+    }
+  });
+
+  it('isolates daily transfer breakdowns strictly to the specified month', async (t) => {
+    // July transfer
+    await ok(t, 'save_transaction', {
+      transaction: { date: '2026-07-15', amount: 15000, category: 'Transfer', type: 'Transfer', merchant: 'Self' },
+    });
+    // August transfer
+    await ok(t, 'save_transaction', {
+      transaction: { date: '2026-08-12', amount: 8000, category: 'Transfer', type: 'Transfer', merchant: 'Self' },
+    });
+
+    const res = await ok(t, 'get_breakdown', {
+      dimension: 'day',
+      granularity: 'month',
+      bucket: '2026-08',
+      flow: 'transfer',
+    });
+
+    assert.equal(res.status, 'success');
+    assert.equal(res.total, 8000, 'August transfer breakdown must strictly equal 8,000');
+    assert.equal(res.rows.length, 1);
+    assert.equal(res.rows[0].key, '2026-08-12');
+  });
 });
 
 

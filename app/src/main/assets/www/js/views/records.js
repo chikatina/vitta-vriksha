@@ -1850,7 +1850,7 @@ async function renderPrepaymentCalculator(container, app, loans = []) {
       </div>
 
       <div class="row" style="gap:10px;margin-bottom:14px;flex-direction:column">
-        <div class="card" style="padding:14px;background:${isInvestWinner ? 'var(--surface-container-highest)' : 'var(--surface-container)'};border:${isInvestWinner ? '1.5px solid var(--income)' : '1px solid var(--outline)'}">
+        <div class="card" aria-label="Stay Invested comparison card" style="padding:14px;background:${isInvestWinner ? 'var(--surface-container-highest)' : 'var(--surface-container)'};border:${isInvestWinner ? '1.5px solid var(--income)' : '1px solid var(--outline)'}">
           <div class="row-between" style="align-items:center">
             <span class="row" style="gap:6px;align-items:center;font-weight:700">
               ${icon('trending_up', 'icon-sm')}Stay Invested
@@ -1900,6 +1900,7 @@ async function renderPrepaymentCalculator(container, app, loans = []) {
   };
 
   container.querySelector('[data-calc]').addEventListener('click', runCalculation);
+  runCalculation();
 }
 
 function renderGoalPlannerSection(host, app, records) {

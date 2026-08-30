@@ -46,11 +46,11 @@
   --ease-emphasised: cubic-bezier(0.3, 0, 0, 1);
 
   /* MainActivity writes the real system bar insets and keyboard height over these. */
-  --inset-top: 0px;
-  --inset-bottom: 0px;
+  --inset-top: 36px;
+  --inset-bottom: 24px;
   --keyboard-inset: 0px;
 
-  --nav-height: 64px;
+  --nav-height: 68px;
 
   /* Stacking context tokens (Z-Index Architecture)
    * Ensures lock overlays at 1000 and menus/toasts are always on top of all content and tours. */
@@ -374,7 +374,7 @@ a { color: var(--accent); }
   display: flex;
   align-items: center;
   gap: var(--gap-2);
-  padding: calc(var(--inset-top) + 10px) var(--gap-4) 10px;
+  padding: calc(var(--inset-top) + 16px) var(--gap-4) 14px;
   background: var(--surface);
   flex-shrink: 0;
   z-index: 5;
@@ -424,10 +424,10 @@ a { color: var(--accent); }
 }
 
 /* Every direct child of .view must not shrink below its content height.
- * .view is a constrained flex container (flex:1 in a fixed-height body) *and*
- * a scroll container (overflow-y:auto). Default flex-shrink:1 causes children
- * to squash each other — chips collapse, cards disappear. With shrink:0 each
- * child takes its natural size and the container scrolls the overflow. */
+ * .view is a constrained flex container (flex:1 in a fixed-height body),
+ * On narrow phones and large text scaling, adjacent non-shrinking flex children tend
+ * to squash each other, chips collapse, cards disappear. With shrink:0 each
+ * component takes its natural width and the scroll viewport handles overflow. */
 .view > * { flex-shrink: 0; min-width: 0; }
 
 .sticky-header {
@@ -497,6 +497,7 @@ a { color: var(--accent); }
 
 .card {
   background: var(--surface-container);
+  border: 1px solid var(--outline);
   border-radius: var(--radius-lg);
   padding: var(--gap-4);
   box-shadow: var(--shadow-1);
@@ -504,6 +505,7 @@ a { color: var(--accent); }
 
 .card-flat {
   background: var(--surface-container-high);
+  border: 1px solid var(--outline);
   border-radius: var(--radius-lg);
   padding: var(--gap-4);
 }
@@ -581,7 +583,7 @@ a { color: var(--accent); }
 .stat-tappable {
   cursor: pointer;
   background: var(--surface-container);
-  transition: transform 0.12s var(--ease), background 0.12s var(--ease), border-color 0.12s var(--ease), box-shadow 0.12s var(--ease);
+  transition: transform 0.14s var(--ease), background 0.14s var(--ease), border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
   user-select: none;
   -webkit-tap-highlight-color: transparent;
 }
@@ -950,13 +952,15 @@ a { color: var(--accent); }
 .home-top-bar { display: none; }
 
 .nav-bar {
-  height: calc(var(--nav-height) + var(--inset-bottom));
-  padding-bottom: var(--inset-bottom);
+  min-height: calc(var(--nav-height) + var(--inset-bottom));
+  padding-top: 6px;
+  padding-bottom: calc(var(--inset-bottom) + 8px);
   background: var(--surface-container);
   display: flex;
   flex-shrink: 0;
   z-index: var(--z-nav);
   box-shadow: 0 -1px 0 var(--outline);
+  box-sizing: border-box;
 }
 
 .nav-item {
@@ -965,16 +969,15 @@ a { color: var(--accent); }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
   color: var(--on-surface-variant);
   min-width: 0;
-  padding-top: 4px;
-  padding-bottom: 2px;
+  padding: 2px 0 0;
 }
 
 .nav-indicator {
-  width: 60px;
-  height: 30px;
+  width: 56px;
+  height: 28px;
   border-radius: var(--radius-full);
   display: grid;
   place-items: center;
@@ -985,9 +988,10 @@ a { color: var(--accent); }
 .nav-item[aria-selected='true'] .nav-indicator { background: var(--accent-container); }
 
 .nav-label {
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
   letter-spacing: 0.01em;
+  line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;

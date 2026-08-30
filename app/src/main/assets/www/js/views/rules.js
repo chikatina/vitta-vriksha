@@ -2251,7 +2251,7 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
             issuer: item.bank || item.institution,
             last_4: item.last_4,
           });
-          toast(`Added ${customName}!`, 'success');
+          toast(`Added ${customName}`, 'success');
           app.refresh();
         } else {
           toast(res?.message || 'Could not add account.', 'error');

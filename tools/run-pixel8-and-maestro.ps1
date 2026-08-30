@@ -79,7 +79,11 @@ Start-Sleep -Seconds 3
 
 Write-Host "`n=== 3. Running Maestro Flow ($Flow) ===" -ForegroundColor Cyan
 $maestroBat = Join-Path $maestroBin "maestro.bat"
-& $maestroBat test $Flow
+& $maestroBat --device emulator-5554 test $Flow
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Maestro test execution failed with exit code $LASTEXITCODE."
+    exit $LASTEXITCODE
+}
 
 Write-Host "`n=== 4. Syncing Captured Screenshots ===" -ForegroundColor Cyan
 $testsDir = Join-Path $HOME ".maestro\tests"

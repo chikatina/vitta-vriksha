@@ -14,4 +14,4 @@ This folder receives the automated device screenshots captured during Maestro te
 ```bash
 maestro test .maestro/07_store_screenshots.yaml
 ```
-Screenshots are saved here directly from your connected device or emulator with 100% clean test data.
+Screenshots are saved here directly from a connected device or emulator with clean test data.

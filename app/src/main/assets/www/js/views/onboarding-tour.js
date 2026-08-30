@@ -1,4 +1,4 @@
-/* Interactive Driver.js-Style Onboarding Walkthrough Tour with live auto-navigation and glowing spotlights. */
+/* Guided onboarding tour with tab navigation and target highlights. */
 
 import { icon, h } from '../ui.js';
 
@@ -6,60 +6,60 @@ export const TOUR_STEPS = [
   // ── 1. HOME: CASHFLOW & DASHBOARD ──
   {
     tab: 'home',
-    title: 'Live Cashflow & Net Kept',
-    subtitle: 'Step 1 of 8 • Home Dashboard',
+    title: 'Cashflow & Net Kept',
+    subtitle: 'Step 1 of 8 · Home Dashboard',
     glyph: 'dashboard',
     badge: 'Home Tab',
     targetSelectors: ['[data-widget="month_summary"]', '[data-widget="income_expense"]', '[data-panel]', '.card', '.home-top-bar'],
-    description: 'Your financial heartbeat. Tracks this month\'s Income vs Expenses, live runway, and Net Kept savings rate. Tap "Customise" to reorder cards or add category spotlights.',
+    description: 'Tracks monthly income, spending, live runway, and savings rate. Tap Customise to reorder cards or add category spotlights.',
     highlights: [
-      { icon: 'show_chart', text: 'Real-time Net Kept savings rate' },
-      { icon: 'tune', text: 'Reorder cards & customize layout' },
+      { icon: 'show_chart', text: 'Net Kept savings rate' },
+      { icon: 'tune', text: 'Reorder cards and custom layout' },
     ],
   },
 
   // ── 2. HOME: BANK SMS SCANNING & ALERTS ──
   {
     tab: 'home',
-    title: 'Bank SMS Auto-Scanning',
-    subtitle: 'Step 2 of 8 • SMS Tracking',
+    title: 'Bank SMS Scanning',
+    subtitle: 'Step 2 of 8 · SMS Tracking',
     glyph: 'sms',
     badge: 'SMS Scanner',
     targetSelectors: ['[data-interactive-alert]', '[data-alert-tooltip]', '[data-onboarding-sms]', '[data-action-sms]'],
-    description: 'Scans incoming debit and credit alerts directly from your SMS inbox on-device. Automatically detects UPI, card, ATM, and salary transactions with 100% offline privacy.',
+    description: 'Scans incoming debit and credit alerts on-device. Detects UPI, card, ATM, and salary transactions offline.',
     highlights: [
-      { icon: 'sms', text: 'Auto-detect debits, credits & UPI' },
-      { icon: 'lock', text: '100% on-device private parsing' },
+      { icon: 'sms', text: 'Detects debits, credits, and UPI' },
+      { icon: 'lock', text: 'On-device private parsing' },
     ],
   },
 
   // ── 3. LEDGER: LIVE FILTER STREAMS & BATCH ACTIONS ──
   {
     tab: 'ledger',
-    title: 'Live Ledger & Filter Streams',
-    subtitle: 'Step 3 of 8 • Ledger Tab',
+    title: 'Ledger & Filter Streams',
+    subtitle: 'Step 3 of 8 · Ledger Tab',
     glyph: 'receipt_long',
     badge: 'Ledger Tab',
     targetSelectors: ['[data-filters]', '[data-scope-bar]', '.ledger-search-box', '[data-results]'],
-    description: 'Your complete financial ledger. Instantly isolate transactions by Spent, Received (Income), Invested, UPI payments, or high-value spends, and multi-select to bulk edit or split single charges.',
+    description: 'Filter transactions by spending, income, investments, UPI, or large amounts. Select multiple rows to bulk edit or split entries.',
     highlights: [
-      { icon: 'south_west', text: 'Income vs Spends vs Investments' },
-      { icon: 'check_circle', text: 'Batch actions & transaction splits' },
+      { icon: 'south_west', text: 'Income, spending, and investments' },
+      { icon: 'check_circle', text: 'Batch actions and transaction splits' },
     ],
   },
 
   // ── 4. BUDGETS: CEILING & SAFE RUN-RATE ──
   {
     tab: 'budgets',
-    title: 'Monthly Budget & Safe Run-Rate',
-    subtitle: 'Step 4 of 8 • Budgets Tab',
+    title: 'Monthly Budget & Pacing',
+    subtitle: 'Step 4 of 8 · Budgets Tab',
     glyph: 'donut_small',
     badge: 'Budgets Tab',
     targetSelectors: ['.card:first-child', '[data-set-budget]', '[data-donut]'],
-    description: 'Set your overall monthly spending ceiling. The engine dynamically computes your daily Safe-to-Spend pacing allowance (₹X/day) and tracks category caps with visual meters.',
+    description: 'Set an overall monthly spending limit and category caps. Calculates daily safe-to-spend pacing.',
     highlights: [
-      { icon: 'shield', text: 'Daily Safe-to-Spend pacing allowance' },
-      { icon: 'schedule', text: 'Category spending caps & salary trends' },
+      { icon: 'shield', text: 'Daily Safe-to-Spend pacing' },
+      { icon: 'schedule', text: 'Category spending caps' },
     ],
   },
 
@@ -67,58 +67,58 @@ export const TOUR_STEPS = [
   {
     tab: 'wealth',
     title: 'Wealth & Net Worth Milestones',
-    subtitle: 'Step 5 of 8 • Wealth Tab',
+    subtitle: 'Step 5 of 8 · Wealth Tab',
     glyph: 'savings',
     badge: 'Wealth Tab',
     targetSelectors: ['.card:first-child', '.milestone-track', '[data-page="investments"]', '[data-page="goals"]', '[data-page="fire"]'],
-    description: 'Track net worth across mutual funds, demat equities, NPS, SGBs and FDs. Watch your progression across financial milestones from ₹1 Lakh to ₹10 Crore.',
+    description: 'Track net worth across mutual funds, demat equities, NPS, SGBs, deposits, and loans.',
     highlights: [
-      { icon: 'savings', text: 'Total assets, liabilities & net worth' },
-      { icon: 'trending_up', text: 'Progression to financial milestones' },
+      { icon: 'savings', text: 'Total assets, liabilities, and net worth' },
+      { icon: 'trending_up', text: 'Net worth milestone markers' },
     ],
   },
 
   // ── 6. WEALTH: CAS UPLOAD & PORTFOLIO IMPORTS ──
   {
     tab: 'wealth',
-    title: 'CAS Statements & Tradebook Imports',
-    subtitle: 'Step 6 of 8 • Portfolio Imports',
+    title: 'CAS Statements & Tradebooks',
+    subtitle: 'Step 6 of 8 · Portfolio Imports',
     glyph: 'upload_file',
     badge: 'CAS & Tradebooks',
     targetSelectors: ['[data-page="cas"]', '[data-page="investments"]', '[data-nav="cas"]', '.list'],
-    description: 'Import CAMS/CDSL Consolidated Account Statement (eCAS) PDFs and broker tradebook CSVs (Zerodha, Groww) to automatically sync mutual funds, stocks, and demat holdings in one unified view.',
+    description: 'Import CAMS, KFintech, CDSL, and NSDL statements or broker tradebook CSVs (Zerodha, Groww) to sync holdings.',
     highlights: [
-      { icon: 'upload_file', text: 'CAMS & KFintech eCAS PDF auto-sync' },
-      { icon: 'bar_chart', text: 'Zerodha & Groww tradebook CSV import' },
+      { icon: 'upload_file', text: 'CAMS and KFintech CAS import' },
+      { icon: 'bar_chart', text: 'Tradebook CSV import' },
     ],
   },
 
   // ── 7. MORE: RULES & AUTO-CATEGORIZATION ──
   {
     tab: 'more',
-    title: 'Merchant Rules & Auto-Categorization',
-    subtitle: 'Step 7 of 8 • Smart Rules',
+    title: 'Merchant Rules & Categorization',
+    subtitle: 'Step 7 of 8 · Rules Engine',
     glyph: 'rule',
     badge: 'Rules Engine',
     targetSelectors: ['[data-page="rules"]', '[data-nav="rules"]', '.list'],
-    description: 'Assigns categories and family members automatically using merchant matching rules (e.g. Swiggy, Uber, D-Mart) and regex patterns. You can customize or add your own rules anytime.',
+    description: 'Assign categories and household members automatically using merchant patterns and custom rules.',
     highlights: [
       { icon: 'label', text: 'Auto-categorization by merchant name' },
-      { icon: 'rule', text: 'Custom regex SMS rule editor & simulator' },
+      { icon: 'rule', text: 'Custom SMS rule editor and simulator' },
     ],
   },
 
   // ── 8. MORE: OFFLINE VAULT & ENCRYPTED BACKUPS ──
   {
     tab: 'more',
-    title: '100% Offline Vault & Encrypted Backup',
-    subtitle: 'Step 8 of 8 • Security & Privacy',
+    title: 'Offline Vault & Backups',
+    subtitle: 'Step 8 of 8 · Security & Privacy',
     glyph: 'security',
     badge: 'More Tab',
     targetSelectors: ['.card-accent', '[data-page="backup"]', '[data-page="security"]', '[data-nav="backup"]'],
-    description: 'Zero network permissions — your records never leave this device. Encrypted locally with AES-GCM and unlocked via PIN or fingerprint. Export password-encrypted backups anytime.',
+    description: 'No internet permission. All records remain on this device, encrypted with AES-GCM and unlocked via PIN or fingerprint.',
     highlights: [
-      { icon: 'lock', text: 'Zero-network on-device AES-GCM vault' },
+      { icon: 'lock', text: 'On-device AES-GCM vault' },
       { icon: 'backup', text: 'Password-encrypted offline backups' },
     ],
   },

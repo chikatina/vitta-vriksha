@@ -802,6 +802,66 @@ export const WIDGETS = {
     },
   },
 
+  financial_runway: {
+    label: 'Financial Runway',
+    description: 'Months of living expenses sustained across liquid and investable assets',
+    icon: 'shield',
+    needs: () => ['custom_runway'],
+    render({ custom_runway: res }, app) {
+      if (!res || res.status !== 'success') return '';
+      if (!res.net_runway_funds && !res.selected_assets_total && !res.asset_breakdown?.total_assets) return '';
+
+      const days = res.runway_days || 0;
+      const months = res.runway_months || 0;
+      const years = res.runway_years || 0;
+
+      let runwayDisplay = `${days} Days`;
+      if (years >= 2) runwayDisplay = `${years} Years (${months} mos)`;
+      else if (months >= 1) runwayDisplay = `${months} Months (${days} d)`;
+
+      const liquidTier = res.tiers?.liquid_only;
+      const investableTier = res.tiers?.investable;
+
+      return card('Financial Runway', `
+        <div class="row-between" style="align-items:flex-start;margin-bottom:12px;flex-wrap:wrap;gap:6px">
+          <div style="flex:1;min-width:140px">
+            <div class="display" style="font-size:24px;color:var(--accent)">
+              ${h(runwayDisplay)}
+            </div>
+            <div class="caption" style="margin-top:2px">
+              Burn: ${h(money(app, res.daily_burn || 0))}/day · ${h(res.burn_basis_label || '90-day average')}
+            </div>
+          </div>
+          <span class="badge badge-accent" style="flex-shrink:0">
+            ${days >= 180 ? 'Runway Safe' : 'Buffer Building'}
+          </span>
+        </div>
+
+        <div class="grid-2" style="gap:8px;background:var(--surface-container-high);padding:10px;border-radius:var(--radius-sm)">
+          <div>
+            <span class="caption" style="font-size:11px">Liquid Cash Runway</span>
+            <div style="font-weight:700;font-size:13.5px;color:var(--on-surface)">
+              ${liquidTier ? `${liquidTier.runway_months} mos (${h(money(app, liquidTier.net_amount))})` : '—'}
+            </div>
+          </div>
+          <div>
+            <span class="caption" style="font-size:11px">Investments Runway</span>
+            <div style="font-weight:700;font-size:13.5px;color:var(--accent)">
+              ${investableTier ? `${investableTier.runway_years} yrs (${h(money(app, investableTier.net_amount))})` : '—'}
+            </div>
+          </div>
+        </div>`, { action: drillAction('Runway') });
+    },
+    bind(node, data, app) {
+      const drill = node.querySelector('[data-drill]');
+      if (drill) {
+        drill.addEventListener('click', () => {
+          openCashflowSheet(app);
+        });
+      }
+    },
+  },
+
   spending_trends: {
     label: 'Spending Alerts & Trends',
     description: 'Anomalies and spike warnings compared to 3-month average',
@@ -1122,7 +1182,7 @@ export const WIDGETS = {
 
   top_categories: {
     label: 'Top categories',
-    description: 'Highest spending categories',
+    description: 'Highest spending categories pie chart',
     icon: 'pie_chart',
     options: [WINDOW_OPTION, FLOW_OPTION, COUNT_OPTION],
     needs: (options) => [breakdownNeed('category', options)],
@@ -1130,17 +1190,21 @@ export const WIDGETS = {
       const breakdown = data[breakdownNeed('category', options)];
       if (!breakdown || breakdown.status !== 'success' || !breakdown.rows.length) return '';
       const count = Number.parseInt(options.count ?? COUNT_OPTION.default, 10) || 5;
+      const slices = breakdown.rows.slice(0, count);
 
       return card(`Top categories ${describePeriod(breakdown.bucket, breakdown.granularity)}`, `
         <div data-breakdown>
-          ${barList(breakdown.rows.slice(0, count).map((row) => ({
+          ${donutChart(slices.map((row) => ({
     key: row.key,
     label: row.label,
     value: row.total,
     color: row.color,
     formatted: money(app, row.total),
-    sub: `${row.count} ${row.count === 1 ? 'entry' : 'entries'} · ${row.share.toFixed(0)}%`,
-  })), { selectable: true })}
+  })), {
+    centerLabel: 'Total',
+    centerValue: money(app, breakdown.total),
+    selectable: true,
+  })}
         </div>`, { action: drillAction() });
     },
     bind(node, data, app, options) {
@@ -1558,6 +1622,7 @@ export async function loadWidgetData(app, layout) {
     if (kind === 'summary') return [need, await Bridge.db('get_summary', { member_id: member })];
     if (kind === 'debt_summary') return [need, await Bridge.db('get_debt_summary', { member_id: member })];
     if (kind === 'safe_to_spend') return [need, await Bridge.db('get_safe_to_spend', { member_id: member })];
+    if (kind === 'custom_runway') return [need, await Bridge.db('get_custom_runway', { member_id: member })];
     if (kind === 'anomalies') return [need, await Bridge.db('get_spending_anomalies', { member_id: member })];
     if (kind === 'categories') {
       const res = await Bridge.db('get_categories');

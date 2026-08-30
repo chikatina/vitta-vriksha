@@ -41,12 +41,12 @@ export function flowClause(db, flow) {
   const clauses = {
     // A transfer is the same money in a different pocket, so it is spending in no window.
     spend: excludeInvestments
-      ? "type != 'Income' AND type != 'Transfer' AND type != 'Investment' AND category != 'Transfer' AND category != 'Credit Card' AND category != 'Investment Outflow' AND COALESCE(is_investment_outflow, 0) = 0"
-      : "type != 'Income' AND type != 'Transfer' AND category != 'Transfer' AND category != 'Credit Card'",
-    income: "type = 'Income' AND category != 'Transfer' AND category != 'Credit Card'",
-    invest: "type != 'Transfer' AND category != 'Transfer' AND category != 'Credit Card' AND (type = 'Investment' OR COALESCE(is_investment_outflow, 0) = 1 OR category = 'Investment Outflow')",
-    transfer: "type = 'Transfer' OR category = 'Transfer' OR category = 'Credit Card'",
-    all: "type != 'Transfer' AND category != 'Transfer' AND category != 'Credit Card'",
+      ? "(type != 'Income' AND type != 'Transfer' AND type != 'Investment' AND category != 'Transfer' AND category != 'Credit Card' AND category != 'Investment Outflow' AND COALESCE(is_investment_outflow, 0) = 0)"
+      : "(type != 'Income' AND type != 'Transfer' AND category != 'Transfer' AND category != 'Credit Card')",
+    income: "(type = 'Income' AND category != 'Transfer' AND category != 'Credit Card')",
+    invest: "(type != 'Transfer' AND category != 'Transfer' AND category != 'Credit Card' AND (type = 'Investment' OR COALESCE(is_investment_outflow, 0) = 1 OR category = 'Investment Outflow'))",
+    transfer: "(type = 'Transfer' OR category = 'Transfer' OR category = 'Credit Card')",
+    all: "(type != 'Transfer' AND category != 'Transfer' AND category != 'Credit Card')",
   };
   return clauses[flow] || clauses.all;
 }
@@ -489,6 +489,53 @@ const METRICS = {
       };
     },
   },
+
+  transfer_total: {
+    label: 'Total transferred',
+    source: 'transactions',
+    build({ rows, blank, index }) {
+      const transferred = blank();
+      for (const row of rows) {
+        const slot = index.get(row.bucket);
+        if (slot === undefined || (row.type !== 'Transfer' && row.category !== 'Transfer' && row.category !== 'Credit Card')) continue;
+        transferred[slot] += number(row.total);
+      }
+      return { series: [{ key: 'transfer', label: 'Moved', role: 'transfer', values: transferred }] };
+    },
+  },
+
+  transfer_by_category: {
+    label: 'Transfers by category',
+    source: 'transactions',
+    stacked: true,
+    build({ rows, buckets, index, db }) {
+      return {
+        series: rankedSeries(rows.filter((row) => row.type === 'Transfer' || row.category === 'Transfer' || row.category === 'Credit Card'), {
+          keyOf: (row) => row.category || 'Transfer',
+          valueOf: (row) => number(row.total),
+          buckets,
+          index,
+          colors: categoryColors(db),
+        }),
+      };
+    },
+  },
+
+  transfer_by_merchant: {
+    label: 'Transfers by counterparty',
+    source: 'transactions',
+    stacked: true,
+    build({ rows, buckets, index }) {
+      return {
+        series: rankedSeries(rows.filter((row) => (row.type === 'Transfer' || row.category === 'Transfer' || row.category === 'Credit Card') && row.merchant), {
+          keyOf: (row) => row.merchant,
+          valueOf: (row) => number(row.total),
+          buckets,
+          index,
+        }),
+      };
+    },
+  },
 };
 
 function isSpend(row, excludeInvestments = true) {
@@ -688,7 +735,19 @@ const DIMENSIONS = {
   type: {
     label: 'Kind',
     keyOf: (row) => (row.is_investment_outflow ? 'Investment' : row.type || 'Expense'),
-    decorate: () => (key) => ({ label: key, icon: 'label' }),
+    decorate: () => (key) => {
+      const typeColors = {
+        Expense: '#B3261E',
+        Income: '#0F7A4A',
+        Investment: '#B45309',
+        Transfer: '#2563EB',
+      };
+      return {
+        label: key,
+        color: typeColors[key] || OTHER_COLOR,
+        icon: 'label',
+      };
+    },
   },
   weekday: {
     label: 'Day of the week',
@@ -785,6 +844,13 @@ export function getBreakdown(db, args) {
   }));
 
   ranked.sort(spec.order || ((a, b) => b.total - a.total));
+
+  // Ensure every row has a distinct theme palette color for chart rendering
+  ranked.forEach((entry, idx) => {
+    if (!entry.color) {
+      entry.color = PALETTE[idx % PALETTE.length];
+    }
+  });
 
   const limit = Number.parseInt(args.limit ?? 0, 10);
   return {
@@ -884,6 +950,7 @@ export function getPeriodSummary(db, args) {
     expense: totals.expense,
     invested: totals.invested,
     transferred,
+    transferred_count: transferRows.reduce((sum, row) => sum + (Number(row.times) || 1), 0),
     monthly_budget: monthlyBudget,
     debt_obligations: periodLoanPayments + periodCardPayments,
     loan_payments: periodLoanPayments,

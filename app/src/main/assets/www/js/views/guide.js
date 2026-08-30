@@ -217,10 +217,8 @@ const SECTIONS = [
       ['How do I know my bank data isn’t being uploaded?',
         'Check Settings → Apps → Vitta Vriksha → Permissions on your phone. Network/Internet '
         + 'permission is not requested at all. Android blocks apps without internet access from opening network connections.'],
-      ['Can I use the app completely offline?',
-        'Yes. Turn on Airplane Mode and test it yourself: every calculation, PDF parser, and chart works without an internet connection.'],
-      ['What happens to my CAS PDF statement when I upload it?',
-        'It is parsed inside your phone’s browser engine using WebAssembly. Your PAN and statement file stay in your phone’s local storage and are never sent to any server.'],
+      ['What happens to my CAS PDF statement when I import it?',
+        'It is parsed on-device using WebAssembly. Your PAN and statement file stay on your phone and are never sent anywhere.'],
       ['Where is my financial data stored?',
         'Everything is stored in a local SQLite database file on your device. It stays encrypted if you set a PIN in the app.'],
       ['What if I lose my backup password?',
@@ -249,15 +247,15 @@ export async function renderGuide(container, app) {
       <div class="row-between" style="align-items:center;margin-bottom:8px">
         <div class="row" style="gap:8px;align-items:center">
           <span style="color:var(--accent);display:flex">${icon('rocket_launch', 'icon-sm')}</span>
-          <span style="font-weight:700;font-size:14px">Interactive App Walkthrough</span>
+          <span style="font-weight:700;font-size:14px">App Walkthrough</span>
         </div>
-        <span class="badge badge-income">8 Live Steps</span>
+        <span class="badge badge-income">8 steps</span>
       </div>
       <p class="caption" style="margin-bottom:12px">
-        Tour all tabs and understand key features with our guided Driver.js-style spotlight.
+        Step through tabs and key features in an interactive walkthrough.
       </p>
       <button type="button" class="btn btn-filled btn-block" data-guide-tour style="gap:8px">
-        ${icon('rocket_launch', 'icon-sm')}Launch Interactive Tour
+        ${icon('rocket_launch', 'icon-sm')}Start Tour
       </button>
     </div>
 
@@ -282,14 +280,14 @@ export async function renderGuide(container, app) {
     <div class="card">
       <div class="card-title">Still have questions?</div>
       <p class="caption" style="margin-bottom:var(--gap-3)">
-        If you have questions that aren't answered here or run into any problems, our team is ready to assist you.
+        For questions or bug reports, email help@chikatistudio.com.
       </p>
       <div class="row" style="gap:8px;flex-wrap:wrap">
         <button type="button" class="btn btn-filled" data-open-email style="flex:1;min-width:120px">
-          ${icon('help')}Email Support
+          ${icon('help')}Email
         </button>
         <button type="button" class="btn btn-tonal" data-open-support-hub style="flex:1;min-width:120px">
-          ${icon('help')}Help Hub
+          ${icon('help')}Support
         </button>
       </div>
     </div>`;

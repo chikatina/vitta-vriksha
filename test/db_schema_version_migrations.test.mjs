@@ -26,7 +26,7 @@ describe('Database Schema Versioning & Sequential Migrations', () => {
       assert.equal(typeof APP_VERSION_NAME, 'string');
       assert.equal(APP_VERSION_NAME, '1.0.5');
       assert.equal(typeof APP_VERSION_CODE, 'number');
-      assert.equal(APP_VERSION_CODE, 9);
+      assert.equal(APP_VERSION_CODE, 11);
     });
 
     it('has sequentially ordered migrations up to APP_VERSION_CODE', () => {

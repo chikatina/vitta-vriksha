@@ -154,7 +154,7 @@ export function getMonthlyFinanceWrapped(db, args = {}) {
         id: 'habits',
         title: 'Habit Victories',
         headline: `${noSpend.no_spend_days_count} No-Spend Days`,
-        subtitle: `Best streak was ${noSpend.longest_streak} consecutive days with zero discretionary spend!`,
+        subtitle: `Best streak was ${noSpend.longest_streak} consecutive days with zero discretionary spend`,
         stat: noSpend.badge,
         stat_label: 'Achievement Badge',
         icon: 'star',

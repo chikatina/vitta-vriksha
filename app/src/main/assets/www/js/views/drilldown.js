@@ -296,8 +296,7 @@ export async function openPeriodSheet(app, {
         </div>
         <div data-categories>
           ${rows.length ? `
-            <div style="margin-bottom:12px">
-              ${donutChart(rows.slice(0, 7).map((row) => ({
+            ${donutChart(rows.slice(0, 7).map((row) => ({
     key: row.key,
     label: row.label,
     value: row.total,
@@ -307,16 +306,7 @@ export async function openPeriodSheet(app, {
     centerLabel: 'Total',
     centerValue: money(app, breakdown.total || 0),
     selectable: true,
-  })}
-            </div>
-            ${barList(rows.map((row) => ({
-    key: row.key,
-    label: row.label,
-    value: row.total,
-    color: row.color,
-    formatted: money(app, row.total),
-    sub: `${row.count} ${row.count === 1 ? 'entry' : 'entries'} · ${row.share.toFixed(0)}%`,
-  })), { selectable: true })}`
+  })}`
             : `<div class="card-flat"><div class="caption">No categorized entries in this period.</div></div>`}
         </div>
       </div>
@@ -636,9 +626,9 @@ export const GRANULARITY_OPTIONS = [
  */
 export async function openCashflowSheet(app) {
   const member = app.memberFilter;
-  const [safe, runway, checklist] = await Promise.all([
+  const [safe, initialCustom, checklist] = await Promise.all([
     Bridge.db('get_safe_to_spend', { member_id: member }),
-    Bridge.db('get_cashflow_runway', { member_id: member }),
+    Bridge.db('get_custom_runway', { member_id: member, burn_period_days: 90 }),
     Bridge.db('get_salary_checklist', { member_id: member }),
   ]);
 
@@ -651,12 +641,149 @@ export async function openCashflowSheet(app) {
   const isTight = safe.health_status === 'tight';
   const statusColor = isDeficit ? 'var(--expense)' : (isTight ? 'var(--warning, #F59E0B)' : 'var(--income)');
 
+  const formatRunwayLabel = (days, months, years) => {
+    if (days <= 0) return '0 Days';
+    if (years >= 2) return `${years} Years (${months} mos)`;
+    if (months >= 1) return `${months} Months (${days} days)`;
+    return `${days} Days`;
+  };
+
+  const state = {
+    burn_period_days: initialCustom.burn_period_days || 90,
+    custom_daily_burn: null,
+    include_liquid: initialCustom.custom_configuration?.include_liquid ?? true,
+    include_deposits: initialCustom.custom_configuration?.include_deposits ?? true,
+    include_mutual_funds: initialCustom.custom_configuration?.include_mutual_funds ?? true,
+    include_stocks: initialCustom.custom_configuration?.include_stocks ?? true,
+    include_gold: initialCustom.custom_configuration?.include_gold ?? true,
+    include_retirement: initialCustom.custom_configuration?.include_retirement ?? false,
+    include_other: initialCustom.custom_configuration?.include_other ?? false,
+    subtract_liabilities: initialCustom.custom_configuration?.subtract_liabilities ?? true,
+    member_id: member,
+  };
+
   const body = `
     <div style="display:flex;flex-direction:column;gap:14px">
+      <!-- Financial Runway Forecaster Hero Card -->
+      <div class="card-flat" style="background:var(--surface-container-high);border-radius:var(--radius);padding:14px;border-left:4px solid var(--accent)">
+        <div class="row-between" style="align-items:center;flex-wrap:wrap;gap:6px">
+          <span class="label" style="font-weight:700">Financial Runway</span>
+          <span class="badge badge-accent" data-runway-badge style="flex-shrink:0">
+            ${h(initialCustom.burn_basis_label)}
+          </span>
+        </div>
+        <div class="display" data-runway-duration style="font-size:28px;color:var(--accent);margin:6px 0">
+          ${h(formatRunwayLabel(initialCustom.runway_days, initialCustom.runway_months, initialCustom.runway_years))}
+        </div>
+        <div class="caption" data-runway-depletion style="margin-bottom:12px">
+          ${initialCustom.depletion_date ? `Sustains living expenses until <strong>${h(initialCustom.depletion_date)}</strong>` : 'Funds sustain living expenses indefinitely.'}
+        </div>
+
+        <!-- Quick Presets -->
+        <div style="margin-bottom:12px">
+          <span class="caption" style="display:block;font-size:11px;margin-bottom:6px;font-weight:600">Quick Asset Presets</span>
+          <div class="chip-scroller" style="gap:6px">
+            <button type="button" class="chip" data-preset="liquid" aria-selected="false">${icon('account_balance_wallet')}Liquid Only</button>
+            <button type="button" class="chip" data-preset="emergency" aria-selected="false">${icon('shield')}Emergency Pool</button>
+            <button type="button" class="chip" data-preset="investable" aria-selected="true">${icon('trending_up')}Investments</button>
+            <button type="button" class="chip" data-preset="net_worth" aria-selected="false">${icon('balance')}Net Worth</button>
+          </div>
+        </div>
+
+        <!-- Burn rate selection -->
+        <div style="margin-bottom:12px">
+          <span class="caption" style="display:block;font-size:11px;margin-bottom:6px;font-weight:600">Average Daily Expense (Burn Rate)</span>
+          <div class="chip-scroller" style="gap:6px">
+            <button type="button" class="chip" data-period="30" aria-selected="${state.burn_period_days === 30}">30D (${h(money(app, initialCustom.historical_burn?.days_30?.daily_average || 0))}/d)</button>
+            <button type="button" class="chip" data-period="90" aria-selected="${state.burn_period_days === 90}">90D Smoothed (${h(money(app, initialCustom.historical_burn?.days_90?.daily_average || 0))}/d)</button>
+            <button type="button" class="chip" data-period="180" aria-selected="${state.burn_period_days === 180}">180D (${h(money(app, initialCustom.historical_burn?.days_180?.daily_average || 0))}/d)</button>
+            <button type="button" class="chip" data-period="365" aria-selected="${state.burn_period_days === 365}">1 Year (${h(money(app, initialCustom.historical_burn?.days_365?.daily_average || 0))}/d)</button>
+          </div>
+          <div class="row" style="gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+            <input type="number" class="input input-sm" data-custom-burn style="max-width:130px" placeholder="Custom ₹/day" value="${state.custom_daily_burn || ''}">
+            <span class="caption" data-burn-summary style="font-size:12px">
+              Burn: ${h(money(app, initialCustom.monthly_living_burn))}/mo${initialCustom.monthly_loan_emis > 0 ? ` + ${h(money(app, initialCustom.monthly_loan_emis))}/mo EMIs` : ''} · Total: <strong>${h(money(app, initialCustom.monthly_burn))}/mo</strong> (${h(money(app, initialCustom.daily_burn))}/d)
+            </span>
+          </div>
+        </div>
+
+        <!-- Granular Asset Toggles -->
+        <div style="background:var(--surface-container-low);border-radius:var(--radius-sm);padding:10px">
+          <span class="caption" style="display:block;font-size:11px;margin-bottom:8px;font-weight:600">Included Assets & Liabilities</span>
+          <div class="grid-2" style="gap:8px;font-size:12px">
+            <label class="row" style="gap:6px;align-items:center">
+              <input type="checkbox" data-toggle="include_liquid" ${state.include_liquid ? 'checked' : ''}>
+              <span>Bank & Cash (${h(money(app, initialCustom.asset_breakdown.liquid))})</span>
+            </label>
+            <label class="row" style="gap:6px;align-items:center">
+              <input type="checkbox" data-toggle="include_deposits" ${state.include_deposits ? 'checked' : ''}>
+              <span>Fixed Deposits (${h(money(app, initialCustom.asset_breakdown.deposits))})</span>
+            </label>
+            <label class="row" style="gap:6px;align-items:center">
+              <input type="checkbox" data-toggle="include_mutual_funds" ${state.include_mutual_funds ? 'checked' : ''}>
+              <span>Mutual Funds (${h(money(app, initialCustom.asset_breakdown.mutual_funds))})</span>
+            </label>
+            <label class="row" style="gap:6px;align-items:center">
+              <input type="checkbox" data-toggle="include_stocks" ${state.include_stocks ? 'checked' : ''}>
+              <span>Stocks & Demat (${h(money(app, initialCustom.asset_breakdown.stocks))})</span>
+            </label>
+            <label class="row" style="gap:6px;align-items:center">
+              <input type="checkbox" data-toggle="include_gold" ${state.include_gold ? 'checked' : ''}>
+              <span>Gold & SGB (${h(money(app, initialCustom.asset_breakdown.gold))})</span>
+            </label>
+            <label class="row" style="gap:6px;align-items:center">
+              <input type="checkbox" data-toggle="include_retirement" ${state.include_retirement ? 'checked' : ''}>
+              <span>NPS & PF (${h(money(app, initialCustom.asset_breakdown.retirement))})</span>
+            </label>
+          </div>
+          <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--outline-variant)">
+            <label class="row" style="gap:6px;align-items:center;font-size:12px;color:var(--expense)">
+              <input type="checkbox" data-toggle="subtract_liabilities" ${state.subtract_liabilities ? 'checked' : ''}>
+              <span>Deduct Card Dues (${h(money(app, initialCustom.liabilities_breakdown.credit_cards))}) & Service Monthly EMIs (+${h(money(app, initialCustom.liabilities_breakdown.monthly_loan_emis))}/mo)</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Tier Comparison Cards -->
+        <div style="margin-top:12px">
+          <span class="caption" style="display:block;font-size:11px;margin-bottom:6px;font-weight:600">Runway by Asset Tier</span>
+          <div class="grid-2" style="gap:8px">
+            <div class="card" style="padding:8px;background:var(--surface-container-low)">
+              <span class="caption" style="font-size:11px">Liquid Cash</span>
+              <div style="font-weight:700;font-size:13.5px;color:var(--on-surface)" data-tier-liquid>
+                ${h(formatRunwayLabel(initialCustom.tiers.liquid_only.runway_days, initialCustom.tiers.liquid_only.runway_months, initialCustom.tiers.liquid_only.runway_years))}
+              </div>
+              <span class="caption" style="font-size:10.5px">${h(money(app, initialCustom.tiers.liquid_only.net_amount))}</span>
+            </div>
+            <div class="card" style="padding:8px;background:var(--surface-container-low)">
+              <span class="caption" style="font-size:11px">Emergency Pool (+FDs)</span>
+              <div style="font-weight:700;font-size:13.5px;color:var(--on-surface)" data-tier-emergency>
+                ${h(formatRunwayLabel(initialCustom.tiers.emergency_pool.runway_days, initialCustom.tiers.emergency_pool.runway_months, initialCustom.tiers.emergency_pool.runway_years))}
+              </div>
+              <span class="caption" style="font-size:10.5px">${h(money(app, initialCustom.tiers.emergency_pool.net_amount))}</span>
+            </div>
+            <div class="card" style="padding:8px;background:var(--surface-container-low)">
+              <span class="caption" style="font-size:11px">Investable Assets</span>
+              <div style="font-weight:700;font-size:13.5px;color:var(--on-surface)" data-tier-investable>
+                ${h(formatRunwayLabel(initialCustom.tiers.investable.runway_days, initialCustom.tiers.investable.runway_months, initialCustom.tiers.investable.runway_years))}
+              </div>
+              <span class="caption" style="font-size:10.5px">${h(money(app, initialCustom.tiers.investable.net_amount))}</span>
+            </div>
+            <div class="card" style="padding:8px;background:var(--surface-container-low)">
+              <span class="caption" style="font-size:11px">Total Net Worth</span>
+              <div style="font-weight:700;font-size:13.5px;color:var(--on-surface)" data-tier-networth>
+                ${h(formatRunwayLabel(initialCustom.tiers.net_worth.runway_days, initialCustom.tiers.net_worth.runway_months, initialCustom.tiers.net_worth.runway_years))}
+              </div>
+              <span class="caption" style="font-size:10.5px">${h(money(app, initialCustom.tiers.net_worth.net_amount))}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Safe to spend card -->
       <div class="card-flat" style="background:var(--surface-container-high);border-radius:var(--radius);padding:14px;border-left:4px solid ${statusColor}">
         <div class="row-between" style="align-items:center;flex-wrap:wrap;gap:6px">
-          <span class="label" style="font-weight:700">Safe-to-Spend</span>
+          <span class="label" style="font-weight:700">Safe-to-Spend Allowance</span>
           <span class="badge" style="flex-shrink:0;background:${isDeficit ? 'var(--expense-container)' : 'var(--surface-container-highest)'};color:${statusColor}">
             ${isDeficit ? 'Deficit' : (isTight ? 'Tight Budget' : 'Safe to Spend')}
           </span>
@@ -708,33 +835,6 @@ export async function openCashflowSheet(app) {
         </div>
       </div>
 
-      <!-- 30-Day Cashflow Runway -->
-      <div class="card">
-        <div class="row-between" style="align-items:center;flex-wrap:wrap;gap:6px">
-          <span class="card-title" style="margin-bottom:0">30-Day Runway Trajectory</span>
-          <span class="badge ${runway.is_runway_safe ? 'badge-income' : 'badge-expense'}" style="flex-shrink:0">
-            ${runway.is_runway_safe ? 'Runway Safe' : 'Low Balance Risk'}
-          </span>
-        </div>
-        <p class="caption" style="margin:6px 0 10px">
-          Estimated burn: ${h(money(app, runway.estimated_daily_burn))}/day · Min projected balance: <strong>${h(money(app, runway.min_projected_balance))}</strong>
-        </p>
-        <div class="list" style="max-height:220px;overflow-y:auto;background:var(--surface-container-low);border-radius:var(--radius-sm);padding:4px 8px">
-          ${runway.timeline.slice(0, 15).map((t) => `
-            <div class="list-row" style="padding:6px 4px;font-size:12.5px">
-              <span style="font-weight:600;min-width:60px">${t.date.slice(5)}</span>
-              <span class="list-row-main">
-                <span class="list-row-sub">
-                  ${t.debits.map((d) => d.title).concat(t.credits.map((c) => c.title)).join(', ') || 'Normal daily spend'}
-                </span>
-              </span>
-              <span style="font-weight:700;color:${t.is_low ? 'var(--expense)' : 'var(--on-surface)'}">
-                ${h(money(app, t.projected_balance))}
-              </span>
-            </div>`).join('')}
-        </div>
-      </div>
-
       <!-- Salary day checklist -->
       <div class="card">
         <div class="card-title">Salary Day Checklist</div>
@@ -754,6 +854,157 @@ export async function openCashflowSheet(app) {
       </div>
     </div>`;
 
-  await sheet('Cashflow Cockpit', body, { autofocus: false });
+  await sheet('Cashflow Cockpit', body, {
+    autofocus: false,
+    onMount(node) {
+      const durationEl = node.querySelector('[data-runway-duration]');
+      const depletionEl = node.querySelector('[data-runway-depletion]');
+      const badgeEl = node.querySelector('[data-runway-badge]');
+      const burnSummaryEl = node.querySelector('[data-burn-summary]');
+      const customBurnInput = node.querySelector('[data-custom-burn]');
+
+      const tierLiquidEl = node.querySelector('[data-tier-liquid]');
+      const tierEmergencyEl = node.querySelector('[data-tier-emergency]');
+      const tierInvestableEl = node.querySelector('[data-tier-investable]');
+      const tierNetWorthEl = node.querySelector('[data-tier-networth]');
+
+      const refresh = async () => {
+        const res = await Bridge.db('get_custom_runway', state);
+        if (!res || res.status !== 'success') return;
+
+        if (durationEl) {
+          durationEl.textContent = formatRunwayLabel(res.runway_days, res.runway_months, res.runway_years);
+        }
+        if (depletionEl) {
+          depletionEl.innerHTML = res.depletion_date
+            ? `Sustains living expenses until <strong>${h(res.depletion_date)}</strong>`
+            : 'Funds sustain living expenses indefinitely.';
+        }
+        if (badgeEl) {
+          badgeEl.textContent = res.burn_basis_label;
+        }
+        if (burnSummaryEl) {
+          const emiText = res.monthly_loan_emis > 0 && state.subtract_liabilities ? ` + ${money(app, res.monthly_loan_emis)}/mo EMIs` : '';
+          burnSummaryEl.innerHTML = `Burn: ${money(app, res.monthly_living_burn)}/mo${emiText} · Total: <strong>${money(app, res.monthly_burn)}/mo</strong> (${money(app, res.daily_burn)}/d)`;
+        }
+
+        if (tierLiquidEl && res.tiers?.liquid_only) {
+          tierLiquidEl.textContent = formatRunwayLabel(res.tiers.liquid_only.runway_days, res.tiers.liquid_only.runway_months, res.tiers.liquid_only.runway_years);
+        }
+        if (tierEmergencyEl && res.tiers?.emergency_pool) {
+          tierEmergencyEl.textContent = formatRunwayLabel(res.tiers.emergency_pool.runway_days, res.tiers.emergency_pool.runway_months, res.tiers.emergency_pool.runway_years);
+        }
+        if (tierInvestableEl && res.tiers?.investable) {
+          tierInvestableEl.textContent = formatRunwayLabel(res.tiers.investable.runway_days, res.tiers.investable.runway_months, res.tiers.investable.runway_years);
+        }
+        if (tierNetWorthEl && res.tiers?.net_worth) {
+          tierNetWorthEl.textContent = formatRunwayLabel(res.tiers.net_worth.runway_days, res.tiers.net_worth.runway_months, res.tiers.net_worth.runway_years);
+        }
+      };
+
+      // Presets
+      node.querySelectorAll('[data-preset]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const preset = btn.dataset.preset;
+          if (preset === 'liquid') {
+            state.include_liquid = true;
+            state.include_deposits = false;
+            state.include_mutual_funds = false;
+            state.include_stocks = false;
+            state.include_gold = false;
+            state.include_retirement = false;
+            state.include_other = false;
+          } else if (preset === 'emergency') {
+            state.include_liquid = true;
+            state.include_deposits = true;
+            state.include_mutual_funds = false;
+            state.include_stocks = false;
+            state.include_gold = false;
+            state.include_retirement = false;
+            state.include_other = false;
+          } else if (preset === 'investable') {
+            state.include_liquid = true;
+            state.include_deposits = true;
+            state.include_mutual_funds = true;
+            state.include_stocks = true;
+            state.include_gold = true;
+            state.include_retirement = false;
+            state.include_other = false;
+          } else if (preset === 'net_worth') {
+            state.include_liquid = true;
+            state.include_deposits = true;
+            state.include_mutual_funds = true;
+            state.include_stocks = true;
+            state.include_gold = true;
+            state.include_retirement = true;
+            state.include_other = true;
+          }
+
+          node.querySelectorAll('[data-preset]').forEach((b) => {
+            b.setAttribute('aria-selected', String(b.dataset.preset === preset));
+          });
+
+          // Sync checkbox elements
+          node.querySelectorAll('[data-toggle]').forEach((chk) => {
+            const field = chk.dataset.toggle;
+            if (field in state) {
+              chk.checked = Boolean(state[field]);
+            }
+          });
+
+          refresh();
+        });
+      });
+
+      // Period switches
+      node.querySelectorAll('[data-period]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const period = Number(btn.dataset.period);
+          state.burn_period_days = period;
+          state.custom_daily_burn = null;
+          if (customBurnInput) customBurnInput.value = '';
+
+          node.querySelectorAll('[data-period]').forEach((b) => {
+            b.setAttribute('aria-selected', String(Number(b.dataset.period) === period));
+          });
+
+          refresh();
+        });
+      });
+
+      // Custom burn input
+      if (customBurnInput) {
+        customBurnInput.addEventListener('input', () => {
+          const val = Number(customBurnInput.value);
+          if (val > 0) {
+            state.custom_daily_burn = val;
+            node.querySelectorAll('[data-period]').forEach((b) => {
+              b.setAttribute('aria-selected', 'false');
+            });
+          } else {
+            state.custom_daily_burn = null;
+          }
+          refresh();
+        });
+      }
+
+      // Checkboxes
+      node.querySelectorAll('[data-toggle]').forEach((chk) => {
+        chk.addEventListener('change', () => {
+          const field = chk.dataset.toggle;
+          if (field in state) {
+            state[field] = chk.checked;
+
+            // Clear preset selection if custom checkboxes diverge
+            node.querySelectorAll('[data-preset]').forEach((b) => {
+              b.setAttribute('aria-selected', 'false');
+            });
+
+            refresh();
+          }
+        });
+      });
+    },
+  });
 }
 

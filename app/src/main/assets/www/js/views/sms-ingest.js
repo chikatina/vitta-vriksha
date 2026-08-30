@@ -15,14 +15,14 @@ export async function renderSmsIngest(container, app) {
         ${icon('sms')}
       </div>
       <h1 class="headline" style="font-size:22px;margin-bottom:var(--gap-2)">
-        Discovering Your Transactions
+        Scan Bank SMS
       </h1>
       <p class="caption" style="max-width:36ch;margin:0 auto var(--gap-5)">
-        Scan bank alerts from your SMS inbox to automatically populate your ledger and identify recurring payments.
+        Scan bank alerts on this device to populate your ledger and detect recurring payments.
       </p>
 
       <div class="field" style="text-align:left;margin-bottom:var(--gap-5)" data-options-section>
-        <label class="field-label">How far back should we scan?</label>
+        <label class="field-label">Scan range</label>
         <div class="list" style="margin-top:var(--gap-2)">
           <label class="list-row" style="cursor:pointer">
             <span class="avatar avatar-sm" style="background:var(--accent-container);color:var(--on-accent-container)">
@@ -30,7 +30,7 @@ export async function renderSmsIngest(container, app) {
             </span>
             <span class="list-row-main">
               <span class="list-row-title">Last 90 days</span>
-              <span class="caption">Recommended &bull; Fast initial scan</span>
+              <span class="caption">Fast scan · 90 days</span>
             </span>
             <input type="radio" name="scanRange" value="90" checked>
           </label>
@@ -66,7 +66,7 @@ export async function renderSmsIngest(container, app) {
           <div class="progress-bar" data-progress-bar style="width:5%"></div>
         </div>
         <p class="caption" data-progress-desc style="font-size:12px">
-          Matching bank alerts against merchant dictionaries and classification rules on-device...
+          Matching bank alerts against classification rules on-device...
         </p>
       </div>
 
@@ -75,7 +75,7 @@ export async function renderSmsIngest(container, app) {
           <span class="avatar avatar-sm" style="background:var(--income-container);color:var(--income)">
             ${icon('check', 'icon-sm')}
           </span>
-          <span class="list-row-title" style="font-size:15px">Scan Completed</span>
+          <span class="list-row-title" style="font-size:15px">Scan Complete</span>
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap" data-stat-chips></div>
       </div>
@@ -85,7 +85,7 @@ export async function renderSmsIngest(container, app) {
           ${icon('autorenew')}Start Scan
         </button>
         <button class="btn btn-outlined btn-block" data-skip style="margin-top:8px">
-          ${isInitial ? 'Skip to Dashboard' : 'Cancel'}
+          ${isInitial ? 'Skip' : 'Cancel'}
         </button>
       </div>
     </div>`;

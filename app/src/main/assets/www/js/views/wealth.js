@@ -67,7 +67,7 @@ export async function renderWealth(container, app) {
 
       <div class="row-between" style="align-items:baseline;margin-bottom:10px">
         <div class="display" style="font-size:24px">${h(money(netWorth))}</div>
-        <span class="caption">${milestoneData.distance_to_next > 0 ? `${h(money(milestoneData.distance_to_next))} to ${nextTarget.label}` : 'Top tier achieved!'}</span>
+        <span class="caption">${milestoneData.distance_to_next > 0 ? `${h(money(milestoneData.distance_to_next))} to ${nextTarget.label}` : 'Top milestone reached'}</span>
       </div>
 
       <div class="progress" style="height:8px;margin-bottom:14px">

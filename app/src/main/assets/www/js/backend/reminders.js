@@ -89,10 +89,16 @@ export async function checkReminders() {
   // An instalment about to be debited.
   for (const sip of db.all('SELECT * FROM sips WHERE is_active = 1')) {
     const day = Number(sip.debit_day);
-    const daysAway = day - today.getDate();
+    if (!day) continue;
+
+    let daysAway = day - today.getDate();
+    if (daysAway <= 0) {
+      const daysInThisMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+      daysAway = (daysInThisMonth - today.getDate()) + day;
+    }
     if (daysAway <= 0 || daysAway > SIP_NOTICE_DAYS) continue;
 
-    const due = new Date(today.getFullYear(), today.getMonth(), day);
+    const due = new Date(today.getFullYear(), today.getMonth(), today.getDate() + daysAway);
     reminders.push({
       id: `sip-${sip.id}`,
       type: 'SIP_DUE',
