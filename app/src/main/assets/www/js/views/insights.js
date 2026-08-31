@@ -24,7 +24,7 @@ import {
   describePeriod, formatRelativeDate,
 } from '../formatters.js';
 import {
-  barSeriesChart, lineSeriesChart, barList, donutChart, heatCalendar, bindChartSelect,
+  barSeriesChart, lineSeriesChart, donutChart, heatCalendar, bindChartSelect,
 } from '../charts.js';
 import { memberChips, bindMemberChips } from './shared.js';
 import {
@@ -68,8 +68,9 @@ const CHARTS = {
     { metric: 'invest_cumulative', label: 'Net into funds', type: 'line' },
   ],
   transfer: [
-    { metric: 'spend_by_category', label: 'Category', type: 'bars' },
-    { metric: 'spend_by_merchant', label: 'Counterparty', type: 'bars' },
+    { metric: 'transfer_total', label: 'Total', type: 'bars' },
+    { metric: 'transfer_by_category', label: 'Category', type: 'bars' },
+    { metric: 'transfer_by_merchant', label: 'Counterparty', type: 'bars' },
   ],
 };
 
@@ -102,6 +103,7 @@ export const insightsView = {
   metric: 'spend_total',
   dimension: 'category',
   selectedBucket: null,
+  _restoreIndex: null,
 };
 
 /**
@@ -205,6 +207,7 @@ export async function renderInsights(container, app) {
   container.querySelectorAll('[data-flow]').forEach((button) => {
     button.addEventListener('click', () => {
       insightsView.flow = button.dataset.flow;
+      insightsView._restoreIndex = null;
       focusInsights({ metric: chartsFor(app)[0].metric });
       select('flow', button.dataset.flow, paint);
     });
@@ -216,6 +219,7 @@ export async function renderInsights(container, app) {
       // The period you were on has no meaning at a different granularity, and neither does
       // the range length, so both go back to what suits the new one.
       insightsView.offset = 0;
+      insightsView._restoreIndex = null;
       [, insightsView.periods] = RANGES[insightsView.granularity];
       select('grain', button.dataset.grain, () => {
         paintRange();
@@ -281,7 +285,12 @@ async function paintBody(host, app) {
     ? buckets.indexOf(insightsView.selectedBucket)
     : -1;
   if (selectedIndex === -1) {
-    selectedIndex = buckets.length - 1;
+    if (insightsView._restoreIndex != null) {
+      selectedIndex = Math.min(insightsView._restoreIndex, buckets.length - 1);
+      insightsView._restoreIndex = null;
+    } else {
+      selectedIndex = buckets.length - 1;
+    }
   }
   const selected = buckets[selectedIndex];
   insightsView.selectedBucket = selected;
@@ -425,8 +434,8 @@ async function paintBody(host, app) {
 
       <div class="row" style="gap:10px;margin-bottom:var(--gap-3);flex-wrap:wrap">
         ${changeChip(headline.change, headline.worse)}
-        <span class="caption">${summary.count} ${summary.count === 1 ? 'entry' : 'entries'}</span>
-        <span class="caption">${h(money(app, summary.average_daily))} / day</span>
+        <span class="caption">${insightsView.flow === 'transfer' ? (summary.transferred_count ?? summary.count) : summary.count} ${(insightsView.flow === 'transfer' ? (summary.transferred_count ?? summary.count) : summary.count) === 1 ? 'entry' : 'entries'}</span>
+        <span class="caption">${h(money(app, summary.days > 0 ? Number(headline.value || 0) / summary.days : summary.average_daily))} / day</span>
       </div>
 
       ${effectiveIncome > 0 ? `
@@ -598,8 +607,7 @@ async function paintBody(host, app) {
 
       <div data-breakdown style="margin-top:14px">
         ${rows.length ? `
-          <div style="margin-bottom:16px">
-            ${donutChart(rows.slice(0, 7).map((row) => ({
+          ${donutChart(rows.slice(0, 7).map((row) => ({
     key: row.key,
     label: row.label,
     value: row.total,
@@ -609,16 +617,7 @@ async function paintBody(host, app) {
     centerLabel: 'Total',
     centerValue: money(app, breakdown.total || 0),
     selectable: true,
-  })}
-          </div>
-          ${barList(rows.slice(0, 12).map((row) => ({
-    key: row.key,
-    label: row.label,
-    value: row.total,
-    color: row.color,
-    formatted: money(app, row.total),
-    sub: `${row.count} ${row.count === 1 ? 'entry' : 'entries'} · ${row.share.toFixed(0)}%`,
-  })), { selectable: true })}`
+  })}`
     : `<div class="caption" style="text-align:center;padding:20px 0">
          Nothing to break up in this period.
        </div>`}
@@ -638,6 +637,7 @@ async function paintBody(host, app) {
       insightsView.selectedBucket = buckets[selectedIndex - 1];
     } else {
       insightsView.offset += 1;
+      insightsView._restoreIndex = 0;
       insightsView.selectedBucket = null;
     }
     repaint();
@@ -647,6 +647,7 @@ async function paintBody(host, app) {
       insightsView.selectedBucket = buckets[selectedIndex + 1];
     } else if (insightsView.offset > 0) {
       insightsView.offset -= 1;
+      insightsView._restoreIndex = buckets.length - 1;
       insightsView.selectedBucket = null;
     }
     repaint();

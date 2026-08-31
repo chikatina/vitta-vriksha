@@ -36,7 +36,8 @@ import {
   steppedAmount, trackRecurring,
 } from './recurring.js';
 import {
-  calculateSafeToSpend, getCashflowRunway, getSalaryChecklist, getWeekendVsWeekdayAnalysis,
+  calculateDailyExpenseAverage, calculateSafeToSpend, getCashflowRunway, getCustomRunway,
+  getSalaryChecklist, getWeekendVsWeekdayAnalysis,
 } from './cashflow.js';
 import {
   calculateDirectVsRegularDrag, calculateFdLadder, calculatePortfolioRebalance,
@@ -281,7 +282,7 @@ const DEFAULT_SMS_RULES = [
 
 // Application and Database Schema Version tracking
 export const APP_VERSION_NAME = '1.0.5';
-export const APP_VERSION_CODE = 9;
+export const APP_VERSION_CODE = 11;
 
 const DEFAULT_SETTINGS = {
   locale: 'en-IN',
@@ -1074,6 +1075,22 @@ export const MIGRATIONS = [
       seedDefaultRules(db);
     },
   },
+  {
+    versionCode: 10,
+    versionName: '1.0.5',
+    description: 'Bug fixes',
+    up(db) {
+      seedDefaultRules(db);
+    },
+  },
+  {
+    versionCode: 11,
+    versionName: '1.0.5',
+    description: 'Runway fixes',
+    up(db) {
+      seedDefaultRules(db);
+    },
+  }
 ];
 
 export function getDatabaseVersion(db) {
@@ -2786,8 +2803,15 @@ function getTransactions(db, args) {
     filters.push('COALESCE(t.is_ignored, 0) = 0 AND COALESCE(t.is_duplicate, 0) = 0');
   }
 
+  // Cursor-based pagination: fetch the next page using the last seen (date, id).
+  // The query sorts by date DESC, id DESC, so the cursor is a direct index seek.
+  if (args.cursor_date && args.cursor_id) {
+    filters.push('(t.date < ? OR (t.date = ? AND t.id < ?))');
+    params.push(String(args.cursor_date).slice(0, 10), String(args.cursor_date).slice(0, 10), Number(args.cursor_id));
+  }
+
   const where = filters.length ? ` WHERE ${filters.join(' AND ')}` : '';
-  const limit = Math.max(1, Math.min(2000, Number.parseInt(args.limit ?? 250, 10) || 250));
+  const limit = Math.max(1, Math.min(2000, Number.parseInt(args.limit ?? 2000, 10) || 2000));
   const transactions = db.all(
     `SELECT t.*,
       a.name AS account_name,
@@ -5124,6 +5148,8 @@ const ACTIONS = {
   get_spending_anomalies: getSpendingAnomalies,
   get_safe_to_spend: calculateSafeToSpend,
   get_cashflow_runway: getCashflowRunway,
+  get_custom_runway: getCustomRunway,
+  get_daily_expense_average: calculateDailyExpenseAverage,
   get_salary_checklist: getSalaryChecklist,
   get_weekend_spend_analysis: getWeekendVsWeekdayAnalysis,
   get_tax_harvesting: calculateTaxHarvesting,

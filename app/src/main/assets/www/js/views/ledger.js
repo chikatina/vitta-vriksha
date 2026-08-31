@@ -52,8 +52,17 @@ function getWeekMonday(isoStr) {
 }
 
 export async function renderLedger(container, app) {
+  const today = todayISO();
+  const currentMonthKey = today.slice(0, 7);
+  const currentWeekMonday = getWeekMonday(today);
+
+  let scope = app.ledgerScope || 'month';
+  let activeMonth = app.ledgerMonthValue || currentMonthKey;
+  let activeWeek = app.ledgerWeekValue || currentWeekMonday;
+  let activeDay = app.ledgerDayValue || today;
+
   const [txRes, categoryRes, memberRes] = await Promise.all([
-    Bridge.db('get_transactions', { member_id: app.memberFilter, include_ignored: true }),
+    Bridge.db('get_transactions', { member_id: app.memberFilter, include_ignored: true, limit: 2000 }),
     Bridge.db('get_categories'),
     Bridge.db('get_family_members'),
   ]);
@@ -63,20 +72,55 @@ export async function renderLedger(container, app) {
   const categories = categoryIndex(rawCategories);
   const members = memberRes.members || [];
 
-  const today = todayISO();
-  const currentMonthKey = today.slice(0, 7);
-  const currentWeekMonday = getWeekMonday(today);
-
-  let scope = app.ledgerScope || 'month';
-  let activeMonth = app.ledgerMonthValue || currentMonthKey;
-  let activeWeek = app.ledgerWeekValue || currentWeekMonday;
-  let activeDay = app.ledgerDayValue || today;
   let filter = app.ledgerFilter || 'all';
   let query = (app.ledgerSearch || '').toLowerCase();
 
   // Multi-select state
   let selectMode = false;
   const selectedIds = new Set();
+
+  // Cursor-based pagination state (used in "All" scope)
+  let hasMore = txRes.capped || false;
+  let isLoadingMore = false;
+
+  function computeDupKeyCounts(list) {
+    const counts = new Map();
+    for (const tx of list) {
+      if (!tx.is_ignored && !tx.is_duplicate && tx.amount > 0 && tx.date) {
+        const key = `${tx.date}:${tx.amount}`;
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+    }
+    return counts;
+  }
+
+  let dupKeyCounts = computeDupKeyCounts(all);
+
+  async function loadMore() {
+    if (isLoadingMore || !hasMore) return;
+    isLoadingMore = true;
+    paint();
+
+    const lastTx = all[all.length - 1];
+    const res = await Bridge.db('get_transactions', {
+      member_id: app.memberFilter,
+      include_ignored: true,
+      limit: 2000,
+      cursor_date: lastTx.date,
+      cursor_id: lastTx.id,
+    });
+
+    if (res.status === 'success' && res.transactions.length) {
+      all.push(...res.transactions);
+      hasMore = res.capped;
+      dupKeyCounts = computeDupKeyCounts(all);
+    } else {
+      hasMore = false;
+    }
+
+    isLoadingMore = false;
+    paint();
+  }
 
   // Calculate median expense amount for anomaly detection
   const expenseAmounts = all
@@ -219,14 +263,6 @@ export async function renderLedger(container, app) {
       if (nextBtn) nextBtn.disabled = activeMonth >= currentMonthKey;
     }
   };
-
-  const dupKeyCounts = new Map();
-  for (const tx of all) {
-    if (!tx.is_ignored && !tx.is_duplicate && tx.amount > 0 && tx.date) {
-      const key = `${tx.date}:${tx.amount}`;
-      dupKeyCounts.set(key, (dupKeyCounts.get(key) || 0) + 1);
-    }
-  }
 
   const matches = () => all.filter((tx) => {
     if (scope === 'day') {
@@ -483,7 +519,7 @@ export async function renderLedger(container, app) {
 
       const emptyClear = results.querySelector('[data-empty-clear]');
       if (emptyClear) {
-        emptyClear.addEventListener('click', () => {
+        emptyClear.addEventListener('click', async () => {
           query = '';
           app.ledgerSearch = '';
           searchInput.value = '';
@@ -498,6 +534,13 @@ export async function renderLedger(container, app) {
           container.querySelectorAll('[data-filter]').forEach((c) => {
             c.setAttribute('aria-selected', String(c.dataset.filter === 'all'));
           });
+          const res = await Bridge.db('get_transactions', {
+            member_id: app.memberFilter, include_ignored: true, limit: 2000,
+          });
+          all.length = 0;
+          if (res.transactions) all.push(...res.transactions);
+          hasMore = res.capped || false;
+          dupKeyCounts = computeDupKeyCounts(all);
           updatePeriodNavUI();
           paint();
         });
@@ -650,6 +693,28 @@ export async function renderLedger(container, app) {
 
     results.innerHTML = '';
     renderDayBatch();
+
+    // Cursor-based "Load more" for All scope
+    if (scope === 'all' && !query && filter === 'all') {
+      if (isLoadingMore) {
+        results.insertAdjacentHTML('beforeend', `
+          <div style="padding:14px 0;text-align:center">
+            <button type="button" class="btn btn-tonal btn-sm" disabled style="margin:0 auto">
+              ${icon('autorenew', 'icon-sm')}Loading more...
+            </button>
+          </div>`);
+      } else if (hasMore) {
+        const loadMoreDiv = document.createElement('div');
+        loadMoreDiv.style.cssText = 'padding:14px 0;text-align:center';
+        loadMoreDiv.innerHTML = `
+          <button type="button" class="btn btn-tonal btn-sm" data-load-more-tx style="margin:0 auto">
+            ${icon('expand_more', 'icon-sm')}Load more transactions
+          </button>`;
+        results.appendChild(loadMoreDiv);
+        loadMoreDiv.querySelector('[data-load-more-tx]').addEventListener('click', loadMore);
+      }
+    }
+
     paintBatchBar(rows);
   };
 
@@ -662,22 +727,63 @@ export async function renderLedger(container, app) {
     paint();
   });
 
+  // Period navigation
+  async function refetchForScope() {
+    if (scope === 'month') {
+      const [year, month] = activeMonth.split('-').map(Number);
+      const nm = month === 12 ? 1 : month + 1;
+      const ny = month === 12 ? year + 1 : year;
+      const p2 = (v) => String(v).padStart(2, '0');
+      const res = await Bridge.db('get_transactions', {
+        member_id: app.memberFilter, include_ignored: true,
+        from: `${activeMonth}-01`, to: `${ny}-${p2(nm)}-01`,
+      });
+      all.length = 0;
+      if (res.transactions) all.push(...res.transactions);
+      hasMore = false;
+    } else if (scope === 'week') {
+      const res = await Bridge.db('get_transactions', {
+        member_id: app.memberFilter, include_ignored: true,
+        from: activeWeek, to: addDays(activeWeek, 7),
+      });
+      all.length = 0;
+      if (res.transactions) all.push(...res.transactions);
+      hasMore = false;
+    } else if (scope === 'day') {
+      const res = await Bridge.db('get_transactions', {
+        member_id: app.memberFilter, include_ignored: true,
+        from: activeDay, to: addDays(activeDay, 1),
+      });
+      all.length = 0;
+      if (res.transactions) all.push(...res.transactions);
+      hasMore = false;
+    } else if (scope === 'all') {
+      const res = await Bridge.db('get_transactions', {
+        member_id: app.memberFilter, include_ignored: true, limit: 2000,
+      });
+      all.length = 0;
+      if (res.transactions) all.push(...res.transactions);
+      hasMore = res.capped || false;
+    }
+    dupKeyCounts = computeDupKeyCounts(all);
+  }
+
   // Scope switcher (All / Month / Week / Day)
   container.querySelectorAll('[data-scope]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       scope = btn.dataset.scope;
       app.ledgerScope = scope;
       container.querySelectorAll('[data-scope]').forEach((b) => {
         b.setAttribute('aria-selected', String(b.dataset.scope === scope));
       });
+      await refetchForScope();
       updatePeriodNavUI();
       paint();
     });
   });
 
-  // Period navigation
   if (prevBtn) {
-    prevBtn.addEventListener('click', () => {
+    prevBtn.addEventListener('click', async () => {
       if (scope === 'day') {
         activeDay = addDays(activeDay, -1);
         app.ledgerDayValue = activeDay;
@@ -688,13 +794,14 @@ export async function renderLedger(container, app) {
         activeMonth = addMonths(activeMonth, -1);
         app.ledgerMonthValue = activeMonth;
       }
+      await refetchForScope();
       updatePeriodNavUI();
       paint();
     });
   }
 
   if (nextBtn) {
-    nextBtn.addEventListener('click', () => {
+    nextBtn.addEventListener('click', async () => {
       if (scope === 'day') {
         activeDay = addDays(activeDay, 1);
         app.ledgerDayValue = activeDay;
@@ -705,6 +812,7 @@ export async function renderLedger(container, app) {
         activeMonth = addMonths(activeMonth, 1);
         app.ledgerMonthValue = activeMonth;
       }
+      await refetchForScope();
       updatePeriodNavUI();
       paint();
     });
@@ -733,6 +841,7 @@ export async function renderLedger(container, app) {
         if (picked) {
           activeDay = picked;
           app.ledgerDayValue = picked;
+          await refetchForScope();
           updatePeriodNavUI();
           paint();
         }
@@ -745,6 +854,7 @@ export async function renderLedger(container, app) {
         if (picked) {
           activeWeek = picked;
           app.ledgerWeekValue = picked;
+          await refetchForScope();
           updatePeriodNavUI();
           paint();
         }
@@ -757,6 +867,7 @@ export async function renderLedger(container, app) {
         if (picked) {
           activeMonth = picked;
           app.ledgerMonthValue = picked;
+          await refetchForScope();
           updatePeriodNavUI();
           paint();
         }
@@ -765,10 +876,11 @@ export async function renderLedger(container, app) {
   }
 
   if (nativeDatePicker) {
-    nativeDatePicker.addEventListener('change', (e) => {
+    nativeDatePicker.addEventListener('change', async (e) => {
       if (e.target.value) {
         activeDay = e.target.value;
         app.ledgerDayValue = activeDay;
+        await refetchForScope();
         updatePeriodNavUI();
         paint();
       }
