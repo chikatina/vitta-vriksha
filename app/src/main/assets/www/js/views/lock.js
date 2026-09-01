@@ -295,6 +295,11 @@ async function forgetPin(app) {
     toast(res.message || 'That did not work.', 'error');
     return;
   }
+  try {
+    localStorage.removeItem('bio_vault_pin');
+    localStorage.removeItem('biometric_enabled');
+  } catch {}
+  document.querySelectorAll('.overlay-screen').forEach((el) => el.remove());
   await app.restart();
 }
 
@@ -395,6 +400,7 @@ export function renderSetup(app) {
     if (smsGranted) {
       app.open('sms_ingest', { initialSetup: true });
     } else {
+      app.pendingSmsPrompt = true;
       app.open('home');
     }
   };
@@ -572,7 +578,7 @@ export function renderSetup(app) {
               </span>
               ${granted
                 ? `<span class="badge badge-income" style="flex-shrink:0;margin-left:8px">${icon('check', 'icon-sm')}On</span>`
-                : `<button class="btn btn-sm btn-tonal" data-grant="${permission.key}" style="flex-shrink:0;margin-left:8px"
+                : `<button class="btn btn-sm btn-tonal ${permission.key === 'SMS' ? 'btn-sms-prompt' : ''}" data-grant="${permission.key}" style="flex-shrink:0;margin-left:8px"
                             ${onDevice ? '' : 'disabled'}>${blocked ? 'Settings' : 'Allow'}</button>`}
             </div>`;
         }).join('');
