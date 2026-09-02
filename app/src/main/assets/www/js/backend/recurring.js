@@ -152,7 +152,7 @@ function annualisedChange(levels) {
 
   const days = daysBetween(first.from, last.from);
   const years = days && days > 0 ? days / 365 : 0;
-  if (years < 0.25) return 0;
+  if (years < 0.15) return 0;
 
   const factor = (last.amount / first.amount) ** (1 / years);
   return Math.round((factor - 1) * 1000) / 10;

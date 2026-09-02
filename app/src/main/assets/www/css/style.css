@@ -854,6 +854,7 @@ a { color: var(--accent); }
 .btn-text { color: var(--accent); padding: 0 var(--gap-3); }
 .btn-danger { background: var(--expense); color: #FFFFFF; }
 .btn-danger-text { color: var(--expense); padding: 0 var(--gap-3); }
+.btn-sms-prompt { color: var(--expense) !important; font-weight: 700; }
 
 .btn-block { width: 100%; }
 .btn-sm { height: 34px; padding: 0 var(--gap-4); font-size: 13px; }
@@ -1003,6 +1004,7 @@ a { color: var(--accent); }
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
 }
 
 .field-label {
@@ -1045,6 +1047,9 @@ a { color: var(--accent); }
  */
 .select-button {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: var(--gap-2);
@@ -1119,7 +1124,10 @@ a { color: var(--accent); }
 .menu {
   position: fixed;
   z-index: var(--z-menu);
+  box-sizing: border-box;
+  max-width: calc(100vw - 16px);
   overflow-y: auto;
+  overflow-x: hidden;
   max-height: 280px;
   padding: var(--gap-2) 0;
   background: var(--surface-container-high);
@@ -1136,6 +1144,8 @@ a { color: var(--accent); }
 
 .menu-item {
   width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: var(--gap-3);
@@ -1170,6 +1180,7 @@ a { color: var(--accent); }
   display: flex;
   flex-direction: column;
   gap: 1px;
+  overflow: hidden;
 }
 
 .menu-item-label {
@@ -1178,7 +1189,13 @@ a { color: var(--accent); }
   white-space: nowrap;
 }
 
-.menu-item-sub { font-size: 12.5px; color: var(--on-surface-variant); }
+.menu-item-sub {
+  font-size: 12.5px;
+  color: var(--on-surface-variant);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .menu-item.is-selected .menu-item-sub { color: inherit; opacity: 0.8; }
 .menu-item-check { font-size: 20px; }
 
@@ -1681,6 +1698,22 @@ a { color: var(--accent); }
   justify-content: flex-end;
   gap: var(--gap-2);
   margin-top: var(--gap-5);
+}
+
+/* Overlays triggered while lock/setup screen (.overlay-screen) is open */
+.scrim.overlay-scrim,
+.overlay-screen ~ .scrim {
+  z-index: calc(var(--z-overlay) + 10);
+}
+
+.dialog.dialog-on-overlay,
+.overlay-screen ~ .dialog {
+  z-index: calc(var(--z-overlay) + 20);
+}
+
+.sheet.sheet-on-overlay,
+.overlay-screen ~ .sheet {
+  z-index: calc(var(--z-overlay) + 20);
 }
 
 /* Keyboard open adaptivity: hide floating chrome and expand scroll areas */
@@ -3039,4 +3072,36 @@ body.tour-active .nav-item.tour-tab-active .nav-label {
   border-color: var(--accent);
   color: var(--on-accent-container);
   font-weight: 600;
+}
+
+/* ── Responsive Virtual Scroll Box ── */
+.virtual-scroll-box {
+  max-height: min(42vh, 320px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-right: 4px;
+  border-radius: var(--radius-md);
+}
+
+.virtual-scroll-box::-webkit-scrollbar {
+  width: 4px;
+}
+
+.virtual-scroll-box::-webkit-scrollbar-thumb {
+  background: var(--outline-variant);
+  border-radius: var(--radius-full);
+}
+
+/* ── Convert Prompt Banner ── */
+.convert-prompt-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface-container-high);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--gap-3);
+  border: 1px solid var(--outline-variant);
 }

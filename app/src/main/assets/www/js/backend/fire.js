@@ -7,7 +7,7 @@
  */
 
 import { memberClause, monthBounds, number } from './periods.js';
-import { getDatabase } from './database.js';
+import { getDatabase, INVESTMENT_CATEGORIES } from './database.js';
 
 const ESSENTIAL_CATEGORIES = new Set([
   'Groceries',
@@ -120,7 +120,7 @@ export function getFireProfile(db, args = {}) {
 
     if (row.type === 'Income') {
       totalIncome += amt;
-    } else if (row.type === 'Investment' || row.is_investment_outflow || row.category === 'Investment Outflow') {
+    } else if (row.type === 'Investment' || row.is_investment_outflow || row.category === 'Investment Outflow' || INVESTMENT_CATEGORIES?.has(row.category)) {
       totalInvested += amt;
     } else if (row.type === 'Expense') {
       totalExpenses += amt;
