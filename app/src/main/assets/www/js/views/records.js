@@ -1107,15 +1107,33 @@ async function openRecordSheet(app, type, existing, preset = null) {
     else rows.push({ half: field.half, fields: [field] });
   });
 
-  const conversionBtnHtml = existing ? (
+  const conversionPromptHtml = existing ? (
     type === 'account'
-      ? `<button type="button" class="btn btn-outlined btn-block" data-convert-to-card style="margin-top:12px">
-          ${icon('credit_card')}Convert to Credit Card
-        </button>`
+      ? `<div class="card-flat convert-prompt-banner">
+          <div class="row" style="gap:8px;align-items:center;min-width:0">
+            <span class="avatar avatar-xs avatar-credit">${icon('credit_card', 'icon-sm')}</span>
+            <div style="min-width:0">
+              <div style="font-weight:600;font-size:12.5px">Is this a Credit Card?</div>
+              <div class="caption" style="font-size:11px">Track limit, dues and billing cycle</div>
+            </div>
+          </div>
+          <button type="button" class="btn btn-outlined btn-xs" data-convert-to-card style="flex-shrink:0">
+            ${icon('autorenew', 'icon-sm')}Convert
+          </button>
+        </div>`
       : (type === 'card'
-        ? `<button type="button" class="btn btn-outlined btn-block" data-convert-to-account style="margin-top:12px">
-            ${icon('account_balance')}Convert to Bank Account / Debit Card
-          </button>`
+        ? `<div class="card-flat convert-prompt-banner">
+            <div class="row" style="gap:8px;align-items:center;min-width:0">
+              <span class="avatar avatar-xs avatar-bank">${icon('account_balance', 'icon-sm')}</span>
+              <div style="min-width:0">
+                <div style="font-weight:600;font-size:12.5px">Is this a Bank Account?</div>
+                <div class="caption" style="font-size:11px">Track savings & debit card</div>
+              </div>
+            </div>
+            <button type="button" class="btn btn-outlined btn-xs" data-convert-to-account style="flex-shrink:0">
+              ${icon('autorenew', 'icon-sm')}Convert
+            </button>
+          </div>`
         : '')
   ) : '';
 
@@ -1126,8 +1144,8 @@ async function openRecordSheet(app, type, existing, preset = null) {
         </button>`
       : (type === 'account'
         ? `<button type="button" class="btn btn-tonal btn-block" data-merge-account style="margin-top:8px">
-            ${icon('account_tree')}Merge into Another Account
-          </button>`
+          ${icon('account_tree')}Merge into Another Account
+        </button>`
         : '')
   ) : '';
 
@@ -1137,12 +1155,11 @@ async function openRecordSheet(app, type, existing, preset = null) {
       </button>`
     : '';
 
-  const body = presetBannerHtml + npsLinkBannerHtml + rows.map((row) => (row.fields.length > 1 || row.half
+  const body = presetBannerHtml + npsLinkBannerHtml + conversionPromptHtml + rows.map((row) => (row.fields.length > 1 || row.half
     ? `<div class="row" style="gap:12px;align-items:flex-end">${row.fields.map((f) => fieldHtml(f, initial(f))).join('')}</div>`
     : fieldHtml(row.fields[0], initial(row.fields[0])))).join('')
     + dcSuggestionsHtml
     + resyncBtnHtml
-    + conversionBtnHtml
     + mergeBtnHtml
     + (existing ? `<button class="btn btn-danger-text btn-block" data-delete style="margin-top:8px">${icon('delete')}Delete</button>` : '');
 
@@ -1267,25 +1284,22 @@ async function openRecordSheet(app, type, existing, preset = null) {
         convertToCardBtn.addEventListener('click', async () => {
           const confirmed = await confirmDialog(
             'Convert to Credit Card?',
-            `Move "${h(existing.name)}" to Credit Cards so you can track credit limit, billing due dates, and utilisation.`,
+            `Move "${h(existing.name)}" to Credit Cards so you can track credit limit, billing due dates, and utilisation. All existing transactions will be transferred.`,
             { confirmLabel: 'Convert to Card' },
           );
           if (!confirmed) return;
 
-          await Bridge.db('save_record', {
-            record_type: 'card',
-            record: {
-              card_name: existing.name,
-              bank: existing.institution || 'Bank',
-              last_4: existing.account_number || existing.debit_card_last_4 || '',
-              total_limit: 0,
-              current_balance: Math.abs(Number(existing.balance) || 0),
-            },
+          const res = await Bridge.db('convert_record', {
+            from_type: 'account',
+            id: existing.id,
           });
 
-          await Bridge.db('delete_record', { record_type: 'account', record_id: existing.id });
-          toast('Converted to Credit Card!', 'success');
-          close(true);
+          if (res && res.status === 'success') {
+            toast('Converted to Credit Card!', 'success');
+            close(true);
+          } else {
+            toast(res?.message || 'Could not convert account.', 'error');
+          }
         });
       }
 
@@ -1294,25 +1308,22 @@ async function openRecordSheet(app, type, existing, preset = null) {
         convertToAccBtn.addEventListener('click', async () => {
           const confirmed = await confirmDialog(
             'Convert to Bank Account?',
-            `Move "${h(existing.card_name)}" to Bank Accounts as a savings/current account with linked Debit Card.`,
+            `Move "${h(existing.card_name)}" to Bank Accounts as a savings/current account with linked Debit Card. All existing transactions will be transferred.`,
             { confirmLabel: 'Convert to Account' },
           );
           if (!confirmed) return;
 
-          await Bridge.db('save_record', {
-            record_type: 'account',
-            record: {
-              name: existing.card_name,
-              category: 'Bank',
-              institution: existing.bank || 'Bank',
-              debit_card_last_4: existing.last_4 || '',
-              balance: Math.abs(Number(existing.current_balance) || 0),
-            },
+          const res = await Bridge.db('convert_record', {
+            from_type: 'card',
+            id: existing.id,
           });
 
-          await Bridge.db('delete_record', { record_type: 'card', record_id: existing.id });
-          toast('Converted to Bank Account with Debit Card!', 'success');
-          close(true);
+          if (res && res.status === 'success') {
+            toast('Converted to Bank Account with Debit Card!', 'success');
+            close(true);
+          } else {
+            toast(res?.message || 'Could not convert card.', 'error');
+          }
         });
       }
 

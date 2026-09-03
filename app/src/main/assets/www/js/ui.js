@@ -72,8 +72,9 @@ function openOverlay(buildNode) {
   closeOpenMenus();
   document.querySelectorAll('.scrim, .dialog, .sheet').forEach((el) => el.remove());
   return new Promise((resolve) => {
+    const isOverOverlay = Boolean(document.querySelector('.overlay-screen'));
     const scrim = document.createElement('div');
-    scrim.className = 'scrim';
+    scrim.className = isOverOverlay ? 'scrim overlay-scrim' : 'scrim';
     document.body.appendChild(scrim);
 
     let settled = false;
@@ -90,6 +91,9 @@ function openOverlay(buildNode) {
     };
 
     const node = buildNode(close);
+    if (isOverOverlay) {
+      node.classList.add('dialog-on-overlay', 'sheet-on-overlay');
+    }
     document.body.appendChild(node);
 
     scrim.addEventListener('click', () => close(null));
@@ -657,12 +661,22 @@ export function openMenu(anchor, options, current) {
 
     const box = anchor.getBoundingClientRect();
     const margin = 8;
-    const minW = Math.max(box.width, 220);
-    const calculatedWidth = Math.min(minW, window.innerWidth - margin * 2);
-    menu.style.minWidth = `${calculatedWidth}px`;
-    menu.style.maxWidth = `${window.innerWidth - margin * 2}px`;
+    const screenW = window.innerWidth;
+    const maxW = Math.max(0, screenW - margin * 2);
+    menu.style.maxWidth = `${maxW}px`;
 
-    const leftOffset = Math.max(margin, Math.min(box.left + (box.width - calculatedWidth) / 2, window.innerWidth - calculatedWidth - margin));
+    // Measure the actual natural width of the menu after insertion
+    const naturalWidth = menu.offsetWidth || 220;
+    const menuWidth = Math.min(maxW, Math.max(box.width, naturalWidth));
+    menu.style.width = `${menuWidth}px`;
+
+    // Align with anchor's left edge if it fits, otherwise align to anchor's right edge
+    let leftOffset = box.left;
+    if (leftOffset + menuWidth > screenW - margin) {
+      leftOffset = box.right - menuWidth;
+    }
+    // Clamp strictly within screen bounds
+    leftOffset = Math.max(margin, Math.min(leftOffset, screenW - menuWidth - margin));
     menu.style.left = `${leftOffset}px`;
 
     // Limit dropdown height to at most 5-6 options (~280px) and keep within screen bounds

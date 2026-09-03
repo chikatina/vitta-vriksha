@@ -23,8 +23,8 @@ export async function openTransactionSheet(app, existing = null) {
   const [categoryRes, memberRes, accountsRes, cardsRes] = await Promise.all([
     Bridge.db('get_categories'),
     Bridge.db('get_family_members'),
-    Bridge.db('list_records', { type: 'asset_account' }),
-    Bridge.db('list_records', { type: 'card' }),
+    Bridge.db('list_records', { record_type: 'account' }),
+    Bridge.db('list_records', { record_type: 'card' }),
   ]);
 
   const categories = categoryRes.categories || [];
@@ -37,9 +37,28 @@ export async function openTransactionSheet(app, existing = null) {
   else if (existing?.account_id) initialInstrument = `acc:${existing.account_id}`;
 
   const instrumentOptions = [
-    { value: '', label: 'None / Cash' },
-    ...accounts.map((a) => ({ value: `acc:${a.id}`, label: `${a.name}${a.account_number ? ` (··${a.account_number.slice(-4)})` : ''}` })),
-    ...cards.map((c) => ({ value: `card:${c.id}`, label: `${c.card_name}${c.last_4 ? ` (··${c.last_4})` : ''}` })),
+    { value: '', label: 'None / Cash', sub: 'Cash or unlinked' },
+    ...accounts.map((a) => {
+      const isDebit = a.account_type === 'Debit Card' || a.category === 'Meal Card' || a.category === 'Prepaid Card';
+      let label = a.name;
+      if (a.account_number) {
+        label += ` (··${a.account_number.slice(-4)})`;
+      } else if (a.debit_card_last_4) {
+        label += ` (··${a.debit_card_last_4})`;
+      }
+      let sub = a.institution || a.category || 'Bank Account';
+      if (a.debit_card_last_4 && a.account_number) {
+        sub += ` · DC ··${a.debit_card_last_4}`;
+      } else if (isDebit) {
+        sub = a.category || 'Debit Card';
+      }
+      return { value: `acc:${a.id}`, label, sub };
+    }),
+    ...cards.map((c) => ({
+      value: `card:${c.id}`,
+      label: `${c.card_name || c.bank || 'Credit Card'}${c.last_4 ? ` (··${c.last_4})` : ''}`,
+      sub: `${c.bank ? `${c.bank} · ` : ''}Credit Card`,
+    })),
   ];
 
   const draft = {
@@ -344,7 +363,8 @@ export async function openTransactionSheet(app, existing = null) {
         }
 
         const applyToAll = Boolean(node.querySelector('#txApplyToAll')?.checked);
-        const instVal = $('[data-instrument]')?.value || '';
+        const instBtn = node.querySelector('#txInstrument') || node.querySelector('[data-field="instrument"]');
+        const instVal = instBtn?.value || '';
         let accountId = null;
         let cardId = null;
         if (instVal.startsWith('acc:')) accountId = Number(instVal.slice(4));

@@ -84,6 +84,21 @@ export async function renderSettings(container, app) {
   const smsGranted = Bridge.checkPermission('SMS');
 
   container.innerHTML = `
+    ${!smsGranted ? `
+      <div class="card" style="border:1px solid var(--outline-variant);background:var(--surface-container-low);margin-bottom:var(--gap-3)">
+        <div class="row-between" style="align-items:center;gap:12px">
+          <div class="row" style="gap:10px;align-items:center;min-width:0;flex:1">
+            <span class="avatar avatar-sm avatar-expense" style="flex-shrink:0">
+              ${icon('sms', 'icon-sm')}
+            </span>
+            <div style="min-width:0">
+              <div style="font-weight:700;font-size:13px;color:var(--on-surface)">Bank SMS tracking is off</div>
+              <div class="caption" style="font-size:11.5px">Permission needed to track transactions</div>
+            </div>
+          </div>
+          <button class="btn btn-sm btn-tonal btn-sms-prompt" data-quick-enable-sms style="flex-shrink:0">Enable</button>
+        </div>
+      </div>` : ''}
     <div class="card">
       <div class="card-title">Theme</div>
       <div class="segmented">
@@ -237,6 +252,31 @@ export async function renderSettings(container, app) {
   container.querySelectorAll('[data-open]').forEach((row) => {
     row.addEventListener('click', () => app.open(row.dataset.open));
   });
+
+  const quickEnableSmsBtn = container.querySelector('[data-quick-enable-sms]');
+  if (quickEnableSmsBtn) {
+    quickEnableSmsBtn.addEventListener('click', async () => {
+      if (Bridge.permissionIsBlocked('SMS')) {
+        const open = await confirmDialog(
+          'SMS Permission Blocked',
+          'SMS permission is blocked. Please enable it in Android app settings.',
+          { confirmLabel: 'Open Settings' },
+        );
+        if (open) Bridge.openAppSettings();
+        return;
+      }
+      quickEnableSmsBtn.disabled = true;
+      const granted = await Bridge.requestPermission('SMS');
+      if (granted) {
+        Bridge.setSmsTrackingEnabled(true);
+        toast('SMS tracking enabled.', 'success');
+        app.open('sms_ingest');
+      } else {
+        quickEnableSmsBtn.disabled = false;
+        toast('SMS permission is needed to track bank messages.', 'info');
+      }
+    });
+  }
 }
 
 function bindAppearance(container, app) {
@@ -331,150 +371,7 @@ function bindReimport(container, app) {
   const button = container.querySelector('[data-reimport]');
   if (!button) return;
 
-  button.addEventListener('click', async () => {
-    // Ask here rather than sending the user to another screen to grant it and come back.
-    // A button that is visible but does nothing is worse than one that explains itself.
-    if (!Bridge.checkPermission('SMS')) {
-      if (Bridge.permissionIsBlocked('SMS')) {
-        const open = await confirmDialog(
-          'Permission is blocked',
-          'Reading messages was refused with "don\'t ask again", so the request no longer '
-          + 'appears. It can be turned back on in system settings, under Permissions.',
-          { confirmLabel: 'Open settings' },
-        );
-        if (open) Bridge.openAppSettings();
-        return;
-      }
-
-      const granted = await Bridge.requestPermission('SMS');
-      if (!granted) {
-        toast('Without that permission there is nothing to read.');
-        return;
-      }
-      app.refresh();
-    }
-
-    const range = await sheet('Import bank messages', `
-      <div class="field">
-        <label class="field-label">How far back would you like to scan?</label>
-        <div class="list" style="margin-top:var(--gap-3)">
-          <button type="button" class="list-row" data-range="0">
-            <span class="avatar avatar-sm" style="background:var(--accent-container);color:var(--on-accent-container)">
-              ${icon('history', 'icon-sm')}
-            </span>
-            <span class="list-row-main">
-              <span class="list-row-title">All time</span>
-              <span class="list-row-sub">Scan your entire SMS history from day one</span>
-            </span>
-            ${icon('chevron_right', 'icon-sm')}
-          </button>
-          <button type="button" class="list-row" data-range="365">
-            <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface)">
-              ${icon('calendar_month', 'icon-sm')}
-            </span>
-            <span class="list-row-main">
-              <span class="list-row-title">Last 1 year</span>
-              <span class="list-row-sub">Past 365 days</span>
-            </span>
-            ${icon('chevron_right', 'icon-sm')}
-          </button>
-          <button type="button" class="list-row" data-range="180">
-            <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface)">
-              ${icon('event', 'icon-sm')}
-            </span>
-            <span class="list-row-main">
-              <span class="list-row-title">Last 6 months</span>
-              <span class="list-row-sub">Past 180 days</span>
-            </span>
-            ${icon('chevron_right', 'icon-sm')}
-          </button>
-          <button type="button" class="list-row" data-range="90">
-            <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface)">
-              ${icon('schedule', 'icon-sm')}
-            </span>
-            <span class="list-row-main">
-              <span class="list-row-title">Last 90 days</span>
-              <span class="list-row-sub">Past 3 months</span>
-            </span>
-            ${icon('chevron_right', 'icon-sm')}
-          </button>
-          <button type="button" class="list-row" data-range="30">
-            <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface)">
-              ${icon('today', 'icon-sm')}
-            </span>
-            <span class="list-row-main">
-              <span class="list-row-title">Last 30 days</span>
-              <span class="list-row-sub">Past month</span>
-            </span>
-            ${icon('chevron_right', 'icon-sm')}
-          </button>
-        </div>
-      </div>`, {
-      onMount(node, close) {
-        node.querySelectorAll('[data-range]').forEach((btn) => {
-          btn.addEventListener('click', () => close(Number(btn.dataset.range)));
-        });
-      },
-    });
-
-    if (range === null || range === undefined) return;
-
-    const rangeLabel = range === 0 ? 'all time' : `the last ${range} days`;
-    const progress = showProgressModal('Scanning SMS Inbox', {
-      message: `Reading messages from ${rangeLabel}...`,
-      initialPercent: 20,
-      detail: 'Scanning bank alerts and UPI messages',
-    });
-
-    const stepTimer1 = setTimeout(() => {
-      progress.update({
-        percent: 55,
-        message: 'Filtering financial debits and credits...',
-        detail: 'Ignoring non-financial alerts and OTPs',
-      });
-    }, 400);
-
-    const stepTimer2 = setTimeout(() => {
-      progress.update({
-        percent: 85,
-        message: 'Applying categorization & merchant rules...',
-        detail: 'Classifying transactions into categories',
-      });
-    }, 1100);
-
-    button.disabled = true;
-    button.textContent = 'Reading';
-
-    let result;
-    try {
-      result = await Bridge.call('sms', {
-        action: 'reimport',
-        days: range,
-        member_id: app.memberFilter === 'all' ? 1 : Number(app.memberFilter),
-      });
-    } catch (err) {
-      result = { status: 'error', message: err.message || 'SMS import failed.' };
-    } finally {
-      clearTimeout(stepTimer1);
-      clearTimeout(stepTimer2);
-      button.disabled = false;
-      button.innerHTML = `${icon('history')}Import past messages`;
-    }
-
-    const output = container.querySelector('[data-reimport-result]');
-    if (result.status !== 'success') {
-      progress.fail(result.message || 'Import failed.');
-      output.textContent = result.message || 'That did not work.';
-      return;
-    }
-
-    progress.complete(`Filed ${result.imported} transactions!`, 400);
-
-    output.textContent = `Read ${result.read} messages from ${rangeLabel}, filed ${result.imported}. `
-      + `${result.skipped} were already recorded, and ${result.unmatched} matched no rule.`;
-    if (result.imported) {
-      toast(`Filed ${result.imported} transactions.`, 'success');
-      app.refresh();
-    }
+  button.addEventListener('click', () => {
+    app.open('sms_ingest');
   });
 }
