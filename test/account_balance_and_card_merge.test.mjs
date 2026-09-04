@@ -530,4 +530,88 @@ describe('Bank Account Balance Extraction & Card/Account Merging', () => {
     const reAcc = db.get("SELECT * FROM asset_accounts WHERE account_number = '7788'");
     assert.ok(reAcc);
   });
+
+  it('converts bank account to credit card and re-links transactions atomically', async () => {
+    // 1. Create an asset account
+    const acc = db.run(
+      'INSERT INTO asset_accounts (member_id, name, category, institution, account_number, balance) VALUES (1, ?, ?, ?, ?, ?)',
+      ['ICICI Coral Card', 'Bank', 'ICICI Bank', '4321', 12500],
+    );
+    const accId = acc.lastInsertRowid;
+
+    // 2. Add linked transaction
+    const txn = db.run(
+      'INSERT INTO transactions (account_id, amount, type, category, date, merchant) VALUES (?, ?, ?, ?, ?, ?)',
+      [accId, 2500, 'Expense', 'Shopping', '2026-09-01', 'Amazon'],
+    );
+    const txnId = txn.lastInsertRowid;
+
+    // 3. Convert to Credit Card
+    const res = await call('convert_record', {
+      from_type: 'account',
+      id: accId,
+    });
+
+    assert.equal(res.status, 'success');
+    assert.equal(res.target_type, 'card');
+    assert.ok(res.new_id);
+
+    // Old account should be deleted
+    const oldAcc = db.get('SELECT * FROM asset_accounts WHERE id = ?', [accId]);
+    assert.equal(oldAcc, null);
+
+    // New card should exist with transferred balance and last 4
+    const newCard = db.get('SELECT * FROM credit_cards WHERE id = ?', [res.new_id]);
+    assert.ok(newCard);
+    assert.equal(newCard.last_4, '4321');
+    assert.equal(newCard.bank, 'ICICI Bank');
+    assert.equal(newCard.current_balance, 12500);
+
+    // Transaction should be migrated to card_id and account_id cleared
+    const updatedTxn = db.get('SELECT * FROM transactions WHERE id = ?', [txnId]);
+    assert.equal(updatedTxn.card_id, res.new_id);
+    assert.equal(updatedTxn.account_id, null);
+  });
+
+  it('converts credit card to bank account and re-links transactions atomically', async () => {
+    // 1. Create a credit card
+    const card = db.run(
+      'INSERT INTO credit_cards (member_id, card_name, bank, last_4, total_limit, current_balance) VALUES (1, ?, ?, ?, ?, ?)',
+      ['Axis Bank Salary', 'Axis Bank', '9876', 0, 54000],
+    );
+    const cardId = card.lastInsertRowid;
+
+    // 2. Add linked transaction
+    const txn = db.run(
+      'INSERT INTO transactions (card_id, amount, type, category, date, merchant) VALUES (?, ?, ?, ?, ?, ?)',
+      [cardId, 1200, 'Expense', 'Dining', '2026-09-02', 'Swiggy'],
+    );
+    const txnId = txn.lastInsertRowid;
+
+    // 3. Convert to Bank Account
+    const res = await call('convert_record', {
+      from_type: 'card',
+      id: cardId,
+    });
+
+    assert.equal(res.status, 'success');
+    assert.equal(res.target_type, 'account');
+    assert.ok(res.new_id);
+
+    // Old card should be deleted
+    const oldCard = db.get('SELECT * FROM credit_cards WHERE id = ?', [cardId]);
+    assert.equal(oldCard, null);
+
+    // New account should exist with transferred balance and debit_card_last_4
+    const newAcc = db.get('SELECT * FROM asset_accounts WHERE id = ?', [res.new_id]);
+    assert.ok(newAcc);
+    assert.equal(newAcc.debit_card_last_4, '9876');
+    assert.equal(newAcc.institution, 'Axis Bank');
+    assert.equal(newAcc.balance, 54000);
+
+    // Transaction should be migrated to account_id and card_id cleared
+    const updatedTxn = db.get('SELECT * FROM transactions WHERE id = ?', [txnId]);
+    assert.equal(updatedTxn.account_id, res.new_id);
+    assert.equal(updatedTxn.card_id, null);
+  });
 });
