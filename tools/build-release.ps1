@@ -18,7 +18,7 @@ Write-Host "`n=== 3. Building Release App Bundle (.aab) & Release APK (.apk) ===
 # Parse version name from build.gradle
 $gradleContent = Get-Content -Path "app\build.gradle" -Raw
 $versionName = "latest"
-if ($gradleContent -match 'versionName\s+"([^"]+)"') {
+if ($gradleContent -match 'versionName\s*=?\s*"([^"]+)"') {
     $versionName = $matches[1]
 }
 

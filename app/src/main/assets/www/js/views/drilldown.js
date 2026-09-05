@@ -789,10 +789,12 @@ export async function openCashflowSheet(app) {
           </span>
         </div>
         <div class="display" style="font-size:28px;color:${statusColor};margin:6px 0">
-          ${h(money(app, safe.safe_to_spend_daily))}<span style="font-size:14px;font-weight:500;color:var(--on-surface-variant)"> / day</span>
+          ${h(money(app, isDeficit ? 0 : safe.safe_to_spend_daily))}<span style="font-size:14px;font-weight:500;color:var(--on-surface-variant)"> / day</span>
         </div>
-        <div class="caption">
-          ${h(money(app, safe.safe_to_spend_weekly))} / week · <strong>${h(money(app, safe.safe_to_spend_total))}</strong> total safe for the next ${safe.days_remaining} days.
+        <div class="caption" style="${isDeficit ? 'color:var(--expense)' : ''}">
+          ${isDeficit
+            ? `Short by <strong>${h(money(app, safe.deficit_amount || (safe.locked_commitments - safe.liquid_balance)))}</strong> for upcoming commitments this month.`
+            : `${h(money(app, safe.safe_to_spend_weekly))} / week · <strong>${h(money(app, safe.safe_to_spend_total))}</strong> total safe for the next ${safe.days_remaining} days.`}
         </div>
       </div>
 
