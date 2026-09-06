@@ -101,7 +101,7 @@ export async function renderHome(container, app) {
             <span class="list-row-title" style="font-size:13px">Bank SMS Tracking</span>
             <span class="caption">${smsGranted ? 'Active on this device' : 'Auto-track daily debits & credits'}</span>
           </span>
-          ${!smsGranted ? `<button class="btn btn-sm btn-tonal" data-action-sms>Enable</button>` : ''}
+          ${!smsGranted ? `<button class="btn btn-sm btn-tonal btn-sms-prompt" data-action-sms>Enable</button>` : ''}
         </div>
 
         <div class="list-row" data-onboarding-cas style="padding:10px 0;background:transparent">
@@ -139,6 +139,58 @@ export async function renderHome(container, app) {
       </div>
     </div>` : '';
 
+  const smsPromptDismissed = app.settings?.sms_prompt_dismissed === '1';
+  let smsPromptBannerHtml = '';
+  if (!smsPromptDismissed) {
+    if (!smsGranted) {
+      smsPromptBannerHtml = `
+        <div class="card" style="border:1px solid var(--outline-variant);background:var(--surface-container-low);margin-bottom:var(--gap-3)" data-sms-prompt-card>
+          <div class="row-between" style="align-items:flex-start;gap:12px">
+            <div class="row" style="gap:10px;align-items:flex-start;min-width:0;flex:1">
+              <span class="avatar avatar-sm avatar-expense" style="flex-shrink:0;margin-top:2px">
+                ${icon('sms', 'icon-sm')}
+              </span>
+              <div style="min-width:0;flex:1">
+                <div style="font-weight:700;font-size:13.5px;color:var(--on-surface)">Bank SMS Tracking is Off</div>
+                <div class="caption" style="margin-top:2px;font-size:12px;line-height:1.35">
+                  Enable SMS access to automatically detect debits, credit card alerts, and recurring bills.
+                </div>
+              </div>
+            </div>
+            <div class="row" style="gap:6px;align-items:center;flex-shrink:0">
+              <button class="btn btn-sm btn-tonal btn-sms-prompt" data-banner-sms>Enable</button>
+              <button class="icon-button" data-dismiss-sms-prompt aria-label="Dismiss banner">
+                ${icon('close', 'icon-sm')}
+              </button>
+            </div>
+          </div>
+        </div>`;
+    } else if (!app.settings?.last_sms_sync) {
+      smsPromptBannerHtml = `
+        <div class="card" style="border:1px solid var(--outline-variant);background:var(--surface-container-low);margin-bottom:var(--gap-3)" data-sms-prompt-card>
+          <div class="row-between" style="align-items:flex-start;gap:12px">
+            <div class="row" style="gap:10px;align-items:flex-start;min-width:0;flex:1">
+              <span class="avatar avatar-sm avatar-accent" style="flex-shrink:0;margin-top:2px">
+                ${icon('history', 'icon-sm')}
+              </span>
+              <div style="min-width:0;flex:1">
+                <div style="font-weight:700;font-size:13.5px;color:var(--on-surface)">SMS Inbox Not Scanned</div>
+                <div class="caption" style="margin-top:2px;font-size:12px;line-height:1.35">
+                  Scan past bank messages to import your accounts, credit cards, and ledger transactions.
+                </div>
+              </div>
+            </div>
+            <div class="row" style="gap:6px;align-items:center;flex-shrink:0">
+              <button class="btn btn-sm btn-tonal btn-sms-prompt" data-banner-scan-sms>Scan SMS</button>
+              <button class="icon-button" data-dismiss-sms-prompt aria-label="Dismiss banner">
+                ${icon('close', 'icon-sm')}
+              </button>
+            </div>
+          </div>
+        </div>`;
+    }
+  }
+
   container.innerHTML = `
     <div class="home-top-bar">
       <div class="home-title-group">
@@ -150,6 +202,7 @@ export async function renderHome(container, app) {
       </button>
     </div>
     ${waiting ? renderAlertTooltip(app.pendingAlerts, categories, app) : ''}
+    ${smsPromptBannerHtml}
     ${onboardingHtml}
     ${memberHtml ? `<div class="sticky-header">${memberHtml}</div>` : ''}
     ${panels.join('')}
@@ -188,6 +241,73 @@ export async function renderHome(container, app) {
         setTimeout(() => onboardingCard.remove(), 460);
       });
     }
+  }
+
+  // If user finished initial setup without SMS permission, show prompt once on first home landing
+  if (app.pendingSmsPrompt) {
+    app.pendingSmsPrompt = false;
+    setTimeout(async () => {
+      const ask = await confirmDialog(
+        'Bank SMS Tracking',
+        'Enable SMS tracking to automatically record debit and credit alerts from your bank messages.',
+        { confirmLabel: 'Enable SMS', cancelLabel: 'Later' },
+      );
+      if (ask) {
+        if (Bridge.permissionIsBlocked('SMS')) {
+          Bridge.openAppSettings();
+          return;
+        }
+        await Bridge.requestPermission('SMS');
+        if (Bridge.checkPermission('SMS')) {
+          Bridge.setSmsTrackingEnabled(true);
+          toast('SMS tracking enabled.', 'success');
+          app.open('sms_ingest');
+        }
+      }
+    }, 400);
+  }
+
+  // Dismissable SMS prompt banner handlers
+  const dismissSmsPromptBtn = container.querySelector('[data-dismiss-sms-prompt]');
+  if (dismissSmsPromptBtn) {
+    dismissSmsPromptBtn.addEventListener('click', async () => {
+      const card = container.querySelector('[data-sms-prompt-card]');
+      if (card) card.remove();
+      await Bridge.db('update_setting', { key: 'sms_prompt_dismissed', value: '1' });
+      if (app.settings) app.settings.sms_prompt_dismissed = '1';
+    });
+  }
+
+  const bannerSmsBtn = container.querySelector('[data-banner-sms]');
+  if (bannerSmsBtn) {
+    bannerSmsBtn.addEventListener('click', async () => {
+      if (Bridge.permissionIsBlocked('SMS')) {
+        const go = await confirmDialog(
+          'SMS Permission Required',
+          'Bank SMS tracking requires SMS permission to detect debit and credit alerts on this device. Please enable SMS permission in app settings.',
+          { confirmLabel: 'Open Settings' },
+        );
+        if (go) Bridge.openAppSettings();
+        return;
+      }
+      bannerSmsBtn.disabled = true;
+      await Bridge.requestPermission('SMS');
+      if (Bridge.checkPermission('SMS')) {
+        Bridge.setSmsTrackingEnabled(true);
+        toast('SMS permission granted.', 'success');
+        app.open('sms_ingest');
+      } else {
+        bannerSmsBtn.disabled = false;
+        toast('SMS permission is required to enable Bank SMS tracking.', 'info');
+      }
+    });
+  }
+
+  const bannerScanSmsBtn = container.querySelector('[data-banner-scan-sms]');
+  if (bannerScanSmsBtn) {
+    bannerScanSmsBtn.addEventListener('click', () => {
+      app.open('sms_ingest');
+    });
   }
 
   const tourBtn = container.querySelector('[data-take-tour]');

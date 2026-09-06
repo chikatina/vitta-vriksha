@@ -751,8 +751,30 @@ export const WIDGETS = {
     label: 'Safe-to-Spend Allowance',
     description: 'Daily and monthly guilt-free cash allowance after locked EMIs & SIPs',
     icon: 'account_balance_wallet',
+    options: [
+      {
+        key: 'cadence',
+        label: 'Headline figure',
+        default: 'runway',
+        choices: [
+          { value: 'runway', label: 'Safe runway (days/weeks)' },
+          { value: 'daily', label: 'Daily allowance (/day)' },
+          { value: 'weekly', label: 'Weekly allowance (/week)' },
+          { value: 'monthly', label: 'Total safe cash' },
+        ],
+      },
+      {
+        key: 'show_breakdown',
+        label: 'Show commitments',
+        default: 'yes',
+        choices: [
+          { value: 'yes', label: 'Yes, show commitments' },
+          { value: 'no', label: 'No, compact view' },
+        ],
+      },
+    ],
     needs: () => ['safe_to_spend'],
-    render({ safe_to_spend: safe }, app) {
+    render({ safe_to_spend: safe }, app, options = {}) {
       if (!safe || safe.status !== 'success') return '';
       if (!safe.liquid_balance && !safe.locked_commitments && !safe.safe_to_spend_total) return '';
 
@@ -760,22 +782,53 @@ export const WIDGETS = {
       const isTight = safe.health_status === 'tight';
       const statusColor = isDeficit ? 'var(--expense)' : (isTight ? 'var(--warning, #F59E0B)' : 'var(--income)');
 
-      return card('Safe-to-Spend Allowance', `
-        <div class="row-between" style="align-items:flex-start;margin-bottom:12px;flex-wrap:wrap;gap:6px">
-          <div style="flex:1;min-width:140px">
-            <div class="display" style="font-size:24px;color:${statusColor}">
-              ${h(money(app, safe.safe_to_spend_daily))}<span style="font-size:13px;font-weight:500;color:var(--on-surface-variant)"> / day</span>
-            </div>
-            <div class="caption" style="margin-top:2px">
-              ${h(money(app, safe.safe_to_spend_weekly))} / week · ${h(money(app, safe.safe_to_spend_total))} left this month
-            </div>
-          </div>
-          <span class="badge" style="flex-shrink:0;background:${isDeficit ? 'var(--expense-container)' : (isTight ? 'var(--surface-container-highest)' : 'var(--income-container)')};color:${statusColor}">
-            ${isDeficit ? 'Deficit' : (isTight ? 'Tight Budget' : 'Safe to Spend')}
-          </span>
-        </div>
+      const cadence = options.cadence || 'runway';
+      let headlineDisplay = '';
+      let headlineUnit = '';
+      let captionText = '';
 
-        <div class="grid-2" style="gap:8px;background:var(--surface-container-high);padding:10px;border-radius:var(--radius-sm)">
+      if (isDeficit) {
+        headlineDisplay = cadence === 'runway' ? '0 Days' : money(app, 0);
+        headlineUnit = cadence === 'daily' ? ' / day' : (cadence === 'weekly' ? ' / week' : (cadence === 'monthly' ? ' safe' : ''));
+        captionText = `Short by ${money(app, safe.deficit_amount || (safe.locked_commitments - safe.liquid_balance))} for upcoming commitments`;
+      } else if (cadence === 'runway') {
+        const days = safe.safe_runway_days ?? safe.days_remaining ?? 0;
+        const weeks = safe.safe_runway_weeks ?? (days / 7).toFixed(1);
+        const months = safe.safe_runway_months ?? (days / 30.416).toFixed(1);
+
+        if (days >= 60) {
+          headlineDisplay = `${months} Months`;
+          headlineUnit = ` (${days} d)`;
+        } else if (days >= 14) {
+          headlineDisplay = `${weeks} Weeks`;
+          headlineUnit = ` (${days} d)`;
+        } else {
+          headlineDisplay = `${days} Days`;
+          headlineUnit = ' safe';
+        }
+        captionText = `At ${money(app, safe.daily_living_burn || safe.safe_to_spend_daily)}/day avg spend · ${money(app, safe.safe_to_spend_total)} safe cash`;
+      } else if (cadence === 'monthly') {
+        headlineDisplay = money(app, safe.safe_to_spend_total);
+        headlineUnit = ' safe';
+        captionText = `Sustains ${safe.safe_runway_days ?? safe.days_remaining} days at ${money(app, safe.daily_living_burn || safe.safe_to_spend_daily)}/day avg spend`;
+      } else if (cadence === 'weekly') {
+        headlineDisplay = money(app, safe.safe_to_spend_weekly);
+        headlineUnit = ' / week';
+        captionText = `${safe.safe_runway_weeks ?? ((safe.safe_runway_days || 0) / 7).toFixed(1)} weeks of safe runway · ${money(app, safe.safe_to_spend_total)} safe cash`;
+      } else {
+        headlineDisplay = money(app, safe.safe_to_spend_daily);
+        headlineUnit = ' / day';
+        captionText = `${safe.safe_runway_days ?? safe.days_remaining} days of safe runway · ${money(app, safe.safe_to_spend_total)} safe cash`;
+      }
+
+      const commitmentPills = [];
+      if (safe.breakdown.loan_emis > 0) commitmentPills.push(`EMIs: ${money(app, safe.breakdown.loan_emis)}`);
+      if (safe.breakdown.sips > 0) commitmentPills.push(`SIPs: ${money(app, safe.breakdown.sips)}`);
+      if (safe.breakdown.credit_cards > 0) commitmentPills.push(`Cards: ${money(app, safe.breakdown.credit_cards)}`);
+      if (safe.breakdown.recurring_bills > 0) commitmentPills.push(`Bills: ${money(app, safe.breakdown.recurring_bills)}`);
+
+      const breakdownHtml = options.show_breakdown === 'no' ? '' : `
+        <div class="grid-2" style="gap:8px;background:var(--surface-container-high);padding:10px;border-radius:var(--radius-sm);margin-top:10px">
           <div>
             <span class="caption" style="font-size:11px">Liquid Bank Cash</span>
             <div style="font-weight:700;font-size:13.5px;color:var(--on-surface)">${h(money(app, safe.liquid_balance))}</div>
@@ -786,11 +839,27 @@ export const WIDGETS = {
           </div>
         </div>
 
-        <div class="row-between" style="margin-top:8px;font-size:11.5px;color:var(--on-surface-variant)">
-          <span>EMIs: ${h(money(app, safe.breakdown.loan_emis))}</span>
-          <span>SIPs: ${h(money(app, safe.breakdown.sips))}</span>
-          <span>Cards: ${h(money(app, safe.breakdown.credit_cards))}</span>
-        </div>`, { action: drillAction('Runway') });
+        ${commitmentPills.length ? `
+          <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;font-size:11.5px;color:var(--on-surface-variant)">
+            ${commitmentPills.map((pill) => `<span>${h(pill)}</span>`).join('<span>·</span>')}
+          </div>` : ''}
+      `;
+
+      return card('Safe-to-Spend Allowance', `
+        <div class="row-between" style="align-items:flex-start;margin-bottom:4px;flex-wrap:wrap;gap:6px">
+          <div style="flex:1;min-width:140px">
+            <div class="display" style="font-size:24px;color:${statusColor}">
+              ${h(headlineDisplay)}<span style="font-size:13px;font-weight:500;color:var(--on-surface-variant)">${h(headlineUnit)}</span>
+            </div>
+            <div class="caption" style="margin-top:2px;${isDeficit ? 'color:var(--expense)' : ''}">
+              ${h(captionText)}
+            </div>
+          </div>
+          <span class="badge" style="flex-shrink:0;background:${isDeficit ? 'var(--expense-container)' : (isTight ? 'var(--surface-container-highest)' : 'var(--income-container)')};color:${statusColor}">
+            ${isDeficit ? 'Deficit' : (isTight ? 'Tight Budget' : 'Safe to Spend')}
+          </span>
+        </div>
+        ${breakdownHtml}`, { action: drillAction('Allowance') });
     },
     bind(node, data, app) {
       const drill = node.querySelector('[data-drill]');

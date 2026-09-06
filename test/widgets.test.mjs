@@ -500,4 +500,58 @@ describe('financial_runway widget', () => {
   });
 });
 
+describe('safe_to_spend widget', () => {
+  it('renders daily, weekly, and monthly cadence options', async (t) => {
+    await ok(t, 'save_record', {
+      table: 'asset_accounts',
+      record: { name: 'Main Savings', category: 'Bank', balance: 50000 },
+    });
+    await ok(t, 'save_record', {
+      table: 'sips',
+      record: { fund_name: 'Large Cap Index', monthly_amount: 5000, debit_day: 10, is_active: 1 },
+    });
+
+    const app = fakeApp();
+    const layout = [{ id: 'safe_to_spend', uid: 'safe-1', options: { cadence: 'daily' } }];
+    const data = await loadWidgetData(app, layout);
+
+    const runwayHtml = WIDGETS.safe_to_spend.render(data, app, { cadence: 'runway' });
+    assert.ok(runwayHtml.includes('Days') || runwayHtml.includes('Weeks') || runwayHtml.includes('Months'));
+
+    const dailyHtml = WIDGETS.safe_to_spend.render(data, app, { cadence: 'daily' });
+    assert.ok(dailyHtml.includes('/ day'));
+    assert.ok(dailyHtml.includes('Safe-to-Spend Allowance'));
+    assert.ok(dailyHtml.includes('Liquid Bank Cash'));
+    assert.ok(dailyHtml.includes('SIPs:'));
+
+    const weeklyHtml = WIDGETS.safe_to_spend.render(data, app, { cadence: 'weekly' });
+    assert.ok(weeklyHtml.includes('/ week'));
+
+    const monthlyHtml = WIDGETS.safe_to_spend.render(data, app, { cadence: 'monthly' });
+    assert.ok(monthlyHtml.includes('safe'));
+
+    const compactHtml = WIDGETS.safe_to_spend.render(data, app, { show_breakdown: 'no' });
+    assert.ok(!compactHtml.includes('Liquid Bank Cash'));
+  });
+
+  it('renders deficit state with short by amount when commitments exceed liquid cash', async (t) => {
+    await ok(t, 'save_record', {
+      table: 'asset_accounts',
+      record: { name: 'Low Balance Bank', category: 'Bank', balance: 2000 },
+    });
+    await ok(t, 'save_record', {
+      table: 'loans',
+      record: { name: 'Personal Loan', principal: 100000, current_outstanding: 50000, monthly_emi: 8000, direction: 'borrowed' },
+    });
+
+    const app = fakeApp();
+    const layout = [{ id: 'safe_to_spend', uid: 'safe-1', options: {} }];
+    const data = await loadWidgetData(app, layout);
+
+    const html = WIDGETS.safe_to_spend.render(data, app, {});
+    assert.ok(html.includes('Deficit'));
+    assert.ok(html.includes('Short by'));
+  });
+});
+
 

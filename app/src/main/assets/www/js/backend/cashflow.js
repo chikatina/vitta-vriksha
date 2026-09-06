@@ -7,6 +7,20 @@ import { flowClause, isExcludingInvestments } from './analytics.js';
 
 const LIQUID_CATEGORIES = new Set(['bank', 'cash', 'wallet', 'savings', 'checking', 'liquid']);
 
+export function isLiquidCategory(category) {
+  const cat = String(category || '').toLowerCase();
+  if (!cat) return true;
+  if (cat.includes('fd') || cat.includes('rd') || cat.includes('deposit') || cat.includes('fixed')
+    || cat.includes('demat') || cat.includes('stock') || cat.includes('equity') || cat.includes('share')
+    || cat.includes('mf') || cat.includes('mutual') || cat.includes('gold') || cat.includes('sgb') || cat.includes('silver')
+    || cat.includes('nps') || cat.includes('pf') || cat.includes('ppf') || cat.includes('epf') || cat.includes('pension')) {
+    return false;
+  }
+  return LIQUID_CATEGORIES.has(cat) || cat.includes('bank') || cat.includes('cash') || cat.includes('wallet')
+    || cat.includes('saving') || cat.includes('checking') || cat.includes('liquid') || cat.includes('salary')
+    || cat.includes('current') || cat.includes('meal') || cat.includes('prepaid');
+}
+
 /**
  * Calculates how much cash is genuinely "safe to spend" today after reserving funds
  * for upcoming EMIs, SIPs, credit card bills, and fixed recurring bills.
@@ -17,10 +31,10 @@ export function calculateSafeToSpend(db, args = {}) {
 
   // 1. Total Liquid Balance across bank accounts & wallets
   let liquidBalance = 0;
-  const accounts = db.all(`SELECT id, name, category, balance FROM asset_accounts${clause}`, params);
+  const accounts = db.all(`SELECT id, name, category, linked_holding_type, balance FROM asset_accounts${clause}`, params);
   for (const acc of accounts) {
-    const cat = String(acc.category || '').toLowerCase();
-    if (LIQUID_CATEGORIES.has(cat) || !cat) {
+    if (acc.linked_holding_type === 'nps') continue;
+    if (isLiquidCategory(acc.category)) {
       liquidBalance += number(acc.balance);
     }
   }
@@ -33,7 +47,7 @@ export function calculateSafeToSpend(db, args = {}) {
     params,
   );
   for (const l of loans) {
-    loanEmis += number(l.monthly_emi);
+    loanEmis += number(l.monthly_emi || 0);
   }
 
   // 3. Active Monthly SIP commitments
@@ -67,14 +81,32 @@ export function calculateSafeToSpend(db, args = {}) {
 
   const lockedCommitments = loanEmis + sipTotal + cardDues + recurringBills;
   const safeTotal = Math.max(0, liquidBalance - lockedCommitments);
+  const deficitAmount = Math.max(0, lockedCommitments - liquidBalance);
 
-  const now = new Date();
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const currentDay = now.getDate();
+  const todayStr = today();
+  const [year, month, currentDay] = todayStr.split('-').map(Number);
+  const daysInMonth = new Date(year, month, 0).getDate();
   const daysRemaining = Math.max(1, daysInMonth - currentDay + 1);
 
-  const safeDaily = Math.round(safeTotal / daysRemaining);
+  // Compute daily living expense burn from historical transactions
+  const burn90 = calculateDailyExpenseAverage(db, { days: 90, member_id: memberId });
+  const burn30 = calculateDailyExpenseAverage(db, { days: 30, member_id: memberId });
+  const dailyLivingBurn = burn90.daily_average || burn30.daily_average || 0;
+
+  // Safe runway duration based on actual average spend burn rate
+  let safeRunwayDays = 0;
+  let safeDaily = 0;
+  if (dailyLivingBurn > 0) {
+    safeRunwayDays = Math.floor(safeTotal / dailyLivingBurn);
+    safeDaily = dailyLivingBurn;
+  } else {
+    safeDaily = Math.round(safeTotal / daysRemaining);
+    safeRunwayDays = daysRemaining;
+  }
+
   const safeWeekly = Math.round(safeDaily * 7);
+  const safeRunwayWeeks = Math.round((safeRunwayDays / 7) * 10) / 10;
+  const safeRunwayMonths = Math.round((safeRunwayDays / 30.416) * 10) / 10;
 
   let status = 'healthy';
   if (liquidBalance < lockedCommitments) {
@@ -90,6 +122,11 @@ export function calculateSafeToSpend(db, args = {}) {
     safe_to_spend_total: Math.round(safeTotal),
     safe_to_spend_daily: safeDaily,
     safe_to_spend_weekly: safeWeekly,
+    daily_living_burn: dailyLivingBurn,
+    safe_runway_days: safeRunwayDays,
+    safe_runway_weeks: safeRunwayWeeks,
+    safe_runway_months: safeRunwayMonths,
+    deficit_amount: Math.round(deficitAmount),
     days_remaining: daysRemaining,
     health_status: status,
     breakdown: {
