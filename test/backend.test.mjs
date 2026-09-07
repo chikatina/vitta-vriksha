@@ -1535,7 +1535,7 @@ describe('backup', () => {
     assert.equal(restored.restored, 4);
     assert.equal((await ok(t, 'get_transactions')).transactions.length, 1);
     const ver = await ok(t, 'get_version_info');
-    assert.equal(ver.schema_version, 11);
+    assert.equal(ver.schema_version, database.APP_VERSION_CODE);
   });
 
   it('rejects a backup created with a newer app version than the running build', async (t) => {
