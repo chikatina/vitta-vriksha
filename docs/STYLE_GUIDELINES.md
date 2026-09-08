@@ -140,7 +140,7 @@ To prevent layering bugs where popovers or dialogs get clipped:
 
 ### 5.1. Concise Copy Comparison Examples
 
-| Area | ❌ Wordy / Cluttered Copy | ✅ Clean / Compact Copy |
+| Area | Wordy / Cluttered Copy | Clean / Compact Copy |
 | :--- | :--- | :--- |
 | **Discovered SMS Alert** | *"We detected a new transaction alert from your SMS messages. Would you like to add it as a new bank account or link it to an existing one?"* | `HDFC Bank · Debit Card · ending 5678` <br> `[ Link ]` `[ Add ]` `[ Ignore ]` |
 | **Delete Confirmation** | *"Are you completely sure you want to delete this record? This action cannot be reversed and all your data will be permanently wiped out."* | **Title**: `Delete this record?`<br>**Body**: `This cannot be undone.`<br>**Button**: `[ Delete ]` (danger) |

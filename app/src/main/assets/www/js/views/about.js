@@ -20,8 +20,8 @@ export async function renderAbout(container, app) {
     Bridge.call('database', { action: 'get_version_info' }).catch(() => null),
   ]);
   const verStr = versionInfo?.app_version
-    ? `Version ${versionInfo.app_version} (Build ${versionInfo.app_version_code || 11})`
-    : 'Version 1.0.5 (Build 11)';
+    ? `Version ${versionInfo.app_version} (Build ${versionInfo.app_version_code || 13})`
+    : 'Version 1.0.7 (Build 13)';
 
   container.innerHTML = `
     <div class="card" style="text-align:center">

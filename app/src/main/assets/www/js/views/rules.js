@@ -215,6 +215,10 @@ function renderAlertCard(item, itemIndex, categories, isSelectMode, isSelected, 
               ${icon('content_copy', 'icon-sm')}
             </button>
           </div>` : ''}
+        ${item.state === 'ignored' ? `
+          <div class="row" style="gap:4px;flex-shrink:0">
+            <button class="btn btn-tonal btn-xs" data-classify="${itemIndex}" style="padding:4px 8px">Classify</button>
+          </div>` : ''}
       </div>`;
   }
 
@@ -327,7 +331,7 @@ export async function renderRules(container, app) {
           <p class="caption" style="margin-bottom:12px">
             Detected from your SMS alerts. Tap any row to inspect details or combine with an existing account.
           </p>
-          <div class="list" style="background:transparent;box-shadow:none;display:flex;flex-direction:column;gap:10px">
+          <div class="list virtual-scroll-box" style="background:transparent;box-shadow:none;display:flex;flex-direction:column;gap:10px">
             ${discovered.map((d, i) => `
               <div class="card-flat" style="background:var(--surface-container-high);padding:14px;border-radius:var(--radius-md);border:1px solid var(--outline-variant);display:flex;flex-direction:column;gap:10px;width:100%;box-sizing:border-box">
                 <div style="display:flex;align-items:flex-start;gap:12px;cursor:pointer" data-inspect-discovered="${i}">
@@ -426,7 +430,7 @@ export async function renderRules(container, app) {
             ${icon('autorenew')}Sync new messages
           </button>
           <button class="btn btn-tonal btn-block" data-import style="margin-top:10px">
-            ${icon('history')}Scan last 90 days
+            ${icon('history')}Import past messages
           </button>
           <div class="caption" data-import-result style="margin-top:10px"></div>
         </div>` : ''}
@@ -493,8 +497,10 @@ export async function renderRules(container, app) {
           })()}
 
           ${filteredReview.length ? `
-            <div class="list" data-stream-container style="background:transparent;box-shadow:none;display:flex;flex-direction:column;gap:10px"></div>
-            <div data-stream-sentinel style="height:10px;margin-top:4px"></div>
+            <div class="virtual-scroll-box" style="margin-top:var(--gap-2)">
+              <div class="list" data-stream-container style="background:transparent;box-shadow:none;display:flex;flex-direction:column;gap:10px"></div>
+              <div data-stream-sentinel style="height:10px;margin-top:4px"></div>
+            </div>
             <div data-stream-footer style="margin-top:10px;text-align:center"></div>`
           : `<div class="card">
               <div class="caption">
@@ -667,98 +673,8 @@ export async function renderRules(container, app) {
 
   const importButton = container.querySelector('[data-import]');
   if (importButton) {
-    importButton.addEventListener('click', async () => {
-      const output = container.querySelector('[data-import-result]');
-
-      const range = await sheet('Import bank messages', `
-        <div class="field">
-          <label class="field-label">How far back would you like to scan?</label>
-          <div class="list" style="margin-top:var(--gap-3)">
-            <button type="button" class="list-row" data-range="0">
-              <span class="avatar avatar-sm" style="background:var(--accent-container);color:var(--on-accent-container)">
-                ${icon('history', 'icon-sm')}
-              </span>
-              <span class="list-row-main">
-                <span class="list-row-title">All time</span>
-                <span class="list-row-sub">Scan your entire SMS history from day one</span>
-              </span>
-              ${icon('chevron_right', 'icon-sm')}
-            </button>
-            <button type="button" class="list-row" data-range="365">
-              <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface)">
-                ${icon('calendar_month', 'icon-sm')}
-              </span>
-              <span class="list-row-main">
-                <span class="list-row-title">Last 1 year</span>
-                <span class="list-row-sub">Past 365 days</span>
-              </span>
-              ${icon('chevron_right', 'icon-sm')}
-            </button>
-            <button type="button" class="list-row" data-range="180">
-              <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface)">
-                ${icon('event', 'icon-sm')}
-              </span>
-              <span class="list-row-main">
-                <span class="list-row-title">Last 6 months</span>
-                <span class="list-row-sub">Past 180 days</span>
-              </span>
-              ${icon('chevron_right', 'icon-sm')}
-            </button>
-            <button type="button" class="list-row" data-range="90">
-              <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface)">
-                ${icon('schedule', 'icon-sm')}
-              </span>
-              <span class="list-row-main">
-                <span class="list-row-title">Last 90 days</span>
-                <span class="list-row-sub">Past 3 months</span>
-              </span>
-              ${icon('chevron_right', 'icon-sm')}
-            </button>
-            <button type="button" class="list-row" data-range="30">
-              <span class="avatar avatar-sm" style="background:var(--surface-container-highest);color:var(--on-surface)">
-                ${icon('today', 'icon-sm')}
-              </span>
-              <span class="list-row-main">
-                <span class="list-row-title">Last 30 days</span>
-                <span class="list-row-sub">Past month</span>
-              </span>
-              ${icon('chevron_right', 'icon-sm')}
-            </button>
-          </div>
-        </div>`, {
-        onMount(node, close) {
-          node.querySelectorAll('[data-range]').forEach((btn) => {
-            btn.addEventListener('click', () => close(Number(btn.dataset.range)));
-          });
-        },
-      });
-
-      if (range === null || range === undefined) return;
-
-      importButton.disabled = true;
-      importButton.textContent = 'Reading';
-
-      const res = await Bridge.call('sms', {
-        action: 'reimport',
-        days: range,
-        member_id: app.memberFilter === 'all' ? 1 : Number(app.memberFilter),
-      });
-
-      importButton.disabled = false;
-      importButton.innerHTML = `${icon('history')}Import past messages`;
-
-      if (res.status !== 'success') {
-        output.innerHTML = errorBlock(res, { compact: true });
-        return;
-      }
-
-      const rangeLabel = range === 0 ? 'all time' : `the last ${range} days`;
-      output.textContent = `Read ${res.read} messages from ${rangeLabel}, filed ${res.imported}. `
-        + `${res.skipped} were already there, ${res.unmatched} matched no rule`
-        + `${res.duplicates ? `, and ${res.duplicates} look like a second message about a payment `
-          + 'already recorded, so they are waiting below rather than filed twice' : ''}.`;
-      if (res.imported) toast(`Filed ${res.imported} transactions.`, 'success');
-      if (res.imported || res.duplicates) app.refresh();
+    importButton.addEventListener('click', () => {
+      app.open('sms_ingest');
     });
   }
 
@@ -1876,15 +1792,17 @@ async function alertSheet(app, categories, item) {
   if (saved) app.refresh();
 }
 
-async function addRule(app, categories) {
+async function addRule(app, categories, initial = {}) {
+  const initialType = initial.transaction_type || 'Expense';
+  const initialCategory = initial.category_name || categoryOptions(categories, initialType)[0]?.value || 'Groceries';
   const saved = await sheet('New rule', `
     <div class="field">
       <label class="field-label" for="ruleName">Name</label>
-      <input class="input" id="ruleName" data-name type="text" placeholder="Salary credited" autocomplete="off">
+      <input class="input" id="ruleName" data-name type="text" placeholder="Salary credited" autocomplete="off" value="${h(initial.rule_name || '')}">
     </div>
     <div class="field">
       <label class="field-label" for="ruleTrigger">Phrase to look for</label>
-      <input class="input" id="ruleTrigger" data-trigger type="text" placeholder="credited" autocomplete="off">
+      <input class="input" id="ruleTrigger" data-trigger type="text" placeholder="credited" autocomplete="off" value="${h(initial.body_trigger || '')}">
       <span class="caption">Case does not matter. Keep it short and distinctive.</span>
     </div>
     <div class="row" style="gap:12px;align-items:flex-end">
@@ -1892,7 +1810,7 @@ async function addRule(app, categories) {
     key: 'type',
     label: 'Direction',
     id: 'ruleType',
-    value: 'Expense',
+    value: initialType,
     half: true,
     options: [
       { value: 'Expense', label: 'Money out (Expense / EMI)' },
@@ -1902,20 +1820,20 @@ async function addRule(app, categories) {
       { value: 'Ignore', label: 'Ignore message (Auto-Discard)' },
     ],
   })}
-      <div id="ruleCategoryWrapper" style="flex:1;min-width:0;">
+      <div id="ruleCategoryWrapper" style="flex:1;min-width:0;${initialType === 'Ignore' ? 'display:none;' : ''}">
         ${selectField({
     key: 'category',
     label: 'Category',
     id: 'ruleCategory',
     half: true,
-    value: categoryOptions(categories, 'Expense')[0]?.value || 'Groceries',
-    options: categoryOptions(categories, 'Expense'),
+    value: initialCategory,
+    options: categoryOptions(categories, initialType),
   })}
       </div>
     </div>
     <div class="field">
       <label class="field-label" for="ruleSender">Sender contains</label>
-      <input class="input" id="ruleSender" data-sender type="text" placeholder="HDFCBK (optional)" autocomplete="off">
+      <input class="input" id="ruleSender" data-sender type="text" placeholder="HDFCBK (optional)" autocomplete="off" value="${h(initial.sender_keyword || '')}">
     </div>`, {
     actions: `
       <button class="btn btn-outlined" data-cancel>Cancel</button>
@@ -1981,6 +1899,8 @@ async function addRule(app, categories) {
   if (saved) app.refresh();
 }
 
+const ruleSheet = addRule;
+
 /**
  * Details, Classification and 2-way Link bottom sheet for discovered accounts & cards.
  */
@@ -2041,15 +1961,7 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
           </div>` : ''}
       </div>
 
-      ${item.sample_sms ? `
-        <div>
-          <div class="caption" style="font-weight:600;margin-bottom:6px">Sample Raw SMS Alert</div>
-          <div class="card-flat" style="font-size:12px;line-height:1.5;background:var(--surface-container-lowest);padding:12px 14px;border-radius:var(--radius-md);border:1px solid var(--outline-variant);font-family:monospace;word-break:break-word">
-            ${h(item.sample_sms)}
-          </div>
-        </div>` : ''}
-
-      <!-- Classification Picker -->
+      <!-- Classification Picker - prominent at top -->
       <div class="field">
         <label class="field-label">How should this card/account be classified?</label>
         ${selectField({
@@ -2068,6 +1980,14 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
       </div>
 
       <div id="discoveredOptionsContainer"></div>
+
+      ${item.sample_sms ? `
+        <div>
+          <div class="caption" style="font-weight:600;margin-bottom:6px">Sample Raw SMS Alert</div>
+          <div class="card-flat" style="font-size:12px;line-height:1.5;background:var(--surface-container-lowest);padding:12px 14px;border-radius:var(--radius-md);border:1px solid var(--outline-variant);font-family:monospace;word-break:break-word">
+            ${h(item.sample_sms)}
+          </div>
+        </div>` : ''}
 
       <button class="btn btn-danger-text btn-block" data-action-ignore style="margin-top:var(--gap-2)">
         ${icon('visibility_off', 'icon-sm')}Ignore & Discard Identifier

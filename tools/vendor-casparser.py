@@ -21,12 +21,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 VENDOR = os.path.normpath(os.path.join(
     HERE, "..", "app", "src", "main", "assets", "www", "vendor", "casparser"))
 
-DEFAULT_SOURCE = os.path.normpath(os.path.join(HERE, "..", "..", "casparser-js"))
+NPM_SOURCE = os.path.normpath(os.path.join(
+    HERE, "..", "node_modules", "@chikatina", "casparser-js"))
+LOCAL_SOURCE = os.path.normpath(os.path.join(HERE, "..", "..", "casparser-js"))
+DEFAULT_SOURCE = NPM_SOURCE if os.path.isdir(NPM_SOURCE) else LOCAL_SOURCE
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", default=DEFAULT_SOURCE, help="a casparser-js checkout")
+    parser.add_argument("--source", default=DEFAULT_SOURCE, help="installed npm package or casparser-js checkout")
     args = parser.parse_args()
 
     source = os.path.join(args.source, "src")

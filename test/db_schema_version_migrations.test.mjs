@@ -24,9 +24,9 @@ describe('Database Schema Versioning & Sequential Migrations', () => {
   describe('Constants & Registry Integrity', () => {
     it('defines current app version name and version code', () => {
       assert.equal(typeof APP_VERSION_NAME, 'string');
-      assert.equal(APP_VERSION_NAME, '1.0.5');
+      assert.equal(APP_VERSION_NAME, '1.0.7');
       assert.equal(typeof APP_VERSION_CODE, 'number');
-      assert.equal(APP_VERSION_CODE, 11);
+      assert.equal(APP_VERSION_CODE, 13);
     });
 
     it('has sequentially ordered migrations up to APP_VERSION_CODE', () => {

@@ -20,13 +20,13 @@ if (-not (Test-Path $gradlePath)) {
 # 1. Read current version from app/build.gradle
 $gradleContent = Get-Content -Path $gradlePath -Raw
 
-if ($gradleContent -notmatch 'versionCode\s+(\d+)') {
+if ($gradleContent -notmatch 'versionCode\s*=?\s*(\d+)') {
     Write-Error "Could not parse current versionCode from $gradlePath"
     exit 1
 }
 $currentCode = [int]$matches[1]
 
-if ($gradleContent -notmatch 'versionName\s+"([^"]+)"') {
+if ($gradleContent -notmatch 'versionName\s*=?\s*"([^"]+)"') {
     Write-Error "Could not parse current versionName from $gradlePath"
     exit 1
 }
@@ -71,8 +71,8 @@ Write-Host "Previous: versionCode $currentCode | versionName `"$currentName`"" -
 Write-Host "New:      versionCode $newCode | versionName `"$newName`"" -ForegroundColor Green
 
 # 4. Update app/build.gradle
-$updatedGradle = $gradleContent -replace 'versionCode\s+\d+', "versionCode $newCode"
-$updatedGradle = $updatedGradle -replace 'versionName\s+"[^"]+"', "versionName `"$newName`""
+$updatedGradle = $gradleContent -replace 'versionCode\s*=?\s*\d+', "versionCode = $newCode"
+$updatedGradle = $updatedGradle -replace 'versionName\s*=?\s*"[^"]+"', "versionName = `"$newName`""
 Set-Content -Path $gradlePath -Value $updatedGradle -NoNewline
 Write-Host "[+] Updated $gradlePath" -ForegroundColor Green
 

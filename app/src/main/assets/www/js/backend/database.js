@@ -87,7 +87,17 @@ const DEFAULT_CATEGORIES = [
   ['Gifts & Donations', 'Expense', '#FB7185', 'redeem'],
   ['Insurance & Tax', 'Expense', '#64748B', 'shield'],
   ['Loans & EMI', 'Expense', '#A16207', 'account_balance'],
+  ['Bills & Recharge', 'Expense', '#0EA5E9', 'payments'],
+  ['Office & Work', 'Expense', '#3B82F6', 'computer'],
   ['Investment Outflow', 'Investment', '#059669', 'trending_up'],
+  ['Emergency Fund', 'Investment', '#0284C7', 'savings'],
+  ['Mutual Funds', 'Investment', '#059669', 'show_chart'],
+  ['Stocks & Equity', 'Investment', '#10B981', 'monitoring'],
+  ['Fixed Deposit & RD', 'Investment', '#0D9488', 'account_balance'],
+  ['Gold & Metals', 'Investment', '#F59E0B', 'diamond'],
+  ['Retirement & NPS', 'Investment', '#6366F1', 'umbrella'],
+  ['Real Estate', 'Investment', '#8B5CF6', 'real_estate_agent'],
+  ['Crypto & Digital Assets', 'Investment', '#EC4899', 'currency_exchange'],
   ['Salary', 'Income', '#10B981', 'work'],
   ['Freelance', 'Income', '#3B82F6', 'computer'],
   ['Business Income', 'Income', '#3B82F6', 'storefront'],
@@ -102,6 +112,12 @@ const DEFAULT_CATEGORIES = [
   ['Transfer', 'Transfer', '#78909C', 'arrow_forward'],
   ['Credit Card', 'Transfer', '#F59E0B', 'credit_card'],
 ];
+
+const INVESTMENT_CATEGORIES = new Set([
+  'Investment Outflow', 'Investment', 'Investments', 'Emergency Fund',
+  'Mutual Funds', 'Stocks & Equity', 'Fixed Deposit & RD', 'Gold & Metals',
+  'Retirement & NPS', 'Real Estate', 'Crypto & Digital Assets',
+]);
 
 /*
  * The amount in a bank alert.
@@ -281,8 +297,8 @@ const DEFAULT_SMS_RULES = [
 ];
 
 // Application and Database Schema Version tracking
-export const APP_VERSION_NAME = '1.0.5';
-export const APP_VERSION_CODE = 11;
+export const APP_VERSION_NAME = '1.0.7';
+export const APP_VERSION_CODE = 13;
 
 const DEFAULT_SETTINGS = {
   locale: 'en-IN',
@@ -383,11 +399,13 @@ const RECORD_TYPE_ALIASES = {
   stock_transaction: 'stock_transaction',
   trades: 'stock_transaction',
   asset_accounts: 'account',
+  asset_account: 'account',
   accounts: 'account',
   account: 'account',
   loans: 'loan',
   loan: 'loan',
   credit_cards: 'card',
+  credit_card: 'card',
   cards: 'card',
   card: 'card',
   subscriptions: 'subscription',
@@ -1090,7 +1108,29 @@ export const MIGRATIONS = [
     up(db) {
       seedDefaultRules(db);
     },
-  }
+  },
+  {
+    versionCode: 12,
+    versionName: '1.0.6',
+    description: 'Forgot PIN fix, investment categories expansion, and account/card dropdown fix',
+    up(db) {
+      seedDefaultRules(db);
+      for (const row of DEFAULT_CATEGORIES) {
+        db.run(
+          'INSERT OR IGNORE INTO custom_categories (name, type, color, icon) VALUES (?, ?, ?, ?)',
+          row,
+        );
+      }
+    },
+  },
+  {
+    versionCode: 13,
+    versionName: '1.0.7',
+    description: 'SBI UPI alert parsing, currency-less amount extraction, and rule creation fixes',
+    up(db) {
+      seedDefaultRules(db);
+    },
+  },
 ];
 
 export function getDatabaseVersion(db) {
@@ -1814,8 +1854,9 @@ function saveRecord(db, args) {
       record.tenure_months = 12;
     }
   }
-  if (table === 'credit_cards' && !record.bank) {
-    record.bank = record.card_name || 'Bank';
+  if (table === 'credit_cards') {
+    if (!record.bank) record.bank = record.card_name || 'Bank';
+    if (record.total_limit === undefined) record.total_limit = 0;
   }
   if (table === 'subscriptions' && !record.next_billing_date) {
     record.next_billing_date = today();
@@ -2905,7 +2946,7 @@ export function learnMerchant(db, merchant, category, transactionType = '', isIn
   const applied = db.all('SELECT id FROM transactions WHERE merchant_key = ?', [key]).length;
   db.run('UPDATE transactions SET category = ? WHERE merchant_key = ?', [category, key]);
   if (txType) {
-    const isInvest = isInvestOutflow || txType === 'Investment' || category === 'Investment Outflow' ? 1 : 0;
+    const isInvest = isInvestOutflow || txType === 'Investment' || category === 'Investment Outflow' || INVESTMENT_CATEGORIES.has(category) ? 1 : 0;
     const isIgnored = txType === 'Ignore' || category === 'Ignore' ? 1 : 0;
     db.run('UPDATE transactions SET type = ?, is_investment_outflow = ?, is_ignored = ? WHERE merchant_key = ?', [txType, isInvest, isIgnored, key]);
   }
@@ -2919,7 +2960,7 @@ function saveTransaction(db, args) {
   if (!(amount > 0)) return fail('AMOUNT_INVALID', 'Enter an amount greater than zero.');
 
   const merchant = String(transaction.merchant ?? '').trim();
-  const isInvest = transaction.is_investment_outflow || transaction.type === 'Investment' || transaction.category === 'Investment Outflow' ? 1 : 0;
+  const isInvest = transaction.is_investment_outflow || transaction.type === 'Investment' || transaction.category === 'Investment Outflow' || INVESTMENT_CATEGORIES.has(transaction.category) ? 1 : 0;
   const isIgnored = transaction.is_ignored || transaction.type === 'Ignore' || transaction.category === 'Ignore' ? 1 : 0;
   const isDuplicate = transaction.is_duplicate ? 1 : 0;
   const rawSms = String(transaction.raw_sms ?? '');
@@ -3275,7 +3316,7 @@ function mergeLedgerTransactions(db, args = {}) {
   const mergedDesc = String(args.description !== undefined ? args.description : (primary.description || secondary.description || '')).trim();
   const mergedAccountId = args.account_id !== undefined ? (args.account_id ? Number(args.account_id) : null) : (primary.account_id || secondary.account_id);
   const mergedCardId = args.card_id !== undefined ? (args.card_id ? Number(args.card_id) : null) : (primary.card_id || secondary.card_id);
-  const isInvest = mergedType === 'Investment' || mergedCategory === 'Investment Outflow' ? 1 : 0;
+  const isInvest = mergedType === 'Investment' || mergedCategory === 'Investment Outflow' || INVESTMENT_CATEGORIES.has(mergedCategory) ? 1 : 0;
 
   db.transaction(() => {
     db.run(
@@ -4752,6 +4793,70 @@ export function mergeAccounts(db, args = {}) {
   };
 }
 
+export function convertRecord(db, args = {}) {
+  const fromType = args.from_type;
+  const id = Number(args.id);
+  if (!id || (fromType !== 'account' && fromType !== 'card')) {
+    return fail('BAD_REQUEST', 'Valid from_type (account|card) and id required.');
+  }
+
+  if (fromType === 'account') {
+    const acc = db.get('SELECT * FROM asset_accounts WHERE id = ?', [id]);
+    if (!acc) return fail('ACCOUNT_NOT_FOUND', 'Bank account could not be found.');
+
+    const bank = acc.institution || 'Bank';
+    const last4 = String(acc.account_number || acc.debit_card_last_4 || '').trim().slice(-4);
+    const cardName = acc.name || `${bank} Credit Card`;
+    const balance = Math.abs(Number(acc.balance) || 0);
+
+    let newCardId;
+    db.transaction(() => {
+      const res = db.run(
+        'INSERT INTO credit_cards (member_id, card_name, bank, last_4, total_limit, available_limit, current_balance, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [acc.member_id || 1, cardName, bank, last4, 0, null, balance, new Date().toISOString()],
+      );
+      newCardId = res.lastInsertRowid;
+
+      // Migrate all linked transactions to the new credit card
+      db.run('UPDATE transactions SET card_id = ?, account_id = NULL WHERE account_id = ?', [newCardId, id]);
+
+      // Delete the old account
+      db.run('DELETE FROM asset_accounts WHERE id = ?', [id]);
+    });
+
+    return { status: 'success', new_id: newCardId, target_type: 'card' };
+  }
+
+  if (fromType === 'card') {
+    const card = db.get('SELECT * FROM credit_cards WHERE id = ?', [id]);
+    if (!card) return fail('CARD_NOT_FOUND', 'Credit card could not be found.');
+
+    const bank = card.bank || 'Bank';
+    const last4 = String(card.last_4 || '').trim().slice(-4);
+    const accName = card.card_name || `${bank} Account`;
+    const balance = Math.abs(Number(card.current_balance) || 0);
+
+    let newAccId;
+    db.transaction(() => {
+      const res = db.run(
+        'INSERT INTO asset_accounts (member_id, name, category, institution, account_number, debit_card_last_4, balance) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [card.member_id || 1, accName, 'Bank', bank, '', last4, balance],
+      );
+      newAccId = res.lastInsertRowid;
+
+      // Migrate all linked transactions to the new bank account
+      db.run('UPDATE transactions SET account_id = ?, card_id = NULL WHERE card_id = ?', [newAccId, id]);
+
+      // Delete the old card
+      db.run('DELETE FROM credit_cards WHERE id = ?', [id]);
+    });
+
+    return { status: 'success', new_id: newAccId, target_type: 'account' };
+  }
+
+  return fail('BAD_REQUEST', 'Unknown conversion type.');
+}
+
 export function ignoreDiscoveredAccount(db, args = {}) {
   const last4 = String(args.last_4 || '').trim();
   const issuer = String(args.issuer || args.bank || args.institution || '').trim();
@@ -5224,6 +5329,7 @@ const ACTIONS = {
   resync_account_from_sms: resyncAccountFromSms,
   merge_cards: mergeCards,
   merge_accounts: mergeAccounts,
+  convert_record: convertRecord,
   ignore_discovered_account: ignoreDiscoveredAccount,
   restore_discovered_account: restoreDiscoveredAccount,
   get_ignored_discovered_accounts: getIgnoredDiscoveredAccounts,
@@ -5308,4 +5414,4 @@ export async function handleDbAction(args = {}) {
   }
 }
 
-export { BACKUP_TABLES, DEFAULT_CATEGORIES, DEFAULT_SETTINGS, RECORD_TYPES, deleteDatabase };
+export { BACKUP_TABLES, DEFAULT_CATEGORIES, DEFAULT_SETTINGS, INVESTMENT_CATEGORIES, RECORD_TYPES, deleteDatabase };
