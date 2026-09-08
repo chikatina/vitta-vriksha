@@ -590,7 +590,7 @@ const COMPLETED_MOVEMENT = new RegExp(
   '(?:rs\\.?|inr|₹)\\s*\\.?\\s*[\\d,]+(?:\\.\\d+)?\\s*(?:has been\\s+|was\\s+)?'
   + '(?:spent|debited|credited|deducted|withdrawn|paid|deposited)\\b'
   + '|\\b(?:spent|debited|credited|deducted|withdrawn|paid|deposited)[\\s:]+'
-  + '(?:of\\s+|from\\s+|at\\s+|on\\s+|via\\s+|for\\s+|by\\s+|on\\s+\\d{1,2}[-/](?:[A-Za-z]{3}|\\d{1,2})[-/]\\d{2,4}\\s+(?:by|for|of|with)\\s+)?(?:rs\\.?|inr|₹)\\s*\\.?\\s*[\\d,]',
+  + '(?:of\\s+|from\\s+|at\\s+|on\\s+|via\\s+|for\\s+|by\\s+|on\\s+\\d{1,2}[-/](?:[A-Za-z]{3}|\\d{1,2})[-/]\\d{2,4}\\s+(?:by|for|of|with)\\s+)?(?:rs\\.?|inr|₹)?\\s*\\.?\\s*[\\d,]',
   'i',
 );
 
@@ -646,17 +646,17 @@ export function notATransaction(text) {
  * problem and not a learning one.
  */
 const MERCHANT_PATTERNS = [
-  /\bat\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s+(?:on|dt\.?|avl|bal|using|via|ref|txn|for|through)\b/i,
+  /\bat\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s+(?:on|dt\.?|avl|bal|using|via|ref|refno|rrn|txn|for|through)\b/i,
   /\bupi\/([\w .@\-]{2,30}?)\s+(?:on|ref|txn)\b/i,
   /\b(?:vpa|to vpa)\s+([^\s.,;]+)/i,
   /\bto\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s+on\s+\d/i,
-  /\b(?:paid|transferred|sent)\s+to\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)(?:\s+(?:on|dt\.?|avl|bal|using|via|ref|txn|for|through)\b|[.,;]|$)/i,
+  /\b(?:paid|transferred|sent|trf)\s+to\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)(?:\s+(?:on|dt\.?|avl|bal|using|via|ref|refno|rrn|txn|for|through)\b|[.,;]|$)/i,
   /\btowards\s+(?:ach\s*[dc*:\s/-]*|nach[*:\s/-]*|cms[*:\s/-]*|ecs[*:\s/-]*|mandate[*:\s/-]*|si[*:\s/-]*)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*(?:umrn|ref|[.,;]|$)/i,
   /\binfo[:\s]*(?:ach\s*[dc*:\s/-]*|nach[*:\s/-]*|cms[*:\s/-]*|ecs[*:\s/-]*|mandate[*:\s/-]*|upi\/)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*[.;-]/i,
   /\bat\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*[.;]/i,
   /\b(?:biller|merchant|beneficiary|party)[:\s]+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s*[.;\n\r]/i,
   /\bfrom\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s+(?:on|dt\.?|avl|bal|using|via)\b/i,
-  /\bfor\s+(?:ach\s*[dc*:\s/-]*|nach[*:\s/-]*|cms[*:\s/-]*|ecs[*:\s/-]*|mandate[*:\s/-]*)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)(?:\s+(?:on|dt\.?|avl|bal|using|via|ref|txn)\b|[.,;]|$)/i,
+  /\bfor\s+(?:ach\s*[dc*:\s/-]*|nach[*:\s/-]*|cms[*:\s/-]*|ecs[*:\s/-]*|mandate[*:\s/-]*)?([A-Za-z0-9][\w .&*'()\-/]{1,44}?)(?:\s+(?:on|dt\.?|avl|bal|using|via|ref|refno|rrn|txn)\b|[.,;]|$)/i,
 ];
 
 /*
@@ -670,6 +670,7 @@ const NOT_A_MERCHANT = new RegExp(
   // Nothing trades under a name beginning "your". That opening belongs to the bank
   // talking about you, as in "towards your last month spends".
   '^(?:your|the|my)\\b'
+  + '|^other services\\b|^customer care\\b|^helpline\\b|^toll[- ]free\\b'
   + '|^(?:your |the |a |my )?(?:a/c|ac|acct|account|card|credit card|debit card|bank|wallet'
   + '|upi|vpa|ref|txn|payment|amount|balance|limit'
   + '|ach|nach|ecs|cms|mandate|standing instruction|si|neft|rtgs|imps|enach|e-nach)\\b'

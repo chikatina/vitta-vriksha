@@ -60,6 +60,7 @@ describe('merchants.js keyword index & merchant parser', () => {
     assert.equal(extractMerchant('Rs 200 debited info:NETFLIX;'), 'NETFLIX');
     assert.equal(extractMerchant('A/c debited by Rs 5000. Info: ACH D- HDFC MUTUAL FUND;'), 'HDFC MUTUAL FUND');
     assert.equal(extractMerchant('Payment of Rs 1000 credited to your account'), '');
+    assert.equal(extractMerchant('Dear UPI user A/C X8885 debited by 440.00 on date 24Jun26 trf to MINA SHIVAJI BHU Refno 617591214754 If not u? call-1800111109 for other services-18001234-SBI '), 'MINA SHIVAJI BHU');
   });
 
   it('categorizes merchant via keyword index', () => {
@@ -105,6 +106,13 @@ describe('sms.js SMS classifier and dispatcher', () => {
     const credit = await parseSmsText('INR 50,000.00 credited to A/c xx1234 as Salary for August on 01-Aug-2026.');
     assert.equal(credit.type, 'Income');
     assert.equal(credit.date, '2026-08-01');
+
+    const sbiUpiDebit = await parseSmsText('Dear UPI user A/C X8885 debited by 440.00 on date 24Jun26 trf to MINA SHIVAJI BHU Refno 617591214754 If not u? call-1800111109 for other services-18001234-SBI ');
+    assert.equal(sbiUpiDebit.amount, 440);
+    assert.equal(sbiUpiDebit.type, 'Expense');
+    assert.equal(sbiUpiDebit.merchant, 'MINA SHIVAJI BHU');
+    assert.equal(sbiUpiDebit.date, '2026-06-24');
+    assert.equal(sbiUpiDebit.account_last4, '8885');
 
     // Missing / malformed date in SMS falls back to receivedAt timestamp
     const mayTimestamp = new Date('2026-05-18T10:30:00Z').getTime();

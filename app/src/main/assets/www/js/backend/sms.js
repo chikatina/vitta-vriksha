@@ -35,6 +35,9 @@ export function extractTransactionAmount(text) {
     /(?:credited|deposited|received|refunded)\s*(?:with|of|for|by)?\s*[:\s-]*\s*(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i,
     /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:has\s+been|was)?\s*(?:credited|deposited|received|refunded)/i,
     /(?:txn|tx)\s*(?:of)?\s*[:\s-]*\s*(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i,
+    // Currency-omitted alerts where amount follows preposition: e.g. "debited by 440.00", "credited by 500.00"
+    /(?:spent|debited|paid|withdrawn|charged|sent|used|deducted|transfer(?:red)?)\s+(?:of|for|with|by)\s+[:\s-]*([0-9,]+(?:\.[0-9]+)?)/i,
+    /(?:credited|deposited|received|refunded)\s+(?:with|of|for|by)\s+[:\s-]*([0-9,]+(?:\.[0-9]+)?)/i,
   ];
 
   for (const pat of verbPatterns) {
@@ -63,8 +66,7 @@ export function extractTransactionAmount(text) {
 }
 
 const DATE_PATTERNS = [
-  /\bon\s+(\d{1,2})[-/]([A-Za-z]{3}|\d{1,2})[-/](\d{2,4})\b/i,
-  /\b(?:dt\.?|dated)\s+(\d{1,2})[-/]([A-Za-z]{3}|\d{1,2})[-/](\d{2,4})\b/i,
+  /\b(?:on\s+date|on|dt\.?|dated)\s+(\d{1,2})[-/]?([A-Za-z]{3}|\d{1,2})[-/]?(\d{2,4})\b/i,
   /\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b/,
 ];
 
@@ -185,7 +187,11 @@ function triggerMatches(trigger, text) {
  * many vendors it holds. Neither tier walks a list of rules per message.
  */
 const INCOME_CATEGORIES = new Set(['Salary', 'Freelance', 'Interest & Dividends', 'Refunds & Cashback']);
-const INVESTMENT_CATEGORIES = new Set(['Investment Outflow', 'Investment', 'Investments']);
+const INVESTMENT_CATEGORIES = new Set([
+  'Investment Outflow', 'Investment', 'Investments', 'Emergency Fund',
+  'Mutual Funds', 'Stocks & Equity', 'Fixed Deposit & RD', 'Gold & Metals',
+  'Retirement & NPS', 'Real Estate', 'Crypto & Digital Assets',
+]);
 const TRANSFER_CATEGORIES = new Set(['Transfer', 'Credit Card', 'Investment Outflow']);
 
 /*
