@@ -30,10 +30,10 @@ sequenceDiagram
 
 ### 1.1 Native Capture Layer
 - **Source Files**: 
-  - [SmsReceiver.kt](file:///home/amit/projects/vitta-vriksha/app/src/main/java/com/chikatistudio/vittavriksha/SmsReceiver.kt)
-  - [TransactionNotificationListener.kt](file:///home/amit/projects/vitta-vriksha/app/src/main/java/com/chikatistudio/vittavriksha/TransactionNotificationListener.kt)
-  - [AlertQueue.kt](file:///home/amit/projects/vitta-vriksha/app/src/main/java/com/chikatistudio/vittavriksha/AlertQueue.kt)
-  - [WebAppInterface.kt](file:///home/amit/projects/vitta-vriksha/app/src/main/java/com/chikatistudio/vittavriksha/WebAppInterface.kt)
+  - [SmsReceiver.kt](../app/src/main/java/com/chikatistudio/vittavriksha/SmsReceiver.kt)
+  - [TransactionNotificationListener.kt](../app/src/main/java/com/chikatistudio/vittavriksha/TransactionNotificationListener.kt)
+  - [AlertQueue.kt](../app/src/main/java/com/chikatistudio/vittavriksha/AlertQueue.kt)
+  - [WebAppInterface.kt](../app/src/main/java/com/chikatistudio/vittavriksha/WebAppInterface.kt)
 - **Coarse Filter (`looksFinancial`)**:
   - Currency pattern: `/(?:rs\.?|inr|₹)\s*\.?\s*\d/i`
   - Marker tokens: `debited`, `credited`, `spent`, `sent rs`, `received`, `withdrawn`, `payment`.
@@ -45,9 +45,9 @@ sequenceDiagram
 
 ### 1.2 JavaScript Classification Pipeline
 - **Source Files**:
-  - [sms.js](file:///home/amit/projects/vitta-vriksha/app/src/main/assets/www/js/backend/sms.js)
-  - [merchants.js](file:///home/amit/projects/vitta-vriksha/app/src/main/assets/www/js/backend/merchants.js)
-  - [database.js](file:///home/amit/projects/vitta-vriksha/app/src/main/assets/www/js/backend/database.js)
+  - [sms.js](../app/src/main/assets/www/js/backend/sms.js)
+  - [merchants.js](../app/src/main/assets/www/js/backend/merchants.js)
+  - [database.js](../app/src/main/assets/www/js/backend/database.js)
 - **Context Builder (`buildClassificationContext`)**:
   - Loads active `sms_rules` ordered by type (`Ignore` rules prioritized first, then ID ascending).
   - Loads `merchant_rules` into memory map (`merchantMap`).
@@ -265,7 +265,7 @@ CREATE TABLE IF NOT EXISTS ignored_alerts (
 
 ## 5. SMS Dump Sanitization & Redaction Protocol
 
-Before processing personal SMS dumps or submitting them for dataset construction, sensitive personal identifiers (PII) must be masked. The project maintains an existing reference implementation in [scripts/clean-sms.mjs](file:///home/amit/projects/vitta-vriksha/scripts/clean-sms.mjs).
+Before processing personal SMS dumps or submitting them for dataset construction, sensitive personal identifiers (PII) must be masked. The project maintains an existing reference implementation in [scripts/clean-sms.mjs](../scripts/clean-sms.mjs).
 
 ### 5.1 Redaction Transformations
 1. **Account / Card / Tag Numbers**:
@@ -409,10 +409,10 @@ graph TD
 The repository contains an extensive automated test suite running on Node.js without Android runtime dependencies.
 
 ### 8.1 Key Test Files
-- [test/merchants_sms.test.mjs](file:///home/amit/projects/vitta-vriksha/test/merchants_sms.test.mjs): Core tests for `merchantKey`, `notATransaction`, `extractMerchant`, `categoryForMerchant`, `parseSmsText`.
-- [test/installment_emi_ignore_rules.test.mjs](file:///home/amit/projects/vitta-vriksha/test/installment_emi_ignore_rules.test.mjs): Tests for EMI classification, ignore rules, duplicate marking.
-- [test/recurring_loan_classification.test.mjs](file:///home/amit/projects/vitta-vriksha/test/recurring_loan_classification.test.mjs): Detection of recurring loans, clubbed mandates, credit card commitments.
-- [test/sms_rule_tester_view.test.mjs](file:///home/amit/projects/vitta-vriksha/test/sms_rule_tester_view.test.mjs): UI test harness for manual SMS rule testing.
+- [test/merchants_sms.test.mjs](../test/merchants_sms.test.mjs): Core tests for `merchantKey`, `notATransaction`, `extractMerchant`, `categoryForMerchant`, `parseSmsText`.
+- [test/installment_emi_ignore_rules.test.mjs](../test/installment_emi_ignore_rules.test.mjs): Tests for EMI classification, ignore rules, duplicate marking.
+- [test/recurring_loan_classification.test.mjs](../test/recurring_loan_classification.test.mjs): Detection of recurring loans, clubbed mandates, credit card commitments.
+- [test/sms_rule_tester_view.test.mjs](../test/sms_rule_tester_view.test.mjs): UI test harness for manual SMS rule testing.
 
 ### 8.2 Executing Tests
 ```bash
