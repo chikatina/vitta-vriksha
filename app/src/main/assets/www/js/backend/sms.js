@@ -23,7 +23,7 @@ import { fail } from './errors.js';
 
 const DEFAULT_AMOUNT_RE = /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i;
 const FALLBACK_AMOUNT_RE = /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i;
-const ACCOUNT_RE = /(?:card|a\/c|acct|account|wallet|vpa)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s]*([0-9]{4})\b/i;
+const ACCOUNT_RE = /(?:card|a\/c|acct|account|wallet|vpa)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s]*([0-9]{3,4})\b/i;
 
 export function extractTransactionAmount(text) {
   const t = String(text || '');
@@ -276,12 +276,30 @@ export function extractDescription(text) {
   return '';
 }
 
+/**
+ * Isolates the primary clause describing what happened to the user's account.
+ * Modern Indian banking alerts often mention both accounts (e.g. "Your a/c XX2219 is credited
+ * for Rs. 2500 and debited from a/c 1528" or "Acct XX386 debited for Rs 10; MERCHANT credited").
+ * Isolating the primary clause ensures counterparty clauses do not invert transaction direction.
+ */
+export function extractPrimaryClause(text) {
+  if (!text) return '';
+  const counterpartyRe = /(?:[\s,;&]+(?:and|&)\s+(?:debited\s+from|credited\s+to)\b|;\s*[^;.]+?\s+(?:credited|debited)\b|[\s,;&]+(?:and|&)\s+[^;.]+?\s+(?:credited|debited)\b)/i;
+  const match = counterpartyRe.exec(text);
+  if (match) {
+    return text.slice(0, match.index).trim();
+  }
+  return text;
+}
+
 /** Classifies one message against the stored rules and everything known about the vendor. */
 export async function parseSmsText(text, sender = '', receivedAt = null, context = null) {
   const db = context?.db || (await getDatabase());
   if (!context) initDb(db);
 
   const rules = context?.rules || db.all("SELECT * FROM sms_rules WHERE is_active = 1 ORDER BY CASE WHEN transaction_type = 'Ignore' THEN 0 ELSE 1 END, id ASC");
+  const primaryText = extractPrimaryClause(text);
+  const primaryLower = primaryText.toLowerCase();
   const lower = String(text).toLowerCase();
   const merchant = extractMerchant(text);
   const key = merchantKey(merchant);
@@ -437,68 +455,114 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
     };
   }
 
-  for (const rule of rules) {
-    if (rule.transaction_type === 'Ignore') continue;
-    const trigger = String(rule.body_trigger || '').toLowerCase();
-    if (!trigger || !triggerMatches(trigger, lower)) continue;
-    // A rule that names a bank belongs to that bank. An empty keyword means the wording
-    // is common enough that whoever sent it does not matter.
-    const wants = String(rule.sender_keyword || '').toLowerCase();
-    if (wants && senderText && !senderText.includes(wants)) continue;
+  // Pass 1: match rules against primary clause (action on user's account).
+  // If primary clause matches, counterparty clauses cannot invert cashflow.
+  let matchingRule = null;
+  if (primaryLower && primaryLower !== lower) {
+    for (const rule of rules) {
+      if (rule.transaction_type === 'Ignore') continue;
+      const trigger = String(rule.body_trigger || '').toLowerCase();
+      if (!trigger || !triggerMatches(trigger, primaryLower)) continue;
+      const wants = String(rule.sender_keyword || '').toLowerCase();
+      if (wants && senderText && !senderText.includes(wants)) continue;
+      matchingRule = rule;
+      break;
+    }
+  }
 
-    const match = compile(rule.regex_pattern).exec(text);
-    const parsedAmount = match ? toAmount(match[1]) : extractTransactionAmount(text);
-
-    // A rule names the bank's wording. What was actually bought is the vendor's business,
-    // so anything known about the vendor outranks the rule's standing guess.
-    const isTransferRule = rule.transaction_type === 'Transfer';
-    const resolvedType = (known.source === 'learned' && known.type)
-      ? known.type
-      : (isTransferRule ? 'Transfer' : (known.type || (known.category === 'Investment Outflow' ? 'Investment' : rule.transaction_type)));
-    const resolvedCategory = (known.source === 'learned' && categoryFits(known.category, resolvedType))
-      ? known.category
-      : (isTransferRule ? rule.category_name : (usable(known, resolvedType) ? known.category : rule.category_name));
-    return {
-      status: 'classified',
-      matched_rule: rule.rule_name,
-      amount: parsedAmount,
-      type: resolvedType,
-      category: resolvedCategory,
-      category_source: (known.source === 'learned' || (!isTransferRule && usable(known, resolvedType))) ? known.source : 'rule',
-      merchant,
-      merchant_key: key,
-      account_last4: accountLast4,
-      account_issuer: accountInfo.issuer,
-      is_food_card: accountInfo.isFoodCard,
-      is_credit_card: accountInfo.isCreditCard,
-      card_variant: accountInfo.cardVariant,
-      available_limit: accountInfo.available_limit,
-      total_limit: accountInfo.total_limit,
-      current_outstanding: accountInfo.current_outstanding,
-      min_due: accountInfo.min_due,
-      account_balance: accountInfo.account_balance,
-      account_id: resolvedAccount.account_id,
-      card_id: resolvedAccount.card_id,
-      sender,
-      description: descriptionFromSms,
-      raw_sms: text,
-      date: dateFromSms,
-    };
+  // Pass 2: check full text if primary clause didn't isolate or match a rule
+  if (!matchingRule) {
+    for (const rule of rules) {
+      if (rule.transaction_type === 'Ignore') continue;
+      const trigger = String(rule.body_trigger || '').toLowerCase();
+      if (!trigger || !triggerMatches(trigger, lower)) continue;
+      const wants = String(rule.sender_keyword || '').toLowerCase();
+      if (wants && senderText && !senderText.includes(wants)) continue;
+      matchingRule = rule;
+      break;
+    }
   }
 
   const fallbackAmount = extractTransactionAmount(text);
-  const isCredit = lower.includes('credited') || lower.includes('received') || lower.includes('deposited');
-  const guess = isCredit ? 'Salary' : 'Shopping';
+  const checkText = primaryLower || lower;
+  const isCredit = checkText.includes('credited') || checkText.includes('received') || checkText.includes('deposited');
+  const hasSalarySignal = /\b(?:salary|payroll|stipend|wages|sal\s+for|monthly\s+pay)\b/i.test(checkText);
+  const guess = isCredit ? (hasSalarySignal ? 'Salary' : 'Other Income') : 'Shopping';
   const defaultType = known.type || (known.category === 'Investment Outflow' ? 'Investment' : (isCredit ? 'Income' : 'Expense'));
+
+  let matchedRuleName = 'Default Classifier';
+  let finalAmount = fallbackAmount;
+  let finalType = defaultType;
+  let finalCategory = usable(known, defaultType) ? known.category : guess;
+  let categorySource = known.source || 'guess';
+
+  if (matchingRule) {
+    const rule = matchingRule;
+    const match = compile(rule.regex_pattern).exec(text);
+    finalAmount = match ? toAmount(match[1]) : extractTransactionAmount(text);
+    const isTransferRule = rule.transaction_type === 'Transfer';
+    finalType = (known.source === 'learned' && known.type)
+      ? known.type
+      : (isTransferRule ? 'Transfer' : (known.type || (known.category === 'Investment Outflow' ? 'Investment' : rule.transaction_type)));
+    finalCategory = (known.source === 'learned' && categoryFits(known.category, finalType))
+      ? known.category
+      : (isTransferRule ? rule.category_name : (usable(known, finalType) ? known.category : rule.category_name));
+    matchedRuleName = rule.rule_name;
+    categorySource = (known.source === 'learned' || (!isTransferRule && usable(known, finalType))) ? known.source : 'rule';
+  }
+
+  // Inter-account transfer check:
+  // 1. Destination is a known user account (e.g. "debited ... credited to a/c XX8386")
+  if (finalType === 'Expense') {
+    const targetMatch = /(?:credited to|transferred to|sent to)\s+(?:a\/c|acct|account)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\b/i.exec(text);
+    if (targetMatch && targetMatch[1]) {
+      const targetSuffix = targetMatch[1].toLowerCase();
+      const originAcc = (accountLast4 || '').toLowerCase();
+      if (targetSuffix !== originAcc) {
+        const userAccounts = context?.cachedAccounts || db.all('SELECT account_number FROM asset_accounts');
+        const isUserAcc = userAccounts.some((a) => {
+          const num = String(a.account_number || '').toLowerCase();
+          return num && (num.endsWith(targetSuffix) || targetSuffix.endsWith(num));
+        });
+        if (isUserAcc) {
+          finalType = 'Transfer';
+          finalCategory = 'Transfer';
+          matchedRuleName = 'Target account transfer';
+        }
+      }
+    }
+  }
+
+  // 2. Exact UTR counterpart already in database
+  const incomingUtr = extractUtr(text);
+  if (incomingUtr && finalAmount > 0 && (finalType === 'Expense' || finalType === 'Income')) {
+    const isOut = finalType === 'Expense';
+    const opp = db.get(
+      "SELECT id, type, category, raw_sms FROM transactions WHERE amount = ? AND raw_sms IS NOT NULL AND raw_sms != ''",
+      [finalAmount],
+    );
+    if (opp && opp.type !== 'Transfer') {
+      const oppUtr = extractUtr(opp.raw_sms);
+      if (oppUtr && oppUtr === incomingUtr) {
+        const oppIsOut = opp.type === 'Expense' || opp.type === 'Investment';
+        if (oppIsOut !== isOut) {
+          finalType = 'Transfer';
+          finalCategory = 'Transfer';
+          matchedRuleName = 'Reconciled transfer';
+          db.run("UPDATE transactions SET type = 'Transfer', category = 'Transfer' WHERE id = ?", [opp.id]);
+        }
+      }
+    }
+  }
 
   return {
     status: 'classified',
-    matched_rule: 'Default Classifier',
-    amount: fallbackAmount,
-    type: defaultType,
-    category: usable(known, defaultType) ? known.category : guess,
-    category_source: known.source || 'guess',
-    merchant,
+    matched_rule: matchedRuleName,
+    amount: finalAmount,
+    type: finalType,
+    category: finalCategory,
+    category_source: categorySource,
+    merchant: finalType === 'Transfer' ? (merchant || 'Transfer') : merchant,
     merchant_key: key,
     account_last4: accountLast4,
     account_issuer: accountInfo.issuer,
@@ -519,6 +583,115 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
   };
 }
 
+/**
+ * Reconciles opposite debit and credit transactions that represent the same money transfer.
+ * 1. Checks in-batch matches by UTR (UPI Ref / RRN).
+ * 2. Checks DB matches by UTR against opposite-direction transactions.
+ * 3. Checks explicit beneficiary account mentions (e.g. "debited ... credited to a/c XX8386").
+ */
+export function reconcileTransfers(rows, db, { memberId = null, cachedAccounts = null } = {}) {
+  if (!rows || !rows.length) return;
+
+  const existingAccounts = cachedAccounts || (db ? db.all('SELECT id, account_number, debit_card_last_4, name FROM asset_accounts') : []);
+  const userAccountNumbers = new Set(
+    existingAccounts.flatMap((a) => {
+      const nums = [];
+      if (a.account_number) {
+        nums.push(a.account_number.toLowerCase());
+        if (a.account_number.length >= 3) nums.push(a.account_number.slice(-3).toLowerCase());
+        if (a.account_number.length >= 4) nums.push(a.account_number.slice(-4).toLowerCase());
+      }
+      return nums;
+    }),
+  );
+
+  // Group rows with UTR
+  const byUtr = new Map();
+  for (const row of rows) {
+    const body = row.body || row.raw_sms || '';
+    const utr = extractUtr(body);
+    if (!utr) continue;
+    if (!byUtr.has(utr)) byUtr.set(utr, []);
+    byUtr.get(utr).push(row);
+  }
+
+  // Pass 1: In-batch UTR pairing
+  for (const [utr, list] of byUtr.entries()) {
+    const outflows = list.filter((r) => r.classified.type === 'Expense' || r.classified.type === 'Investment');
+    const inflows = list.filter((r) => r.classified.type === 'Income');
+
+    for (const outRow of outflows) {
+      if (outRow.classified.type === 'Transfer') continue;
+      const matchingIn = inflows.find((inRow) =>
+        inRow.classified.type !== 'Transfer'
+        && Math.abs(inRow.classified.amount - outRow.classified.amount) < 0.01,
+      );
+      if (matchingIn) {
+        outRow.classified.type = 'Transfer';
+        outRow.classified.category = 'Transfer';
+        outRow.classified.matched_rule = 'Reconciled transfer';
+        outRow.classified.merchant = outRow.classified.merchant || 'Transfer';
+
+        matchingIn.classified.type = 'Transfer';
+        matchingIn.classified.category = 'Transfer';
+        matchingIn.classified.matched_rule = 'Reconciled transfer';
+        matchingIn.classified.merchant = matchingIn.classified.merchant || 'Transfer';
+      }
+    }
+  }
+
+  // Pass 2: DB cross-reconciliation for any remaining rows with UTR
+  if (db) {
+    for (const row of rows) {
+      if (row.classified.type === 'Transfer') continue;
+      const body = row.body || row.raw_sms || '';
+      const utr = extractUtr(body);
+      if (!utr) continue;
+
+      const isOut = row.classified.type === 'Expense' || row.classified.type === 'Investment';
+
+      const candidates = db.all(
+        "SELECT id, type, category, raw_sms FROM transactions WHERE amount = ? AND raw_sms IS NOT NULL AND raw_sms != ''",
+        [row.classified.amount],
+      );
+      for (const cand of candidates) {
+        const candUtr = extractUtr(cand.raw_sms);
+        if (candUtr && candUtr === utr) {
+          const candIsOut = cand.type === 'Expense' || cand.type === 'Investment';
+          if (candIsOut !== isOut) {
+            row.classified.type = 'Transfer';
+            row.classified.category = 'Transfer';
+            row.classified.matched_rule = 'Reconciled transfer';
+            row.classified.merchant = row.classified.merchant || 'Transfer';
+
+            db.run("UPDATE transactions SET type = 'Transfer', category = 'Transfer' WHERE id = ?", [cand.id]);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Pass 3: Single-leg beneficiary detection (e.g. "debited for ... credited to a/c XX8386")
+  for (const row of rows) {
+    if (row.classified.type === 'Transfer') continue;
+    const body = row.body || row.raw_sms || '';
+    if (row.classified.type === 'Expense') {
+      const targetMatch = /(?:credited to|transferred to|sent to)\s+(?:a\/c|acct|account)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\b/i.exec(body);
+      if (targetMatch && targetMatch[1]) {
+        const targetSuffix = targetMatch[1].toLowerCase();
+        const originAcc = (row.classified.account_last4 || '').toLowerCase();
+        if (targetSuffix !== originAcc && userAccountNumbers.has(targetSuffix)) {
+          row.classified.type = 'Transfer';
+          row.classified.category = 'Transfer';
+          row.classified.matched_rule = 'Target account transfer';
+          row.classified.merchant = row.classified.merchant || 'Transfer';
+        }
+      }
+    }
+  }
+}
+
 async function importInbox(db, { days = 0, memberId = 1 } = {}) {
   const currency = currentCurrency(db);
   const messages = readSmsInbox(days);
@@ -530,10 +703,13 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
 
   const ctx = buildClassificationContext(db, memberId);
   const txByDateAmount = new Map();
-  for (const row of db.all('SELECT id, date, amount, raw_sms FROM transactions WHERE amount > 0')) {
+  for (const row of db.all('SELECT id, date, amount, type, raw_sms FROM transactions WHERE amount > 0')) {
     const key = `${row.date}:${row.amount}`;
     if (!txByDateAmount.has(key)) txByDateAmount.set(key, []);
-    txByDateAmount.get(key).push(row);
+    txByDateAmount.get(key).push({
+      ...row,
+      utr: extractUtr(row.raw_sms),
+    });
   }
 
   let imported = 0;
@@ -560,13 +736,22 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
       continue;
     }
 
-    // Two messages for one payment must not become two transactions. This is left for
-    // review rather than dropped, because a genuine second purchase of the same amount on
-    // the same day looks identical from here and only the user can tell them apart.
+    // Two messages for one payment must not become two transactions.
+    // Duplicate detection considers cashflow direction and account so transfers are not dropped.
     const date = isoFromMillis(message.received_at) || classified.date;
-    const stageKey = `${date}:${classified.amount}`;
+    const utr = extractUtr(body);
+    const isOutflow = classified.type === 'Expense' || classified.type === 'Investment';
+    const flowDir = isOutflow ? 'out' : 'in';
+    const accKey = classified.account_last4 || '';
+    const stageKey = utr ? `${date}:${classified.amount}:${flowDir}:${utr}` : `${date}:${classified.amount}:${flowDir}:${accKey}`;
 
-    if (duplicateOfFast(txByDateAmount, { date, amount: classified.amount, body }) || staged.has(stageKey)) {
+    if (duplicateOfFast(txByDateAmount, {
+      date,
+      amount: classified.amount,
+      body,
+      type: classified.type,
+      accountLast4: classified.account_last4,
+    }) || staged.has(stageKey)) {
       duplicates += 1;
       continue;
     }
@@ -575,6 +760,8 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
     seen.add(body);
     staged.add(stageKey);
   }
+
+  reconcileTransfers(rows, db, { memberId, cachedAccounts: ctx.cachedAccounts });
 
   db.transaction(() => {
     for (const { body, classified, receivedAt, sender } of rows) {
@@ -598,8 +785,8 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
       }
       db.run(
         'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category,'
-        + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, created_at)'
-        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, sender, created_at)'
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           memberId,
           accountId,
@@ -614,6 +801,7 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
           classified.description || '',
           isInvest,
           body,
+          sender || '',
           new Date().toISOString(),
         ],
       );
@@ -726,10 +914,13 @@ async function reimportInbox(db, args) {
 
   const ctx = buildClassificationContext(db, memberId);
   const txByDateAmount = new Map();
-  for (const row of db.all('SELECT id, date, amount, raw_sms FROM transactions WHERE amount > 0')) {
+  for (const row of db.all('SELECT id, date, amount, type, raw_sms FROM transactions WHERE amount > 0')) {
     const key = `${row.date}:${row.amount}`;
     if (!txByDateAmount.has(key)) txByDateAmount.set(key, []);
-    txByDateAmount.get(key).push(row);
+    txByDateAmount.get(key).push({
+      ...row,
+      utr: extractUtr(row.raw_sms),
+    });
   }
 
   let imported = 0;
@@ -756,13 +947,22 @@ async function reimportInbox(db, args) {
       continue;
     }
 
-    // Two messages for one payment must not become two transactions. This is left for
-    // review rather than dropped, because a genuine second purchase of the same amount on
-    // the same day looks identical from here and only the user can tell them apart.
+    // Two messages for one payment must not become two transactions.
+    // Duplicate detection considers cashflow direction and account so transfers are not dropped.
     const date = isoFromMillis(message.received_at) || classified.date;
-    const stageKey = `${date}:${classified.amount}`;
+    const utr = extractUtr(body);
+    const isOutflow = classified.type === 'Expense' || classified.type === 'Investment';
+    const flowDir = isOutflow ? 'out' : 'in';
+    const accKey = classified.account_last4 || '';
+    const stageKey = utr ? `${date}:${classified.amount}:${flowDir}:${utr}` : `${date}:${classified.amount}:${flowDir}:${accKey}`;
 
-    if (duplicateOfFast(txByDateAmount, { date, amount: classified.amount, body }) || staged.has(stageKey)) {
+    if (duplicateOfFast(txByDateAmount, {
+      date,
+      amount: classified.amount,
+      body,
+      type: classified.type,
+      accountLast4: classified.account_last4,
+    }) || staged.has(stageKey)) {
       duplicates += 1;
       continue;
     }
@@ -771,6 +971,8 @@ async function reimportInbox(db, args) {
     seen.add(body);
     staged.add(stageKey);
   }
+
+  reconcileTransfers(rows, db, { memberId, cachedAccounts: ctx.cachedAccounts });
 
   db.transaction(() => {
     for (const { body, classified, receivedAt, sender } of rows) {
@@ -794,8 +996,8 @@ async function reimportInbox(db, args) {
       }
       db.run(
         'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category,'
-        + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, created_at)'
-        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, sender, created_at)'
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           memberId,
           accountId,
@@ -810,6 +1012,7 @@ async function reimportInbox(db, args) {
           classified.description || '',
           isInvest,
           body,
+          sender || '',
           new Date().toISOString(),
         ],
       );
@@ -846,7 +1049,7 @@ async function reimportInbox(db, args) {
  * the same amount on the same day and are both real, so a match is reported and left for
  * somebody to look at rather than dropped.
  */
-export function duplicateOf(db, { date, amount, body }) {
+export function duplicateOf(db, { date, amount, body, type = null, accountLast4 = '' }) {
   if (!date || !(amount > 0)) return null;
   const incomingUtr = extractUtr(body);
   const rows = db.all(
@@ -863,10 +1066,22 @@ export function duplicateOf(db, { date, amount, body }) {
   );
   if (!rows.length) return null;
 
-  let match = rows[0];
+  // Opposite cash flow directions (e.g. debit vs credit) are orthogonal flows, never duplicates.
+  let candidates = rows;
+  if (type) {
+    const isOutflow = type === 'Expense' || type === 'Investment';
+    candidates = rows.filter((r) => {
+      if (!r.type) return true;
+      const rOutflow = r.type === 'Expense' || r.type === 'Investment';
+      return isOutflow === rOutflow;
+    });
+  }
+  if (!candidates.length) return null;
+
+  let match = candidates[0];
   let isExactUtr = false;
   if (incomingUtr) {
-    const utrMatch = rows.find((r) => {
+    const utrMatch = candidates.find((r) => {
       const u = extractUtr(r.raw_sms);
       return u && u === incomingUtr;
     });
@@ -885,17 +1100,29 @@ export function duplicateOf(db, { date, amount, body }) {
   };
 }
 
-export function duplicateOfFast(txByDateAmount, { date, amount, body }) {
+export function duplicateOfFast(txByDateAmount, { date, amount, body, type = null, accountLast4 = '' }) {
   if (!date || !(amount > 0) || !txByDateAmount) return null;
   const list = txByDateAmount.get(`${date}:${amount}`);
   if (!list || !list.length) return null;
-  const incomingUtr = extractUtr(body);
 
+  // Opposite cash flow directions (e.g. debit vs credit) are orthogonal flows, never duplicates.
+  let candidates = list;
+  if (type) {
+    const isOutflow = type === 'Expense' || type === 'Investment';
+    candidates = list.filter((r) => {
+      if (!r.type) return true;
+      const rOutflow = r.type === 'Expense' || r.type === 'Investment';
+      return isOutflow === rOutflow;
+    });
+  }
+  if (!candidates.length) return null;
+
+  const incomingUtr = extractUtr(body);
   let found = null;
   let isExactUtr = false;
 
   if (incomingUtr) {
-    found = list.find((row) => {
+    found = candidates.find((row) => {
       if (row.raw_sms && row.raw_sms === (body || '')) return false;
       return row.utr && row.utr === incomingUtr;
     });
@@ -903,7 +1130,7 @@ export function duplicateOfFast(txByDateAmount, { date, amount, body }) {
   }
 
   if (!found) {
-    found = list.find((row) => !row.raw_sms || row.raw_sms !== (body || ''));
+    found = candidates.find((row) => !row.raw_sms || row.raw_sms !== (body || ''));
   }
 
   if (!found) return null;
@@ -1036,7 +1263,13 @@ async function reviewAlerts(db, args) {
     if (want === 'pending' || want === 'all') {
       const fallback = FALLBACK_AMOUNT_RE.exec(body);
       const twin = wouldFile
-        ? duplicateOfFast(txByDateAmount, { date: date || classified.date, amount: classified.amount, body })
+        ? duplicateOfFast(txByDateAmount, {
+          date: date || classified.date,
+          amount: classified.amount,
+          body,
+          type: classified.type,
+          accountLast4: classified.account_last4,
+        })
         : null;
       items.push({
         state: 'pending',
@@ -1058,6 +1291,29 @@ async function reviewAlerts(db, args) {
         account_id: classified.account_id ?? null,
         card_id: classified.card_id ?? null,
       });
+    }
+  }
+
+  // Pair pending items by UTR
+  const pendingByUtr = new Map();
+  for (const it of items) {
+    if (it.state !== 'pending') continue;
+    const utr = extractUtr(it.body);
+    if (!utr) continue;
+    if (!pendingByUtr.has(utr)) pendingByUtr.set(utr, []);
+    pendingByUtr.get(utr).push(it);
+  }
+  for (const [, list] of pendingByUtr.entries()) {
+    const outs = list.filter((i) => i.suggested_type === 'Expense' || i.suggested_type === 'Investment');
+    const ins = list.filter((i) => i.suggested_type === 'Income');
+    for (const o of outs) {
+      const matchIn = ins.find((i) => Math.abs(i.amount - o.amount) < 0.01);
+      if (matchIn) {
+        o.suggested_type = 'Transfer';
+        o.suggested_category = 'Transfer';
+        matchIn.suggested_type = 'Transfer';
+        matchIn.suggested_category = 'Transfer';
+      }
     }
   }
 
@@ -1222,7 +1478,7 @@ async function classifyAlert(db, args) {
   // Filing from the review screen is a deliberate act, so a twin is reported rather than
   // refused: only the user knows whether it is the bank repeating itself or a second
   // coffee.
-  const twin = duplicateOf(db, { date: args.date || today(), amount, body });
+  const twin = duplicateOf(db, { date: args.date || today(), amount, body, type });
   let learned = { merchant_key: '', applied: 0 };
 
   let accountId = args.account_id !== undefined && args.account_id !== null ? Number(args.account_id) : null;
@@ -1244,10 +1500,10 @@ async function classifyAlert(db, args) {
   db.transaction(() => {
     db.run(
       'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category,'
-      + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, created_at)'
-      + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, sender, created_at)'
+      + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [memberId, accountId, cardId, args.date || today(), amount, currency, type, category, merchant,
-        merchantKey(merchant), description, isInvest, body, new Date().toISOString()],
+        merchantKey(merchant), description, isInvest, body, args.sender || '', new Date().toISOString()],
     );
     if (merchant && shouldApplyToAll) learned = learnMerchant(db, merchant, category, type);
   });
@@ -1303,10 +1559,10 @@ async function classifyBatch(db, args) {
 
       db.run(
         'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category,'
-        + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, created_at)'
-        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, sender, created_at)'
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [memberId, accountId, cardId, item.date || today(), amount, currency, type, category, merchant,
-          merchantKey(merchant), String(item.description || '').trim(), isInvest, body, new Date().toISOString()],
+          merchantKey(merchant), String(item.description || '').trim(), isInvest, body, item.sender || '', new Date().toISOString()],
       );
       if (merchant && item.apply_to_all) {
         learnMerchant(db, merchant, category, type);
@@ -1346,6 +1602,8 @@ export async function handleSmsAction(args = {}) {
           date: classified.date,
           amount: classified.amount,
           body: rawBody,
+          type: classified.type,
+          accountLast4: classified.account_last4,
         });
         alerts.push({
           ...classified,

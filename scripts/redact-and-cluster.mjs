@@ -34,6 +34,16 @@ function isPersonalSender(sender) {
 
 // ------------------------------------------------------------- Redaction Engine
 
+// Load optional custom names dictionary if provided in scripts/custom-names.txt
+let customNames = [];
+const customNamesPath = path.join('scripts', 'custom-names.txt');
+if (fs.existsSync(customNamesPath)) {
+  customNames = fs.readFileSync(customNamesPath, 'utf8')
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 function redactText(raw) {
   let text = String(raw || '');
 
@@ -41,10 +51,11 @@ function redactText(raw) {
   text = text.replace(/https?:\/\/[^\s]+/gi, '<URL>');
   text = text.replace(/\b(?:bit\.ly|tinyurl\.com|1kx\.in|nc6\.in|fcr\.bz|hdfcbk\.io|ccybl\.in|rml\.lu|5fi\.in|ss7\.in)\/[^\s]+/gi, '<URL>');
 
-  // 2. Explicit Personal Names & Usernames Scrubbing (including inside coupon codes)
-  text = text.replace(/(?:AMIT|SUMIT|RAVINDRA|DUBE|SACHIN|PRADEEP|RAKESH|SAMRAT|SHUKLA|DHIRAJ|VIJAY)/gi, '<REDACTED_NAME>');
-  text = text.replace(/(?:Dubeamit\w*|RRL_\w+|Shreeparth)/gi, '<REDACTED_USER>');
-  text = text.replace(/du\*{3,}[a-z0-9_]*@\w+/gi, '<HANDLE>@upi');
+  // 2. Custom names dictionary scrubbing (from optional scripts/custom-names.txt)
+  if (customNames.length > 0) {
+    const escaped = customNames.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    text = text.replace(new RegExp(`\\b(?:${escaped})\\b`, 'gi'), '<REDACTED_NAME>');
+  }
 
   // 3. Name patterns in greetings and transfer narrations
   text = text.replace(/\b(from\s+(?:MR|MS|MRS|DR)?\s*)([A-Z][A-Z\s]{2,30}?)(?=[.,;\s]*(?:UPI|ref|on|dt|avl|$|[.;:]))/gi, '$1<REDACTED_NAME>');

@@ -172,10 +172,10 @@ The current heuristic engine encounters systematic classification errors with lo
 - **Observed Behavior**: Inter-account funds transfers (e.g., Standard Chartered `XX2219` debited ₹20,000 and credited to ICICI `XX8386`) were filed as `Spent` (`Expense` -> `Shopping`) on the debit leg and `Received` (`Income` -> `Other Income`) on the credit leg.
 - **Root Cause**:
   - Outward transfers were treated as POS retail merchant debits.
-  - Inward transfers from the user's own name (`from MR AMIT RAVINDR`) or sharing the exact same 12-digit UPI reference number (`627865226916`) were treated as new income.
+  - Inward transfers from the user's own name (`from SENDER NAME`) or sharing the exact same 12-digit UPI reference number (`627865226916`) were treated as new income.
 - **Deterministic Fix**:
   - `debited ... and credited to a/c` patterns mapped to `self-transfer` (`Transfer` -> `Transfer`).
-  - Inward credits from user/family members (`from MR AMIT RAVINDR`) mapped to `Transfer` (`Transfer`).
+  - Inward credits from user/family members (`from SENDER NAME`) mapped to `Transfer` (`Transfer`).
   - UTR-paired transactions recognized as transfer pairs with 0 net cash flow impact.
 
 ### 3.9 Architectural Analysis: Hard Rules vs Tiny LLMs vs spaCy

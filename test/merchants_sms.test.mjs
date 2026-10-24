@@ -531,5 +531,139 @@ describe('sms.js SMS classifier and dispatcher', () => {
     assert.equal(txRes.status, 'success');
     assert.equal(txRes.transactions.length, 2);
   });
+
+  it('reconciles matching debit and credit alerts sharing a UTR into a Transfer', async () => {
+    const m1 = 'Your a/c XX2219 is debited for Rs. 54000.00 on 22-10-2026 11:09 and credited to a/c XX8386 (UPI Ref no 629590165876).Plz call 18002586465 if not done by you.';
+    const m2 = 'Dear Customer, Acct XX386 is credited with Rs 54000.00 on 22-Oct-26 from JOHN DOE. UPI:629590165876-ICICI Bank.';
+
+    globalThis.window = {
+      AndroidBridge: {
+        readSmsInbox: () => JSON.stringify([
+          { sender: 'AX-SCBANK', body: m1, received_at: 1729575540000 },
+          { sender: 'ICICIB', body: m2, received_at: 1729575550000 },
+        ]),
+      },
+    };
+
+    const res = await handleSmsAction({ action: 'reimport', days: 0, member_id: 1 });
+    assert.equal(res.status, 'success');
+    assert.equal(res.read, 2);
+    assert.equal(res.imported, 2);
+    assert.equal(res.duplicates, 0);
+
+    const txRes = await handleDbAction({ action: 'get_transactions', page: 1, limit: 10 });
+    assert.equal(txRes.status, 'success');
+    assert.equal(txRes.transactions.length, 2);
+    for (const tx of txRes.transactions) {
+      assert.equal(tx.amount, 54000);
+      assert.equal(tx.type, 'Transfer');
+      assert.equal(tx.category, 'Transfer');
+    }
+
+    delete globalThis.window;
+  });
+
+  it('reconciles an incoming credit against an existing debit in the database via UTR', async () => {
+    const m1 = 'Your a/c XX2219 is debited for Rs. 54000.00 on 22-10-2026 11:09 and credited to a/c XX8386 (UPI Ref no 629590165876).Plz call 18002586465 if not done by you.';
+    const m2 = 'Dear Customer, Acct XX386 is credited with Rs 54000.00 on 22-Oct-26 from JOHN DOE. UPI:629590165876-ICICI Bank.';
+
+    // Pre-insert debit as Expense
+    const saveRes = await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-10-22',
+        amount: 54000,
+        type: 'Expense',
+        category: 'Shopping',
+        raw_sms: m1,
+        member_id: 1,
+      },
+    });
+    assert.equal(saveRes.status, 'success');
+
+    globalThis.window = {
+      AndroidBridge: {
+        readSmsInbox: () => JSON.stringify([
+          { sender: 'ICICIB', body: m2, received_at: 1729575550000 },
+        ]),
+      },
+    };
+
+    const res = await handleSmsAction({ action: 'reimport', days: 0, member_id: 1 });
+    assert.equal(res.status, 'success');
+    assert.equal(res.imported, 1);
+
+    const txRes = await handleDbAction({ action: 'get_transactions', page: 1, limit: 10 });
+    assert.equal(txRes.status, 'success');
+    assert.equal(txRes.transactions.length, 2);
+    for (const tx of txRes.transactions) {
+      assert.equal(tx.amount, 54000);
+      assert.equal(tx.type, 'Transfer');
+      assert.equal(tx.category, 'Transfer');
+    }
+
+    delete globalThis.window;
+  });
+
+  it('detects a single-leg transfer when destination account is in user accounts', async () => {
+    const accRes = await handleDbAction({
+      action: 'save_record',
+      record_type: 'account',
+      record: {
+        name: 'ICICI Savings',
+        institution: 'ICICI Bank',
+        category: 'Savings',
+        account_number: 'XX8386',
+        balance: 50000,
+        member_id: 1,
+      },
+    });
+    assert.equal(accRes.status, 'success');
+
+    const m1 = 'Your a/c XX2219 is debited for Rs. 54000.00 on 22-10-2026 11:09 and credited to a/c XX8386 (UPI Ref no 629590165876).Plz call 18002586465 if not done by you.';
+    const parsed = await parseSmsText(m1, 'AX-SCBANK');
+    assert.equal(parsed.amount, 54000);
+    assert.equal(parsed.type, 'Transfer');
+    assert.equal(parsed.category, 'Transfer');
+  });
+
+  it('extracts true last4 from masked 16-digit card patterns rather than BIN prefix', async () => {
+    const m = 'Payment of INR 10,905 was received for card number 4375-51XX-XXXX-6003 on 28-Feb-2021';
+    const parsed = await parseSmsText(m, 'ICICIB');
+    assert.equal(parsed.account_last4, '6003');
+  });
+
+  it('discovers accounts using sender identity and merges generic Bank into specific issuer', async () => {
+    const m1 = 'Your a/c XX2219 is debited for Rs. 500 on 20-10-2026';
+    const m2 = 'Your a/c XX2219 is debited for Rs. 200 on 21-10-2026';
+
+    globalThis.window = {
+      AndroidBridge: {
+        readSmsInbox: () => JSON.stringify([
+          { sender: 'AX-SCBANK', body: m1, received_at: 1729400000000 },
+          { sender: 'UNKNOWN', body: m2, received_at: 1729486400000 },
+        ]),
+      },
+    };
+
+    const res = await handleSmsAction({ action: 'reimport', days: 0, member_id: 1 });
+    assert.equal(res.status, 'success');
+    assert.equal(res.imported, 2);
+
+    const disc = await handleDbAction({ action: 'discover_accounts_from_sms' });
+    assert.equal(disc.status, 'success');
+    const scb = disc.discovered.find((d) => d.last_4 === '2219');
+    assert.ok(scb, 'Discovered account for 2219');
+    assert.equal(scb.institution, 'Standard Chartered Bank');
+    assert.equal(scb.txn_count, 2);
+    assert.equal(scb.total_spent, 700);
+
+    // Ensure no orphan generic Bank account for 2219 remains
+    const bankGeneric = disc.discovered.find((d) => d.institution === 'Bank' && d.last_4 === '2219');
+    assert.equal(bankGeneric, undefined);
+
+    delete globalThis.window;
+  });
 });
+
 
