@@ -3,6 +3,7 @@ import {
   icon, h, toast, errorBlock, confirmDialog, showProgressModal,
 } from '../ui.js';
 import { formatCurrency, formatDate } from '../formatters.js';
+import { openDiscoveredAccountSheet } from './rules.js';
 
 export async function renderSmsIngest(container, app) {
   const isInitial = app.pageArgs?.initialSetup;
@@ -268,7 +269,7 @@ export async function renderSmsIngest(container, app) {
                 }
 
                 return `
-                <div class="card-flat" style="background:var(--surface-container-high);padding:10px 12px;border-radius:var(--radius-md);border:1px solid var(--outline-variant);display:flex;flex-direction:column;gap:6px;width:100%;box-sizing:border-box">
+                <div class="card-flat" data-discovered-card="${i}" style="background:var(--surface-container-high);padding:10px 12px;border-radius:var(--radius-md);border:1px solid var(--outline-variant);display:flex;flex-direction:column;gap:6px;width:100%;box-sizing:border-box;cursor:pointer">
                   <div class="row-between" style="align-items:flex-start;gap:8px">
                     <div class="row" style="gap:10px;align-items:center;min-width:0">
                       <span class="avatar avatar-sm ${avatarClass}" style="flex-shrink:0">
@@ -279,9 +280,12 @@ export async function renderSmsIngest(container, app) {
                         <div class="list-row-sub" style="font-size:11.5px">${h(d.bank || d.institution)} · ${h(label)} · ending ${h(d.last_4)}</div>
                       </div>
                     </div>
-                    <button class="btn ${isAdded ? 'btn-tonal' : 'btn-filled'} btn-xs" data-ingest-add="${i}" ${isAdded ? 'disabled' : ''} style="flex-shrink:0;padding:4px 8px">
-                      ${icon(isAdded ? 'check' : 'add', 'icon-sm')}${isAdded ? 'Added' : 'Add'}
-                    </button>
+                    <div class="row" style="gap:4px;align-items:center;flex-shrink:0">
+                      <button class="btn ${isAdded ? 'btn-tonal' : 'btn-filled'} btn-xs" data-ingest-add="${i}" ${isAdded ? 'disabled' : ''} style="flex-shrink:0;padding:4px 8px">
+                        ${icon(isAdded ? 'check' : 'add', 'icon-sm')}${isAdded ? 'Added' : 'Add'}
+                      </button>
+                      <span style="color:var(--on-surface-variant);display:flex">${icon('chevron_right', 'icon-sm')}</span>
+                    </div>
                   </div>
                   <div class="row-between" style="align-items:center;padding-top:4px;border-top:1px solid var(--outline-variant);gap:6px">
                     <div class="row" style="gap:4px;align-items:center;flex-wrap:wrap">
@@ -393,6 +397,18 @@ export async function renderSmsIngest(container, app) {
     };
 
     const bindInteractiveActions = () => {
+      // Open detailed bottom sheet on card tap
+      classificationContent.querySelectorAll('[data-discovered-card]').forEach((cardEl) => {
+        cardEl.addEventListener('click', (ev) => {
+          if (ev.target.closest('button')) return;
+          const idx = Number(cardEl.dataset.discoveredCard);
+          const item = discovered[idx];
+          if (item) {
+            openDiscoveredAccountSheet(app, item, discoverRes?.existing_accounts || [], discoverRes?.existing_cards || []);
+          }
+        });
+      });
+
       // Toggle discovered type between Bank Account and Credit Card
       classificationContent.querySelectorAll('[data-toggle-type]').forEach((btn) => {
         btn.addEventListener('click', () => {

@@ -76,8 +76,8 @@ ADB="${SDK:+$SDK/platform-tools/adb}"
 
 # The application id is the single source of truth for install and launch, so read it
 # from the build file instead of repeating it here.
-APP_ID="$(sed -n 's/.*applicationId *"\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
-DEBUG_SUFFIX="$(sed -n 's/.*applicationIdSuffix *"\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
+APP_ID="$(sed -n 's/.*applicationId[ =]*"\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
+DEBUG_SUFFIX="$(sed -n 's/.*applicationIdSuffix[ =]*"\([^"]*\)".*/\1/p' app/build.gradle | head -1)"
 DEBUG_ID="${APP_ID}${DEBUG_SUFFIX}"
 
 GRADLEW="./gradlew"
@@ -164,7 +164,9 @@ cmd_doctor() {
   if [ -n "$ADB" ]; then
     say "Devices"
     "$ADB" devices -l | tail -n +2 | sed 's/^/  /'
-    [ "$(device_count)" -eq 0 ] && printf '  %s\n' "${DIM}none attached${OFF}"
+    if [ "$(device_count)" -eq 0 ]; then
+      printf '  %s\n' "${DIM}none attached${OFF}"
+    fi
   fi
 }
 
