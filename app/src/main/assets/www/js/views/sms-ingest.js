@@ -321,12 +321,48 @@ export async function renderSmsIngest(container, app) {
             <p class="caption" style="margin-bottom:var(--gap-2)">
               Potential duplicate alerts held from ledger to prevent double-counting.
             </p>
-            <div class="virtual-scroll-box" data-dups-box style="display:flex;flex-direction:column;gap:8px">
+            <div class="virtual-scroll-box" data-dups-box style="display:flex;flex-direction:column;gap:10px;max-height:min(55vh, 480px)">
               ${dupList.map((item, idx) => {
                 const twin = item.duplicate_twin;
+                const isExactUtr = Boolean(twin && (twin.match_reason === 'exact-utr' || (twin.utr && item.body && item.body.includes(twin.utr))));
+                const isIdenticalText = Boolean(twin && twin.raw_sms && twin.raw_sms.trim() === item.body.trim());
+
+                let matchReasonText = 'Possible duplicate';
+                let matchBadgeClass = 'badge-warning';
+                let matchIcon = 'content_copy';
+
+                if (isIdenticalText) {
+                  matchReasonText = 'Identical message text';
+                  matchBadgeClass = 'badge-warning';
+                  matchIcon = 'content_copy';
+                } else if (isExactUtr) {
+                  matchReasonText = twin.utr ? `Exact Ref / UTR (${twin.utr})` : 'Exact Ref / UTR Match';
+                  matchBadgeClass = 'badge-income';
+                  matchIcon = 'link';
+                } else if (twin && twin.merchant && item.merchant && twin.merchant.toLowerCase() === item.merchant.toLowerCase()) {
+                  matchReasonText = `Same merchant, amount & date (${formatDate(twin.date)})`;
+                  matchBadgeClass = 'badge-warning';
+                  matchIcon = 'content_copy';
+                } else if (twin && twin.date) {
+                  matchReasonText = `Matches recorded ${formatCurrency(twin.amount, app.currency, app.locale)} on ${formatDate(twin.date)}`;
+                  matchBadgeClass = 'badge-warning';
+                  matchIcon = 'content_copy';
+                }
+
+                const isIncome = (twin && twin.type === 'Income') || item.suggested_type === 'Income';
+                const sign = isIncome ? '+' : '-';
+                const amountClass = isIncome ? 'income' : 'expense';
+
+                const existingAmount = twin && twin.amount
+                  ? formatCurrency(twin.amount, app.currency, app.locale)
+                  : (item.amount ? formatCurrency(item.amount, app.currency, app.locale) : '0');
+                const incomingAmount = item.amount
+                  ? formatCurrency(item.amount, app.currency, app.locale)
+                  : '0';
+
                 return `
-                <div class="card-flat" style="background:var(--surface-container-high);padding:10px 12px;border-radius:var(--radius-md);border:1px solid var(--outline-variant);display:flex;flex-direction:column;gap:6px;box-sizing:border-box">
-                  <div class="row-between" style="align-items:flex-start;gap:8px">
+                <div class="duplicate-compare-card ${isExactUtr || isIdenticalText ? 'high-confidence' : ''}" style="gap:8px">
+                  <div class="row-between" style="align-items:flex-start;gap:8px;flex-wrap:wrap">
                     <div style="min-width:0;flex:1">
                       <div class="row" style="gap:6px;align-items:center">
                         <span style="font-weight:700;font-size:14px;color:var(--on-surface)">
@@ -334,19 +370,67 @@ export async function renderSmsIngest(container, app) {
                         </span>
                         ${item.merchant ? `<span style="font-size:12px;color:var(--on-surface-variant)">· ${h(item.merchant)}</span>` : ''}
                       </div>
-                      ${twin ? `
-                        <div class="badge badge-warning" style="margin-top:4px;font-size:11px;gap:4px;display:inline-flex;align-items:center">
-                          ${icon('content_copy', 'icon-sm')}Matches: ${h(formatCurrency(twin.amount, app.currency, app.locale))} on ${h(formatDate(twin.date))}${twin.merchant ? ` (${h(twin.merchant)})` : ''}
-                        </div>` : ''}
-                      <div class="caption" style="margin-top:4px;font-size:11px;line-height:1.35;word-break:break-word">${h(item.body.slice(0, 120))}</div>
+                      <div class="row" style="gap:4px;align-items:center;margin-top:4px;flex-wrap:wrap">
+                        <span class="badge ${matchBadgeClass}" style="font-size:10.5px;gap:4px;display:inline-flex;align-items:center">
+                          ${icon(matchIcon, 'icon-sm')}${h(matchReasonText)}
+                        </span>
+                      </div>
                     </div>
-                    <div class="row" style="gap:4px;flex-shrink:0">
-                      <button class="btn btn-filled btn-xs" data-keep-dup="${idx}" style="padding:4px 8px" aria-label="Keep duplicate">
+                    <div class="row" style="gap:6px;flex-shrink:0">
+                      <button class="btn btn-filled btn-xs" data-keep-dup="${idx}" style="padding:4px 10px" aria-label="Keep duplicate">
                         ${icon('check', 'icon-sm')}Keep
                       </button>
-                      <button class="btn btn-tonal btn-xs" data-discard-dup="${idx}" style="padding:4px 8px;color:var(--expense)" aria-label="Discard duplicate">
+                      <button class="btn btn-tonal btn-xs" data-discard-dup="${idx}" style="padding:4px 10px;color:var(--expense)" aria-label="Discard duplicate">
                         ${icon('visibility_off', 'icon-sm')}Discard
                       </button>
+                    </div>
+                  </div>
+
+                  <div class="twin-split-grid">
+                    <!-- EXISTING IN LEDGER -->
+                    <div class="twin-panel existing">
+                      <div class="twin-panel-header">
+                        <span>Recorded in Ledger</span>
+                        <span class="badge badge-tonal" style="font-size:9.5px;padding:1px 5px">Original</span>
+                      </div>
+                      <div class="row-between" style="align-items:baseline;gap:4px">
+                        <span class="display ${amountClass}" style="font-size:14px;font-weight:700">
+                          ${sign}${h(existingAmount)}
+                        </span>
+                        <span class="caption" style="font-size:11px">${twin && twin.date ? h(formatDate(twin.date)) : ''}</span>
+                      </div>
+                      <div class="twin-panel-title" style="font-size:12.5px">${h(twin ? (twin.merchant || twin.description || 'Recorded Transaction') : 'No record')}</div>
+                      <div class="row" style="gap:4px;flex-wrap:wrap;margin-top:2px">
+                        ${twin && twin.category ? `<span class="badge badge-tonal" style="font-size:10px">${h(twin.category)}</span>` : ''}
+                        ${twin && twin.instrument_name ? `<span class="badge badge-tonal" style="font-size:10px">${h(twin.instrument_name)}</span>` : ''}
+                      </div>
+                      <div class="sms-raw-box" style="margin-top:4px">
+                        ${twin && twin.raw_sms
+                          ? h(twin.raw_sms)
+                          : (twin && twin.description
+                            ? h(twin.description)
+                            : '<span class="caption" style="font-style:italic">No original SMS recorded</span>')}
+                      </div>
+                    </div>
+
+                    <!-- INCOMING SMS -->
+                    <div class="twin-panel incoming">
+                      <div class="twin-panel-header">
+                        <span>Incoming Alert</span>
+                        <span class="badge badge-accent" style="font-size:9.5px;padding:1px 5px">New SMS</span>
+                      </div>
+                      <div class="row-between" style="align-items:baseline;gap:4px">
+                        <span class="display ${amountClass}" style="font-size:14px;font-weight:700">
+                          ${sign}${h(incomingAmount)}
+                        </span>
+                        <span class="caption" style="font-size:11px">${item.date ? h(formatDate(item.date)) : ''}</span>
+                      </div>
+                      <div class="twin-panel-title" style="font-size:12.5px">${h(item.merchant || 'Incoming SMS')}</div>
+                      <div class="row" style="gap:4px;flex-wrap:wrap;margin-top:2px">
+                        ${item.suggested_category ? `<span class="badge badge-tonal" style="font-size:10px">${h(item.suggested_category)}</span>` : ''}
+                        ${item.sender ? `<span class="badge badge-tonal" style="font-size:10px">${h(item.sender)}</span>` : ''}
+                      </div>
+                      <div class="sms-raw-box" style="margin-top:4px">${h(item.body)}</div>
                     </div>
                   </div>
                 </div>`;

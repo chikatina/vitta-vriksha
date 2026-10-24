@@ -3505,6 +3505,13 @@ function isValid4Digits(d, text) {
   if (new RegExp(`\\b(?:otp|ref|utr|rrn|txn|id|code|pin|vpa)\\b[^.]*?${d}\\b`, 'i').test(text)) {
     return false;
   }
+  // Exclude folio / demat / boid / uan / pran / policy / application / pin code numbers
+  if (new RegExp(`\\b(?:folio|boid|uan|pran|policy|pincode|pin\\s*code|app(?:lication)?(?:\\s*no)?)\\b[^.]*?${d}\\b`, 'i').test(text)) {
+    return false;
+  }
+  if (new RegExp(`\\b${d}\\b[^.]*?\\b(?:folio|boid|uan|pran)\\b`, 'i').test(text)) {
+    return false;
+  }
   return true;
 }
 
@@ -3601,7 +3608,9 @@ export function detectAccountIssuerWeighted(text = '', sender = '') {
 
   // 2. Sender Header Match (+100 points)
   if (s) {
-    const isIntermediarySender = isIntermediaryContext || /itdept|cpc|epfo|pfms|dbt/i.test(s);
+    const isIntermediarySender = isIntermediaryContext
+      || /itdept|cpc|epfo|pfms|dbt/i.test(s)
+      || (/(?:mf|mutual|amc)\b|-(?:[a-z]{2,6}mf|camss|kfintech)/i.test(s) && /\b(?:investor|folio|sip|nav|redemption)\b/i.test(t));
     for (const inst of KNOWN_INSTITUTIONS) {
       if (inst.senderRe && inst.senderRe.test(s)) {
         if (!isIntermediarySender || directAnchorInst === inst) {
@@ -4036,6 +4045,11 @@ export function discoverAccountsFromSms(db) {
     if (info.issuer === 'Bank' && !info.last4) continue;
     const isIntermediary = info.issuer === 'Amazon Pay' || info.issuer === 'PhonePe' || info.issuer === 'Google Pay' || info.issuer === 'Paytm' || info.issuer === 'MobiKwik' || info.issuer === 'Freecharge';
     if (isIntermediary && (info.instrument_type === 'bank_account' || info.instrument_type === 'credit_card' || info.instrument_type === 'debit_card')) {
+      continue;
+    }
+
+    // Filter out mutual fund / folio alerts from discovering as bank accounts
+    if (info.instrument_type === 'bank_account' && /\b(?:folio|nav|mutual\s*fund|redemption\s*request|elss|small\s*cap|large\s*cap|mid\s*cap|growth\s*fund|dividend\s*reinvestment)\b/i.test(text) && !/\b(?:a\/c|account|acct)\s*(?:no\.?|ending)?\s*[*xX#]*\s*\d{3,4}\b/i.test(text)) {
       continue;
     }
 

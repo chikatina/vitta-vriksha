@@ -664,6 +664,66 @@ describe('sms.js SMS classifier and dispatcher', () => {
 
     delete globalThis.window;
   });
+
+  it('rejects mutual fund folio numbers and does not discover them as bank accounts', async () => {
+    const mfSms = 'Dear Investor, your redemption request has been successfully processed in Axis ELSS Tax Saver Fund - Direct Growth for Rs.152180.74 in Folio number XXXXXXXX5703 Trn ref no is 388538418. Payout will be initiated in your bank account on 24/06/2026.For any assistance contact your MFD or call 81086 22211.Axis MF';
+
+    globalThis.window = {
+      AndroidBridge: {
+        readSmsInbox: () => JSON.stringify([
+          { sender: 'VA-AXISMF-S', body: mfSms, received_at: 1719200000000 },
+        ]),
+      },
+    };
+
+    const res = await handleSmsAction({ action: 'reimport', days: 0, member_id: 1 });
+    assert.equal(res.status, 'success');
+
+    const disc = await handleDbAction({ action: 'discover_accounts_from_sms' });
+    assert.equal(disc.status, 'success');
+    const folioAccount = disc.discovered.find((d) => d.last_4 === '5703');
+    assert.equal(folioAccount, undefined, 'Folio number must not be discovered as a bank account');
+
+    delete globalThis.window;
+  });
+
+  it('provides duplicate_twin with raw_sms and details in review alerts for side-by-side comparison', async () => {
+    const originalSms = 'INR 422.00 spent on ICICI Bank Card XX5004 on 30-Jul-2026 at IND*Amazon.in. Avl Lmt: INR 4,00,000.00.';
+    const duplicateSms = 'INR 422.00 spent on ICICI Bank Card XX5004 on 30-Jul-2026 at IND*Amazon.in. Avl Lmt: INR 3,99,578.00.';
+
+    // File original transaction
+    await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-07-30',
+        amount: 422,
+        merchant: 'IND*Amazon.in',
+        category: 'Shopping',
+        type: 'Expense',
+        raw_sms: originalSms,
+      },
+    });
+
+    globalThis.window = {
+      AndroidBridge: {
+        readSmsInbox: () => JSON.stringify([
+          { sender: 'ICICIB', body: duplicateSms, received_at: 1785412800000 },
+        ]),
+      },
+    };
+
+    const reviewRes = await handleSmsAction({ action: 'review', days: 0, filter: 'all' });
+    assert.equal(reviewRes.status, 'success');
+    const dupItem = reviewRes.items.find((i) => i.duplicate_of > 0);
+    assert.ok(dupItem, 'Duplicate item should be identified');
+    assert.ok(dupItem.duplicate_twin, 'duplicate_twin should be present');
+    assert.equal(dupItem.duplicate_twin.amount, 422);
+    assert.equal(dupItem.duplicate_twin.raw_sms, originalSms);
+    assert.equal(dupItem.duplicate_twin.merchant, 'IND*Amazon.in');
+
+    delete globalThis.window;
+  });
 });
+
 
 
