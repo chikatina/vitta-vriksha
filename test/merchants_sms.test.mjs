@@ -887,7 +887,110 @@ describe('sms.js SMS classifier and dispatcher', () => {
     assert.equal(debitRow.type, 'Transfer');
     assert.equal(debitRow.category, 'Transfer');
   });
+
+  it('filters out payee addition and passbook balance alerts as non-transactions', () => {
+    const payeeAlert1 = 'Payee TEST USER added for A/c ...386. Send up to Rs 2,00,000.00 in first 24 hours. Manage beneficiary in iMobile Pay- ICICI Bank';
+    assert.equal(notATransaction(payeeAlert1), 'payee-setup');
+
+    const payeeAlert2 = '30 mins have passed since adding payee TEST USER for A/c ...386. Send upto Rs 2,00,000.00 in first 24 hours. Manage payee in iMobile- ICICI Bank';
+    assert.equal(notATransaction(payeeAlert2), 'payee-setup');
+
+    const passbookAlert = 'Dear Customer, your passbook balance for A/c ...386 as of 15-May-2026 is Rs. 83,341.00. - ICICI Bank';
+    assert.ok(notATransaction(passbookAlert));
+  });
+
+  it('merges 3-digit account with 4-digit account and reconciles transactions', async () => {
+    const target = await handleDbAction({
+      action: 'save_record',
+      type: 'account',
+      record: { name: 'ICICI Bank', category: 'Bank', institution: 'ICICI Bank', account_number: '8386' },
+    });
+    const source = await handleDbAction({
+      action: 'save_record',
+      type: 'account',
+      record: { name: 'ICICI Bank', category: 'Bank', institution: 'ICICI Bank', account_number: '386' },
+    });
+
+    // Save a transaction under source account
+    await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-05-10',
+        amount: 250,
+        type: 'Expense',
+        category: 'Dining',
+        account_id: source.record_id,
+        raw_sms: 'ICICI Bank Acct XX386 debited for Rs 250.00 on 10-May-26',
+      },
+    });
+
+    const mergeRes = await handleDbAction({
+      action: 'merge_accounts',
+      source_account_id: source.record_id,
+      target_account_id: target.record_id,
+    });
+    assert.equal(mergeRes.status, 'success');
+    assert.equal(mergeRes.merged, true);
+
+    const txns = await handleDbAction({ action: 'get_transactions' });
+    const moved = txns.transactions.find((t) => t.account_id === target.record_id);
+    assert.ok(moved);
+    assert.equal(moved.amount, 250);
+
+    // Target account should preserve 8386
+    const records = await handleDbAction({ action: 'list_records', type: 'account' });
+    const acc = records.records.find((a) => a.id === target.record_id);
+    assert.equal(acc.account_number, '8386');
+  });
+
+  it('runs reconcile_transactions action to automatically pair unpaired transfers', async () => {
+    const scAcc = await handleDbAction({
+      action: 'save_record',
+      type: 'account',
+      record: { name: 'SCB', category: 'Bank', institution: 'Standard Chartered', account_number: '2219' },
+    });
+    const iciciAcc = await handleDbAction({
+      action: 'save_record',
+      type: 'account',
+      record: { name: 'ICICI', category: 'Bank', institution: 'ICICI Bank', account_number: '8386' },
+    });
+
+    // Save SCB debit as Shopping (Expense)
+    await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-05-20',
+        amount: 1458977,
+        type: 'Expense',
+        category: 'Shopping',
+        account_id: scAcc.record_id,
+        raw_sms: 'Your a/c no XXXXXXX2219 is debited for Rs. 14,58,977.00 on 20-May-2026',
+      },
+    });
+
+    // Save ICICI credit as Income
+    await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-05-20',
+        amount: 1458977,
+        type: 'Income',
+        category: 'Other Income',
+        account_id: iciciAcc.record_id,
+        raw_sms: 'ICICI Bank Account XX386 credited:Rs. 14,58,977.00 on 20-May-26',
+      },
+    });
+
+    // Trigger reconciliation
+    const recon = await handleDbAction({ action: 'reconcile_transactions' });
+    assert.equal(recon.status, 'success');
+
+    const txns = await handleDbAction({ action: 'get_transactions' });
+    const scTx = txns.transactions.find((t) => t.account_id === scAcc.record_id);
+    const iciciTx = txns.transactions.find((t) => t.account_id === iciciAcc.record_id);
+    assert.equal(scTx.type, 'Transfer');
+    assert.equal(scTx.category, 'Transfer');
+    assert.equal(iciciTx.type, 'Transfer');
+    assert.equal(iciciTx.category, 'Transfer');
+  });
 });
-
-
-

@@ -17,7 +17,7 @@ import {
 import { memberClause } from './periods.js';
 import { readSmsInbox, takePendingAlerts } from './native.js';
 import {
-  categoryForMerchant, extractMerchant, merchantKey, notATransaction,
+  categoryForMerchant, extractMerchant, isCreditAlert, merchantKey, notATransaction,
 } from './merchants.js';
 import { fail } from './errors.js';
 
@@ -502,9 +502,10 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
     finalAmount = match ? toAmount(match[1]) : extractTransactionAmount(text);
     const isTransferRule = rule.transaction_type === 'Transfer';
     const dictTransferOnSpend = !isTransferRule && rule.transaction_type === 'Expense' && known.type === 'Transfer' && known.source !== 'learned';
+    const dictIncomeOnSpend = !isTransferRule && rule.transaction_type === 'Expense' && known.type === 'Income' && known.source !== 'learned';
     finalType = (known.source === 'learned' && known.type)
       ? known.type
-      : (isTransferRule ? 'Transfer' : ((!dictTransferOnSpend && known.type) || (!isCredit && known.category === 'Investment Outflow' ? 'Investment' : (isCredit ? 'Income' : rule.transaction_type))));
+      : (isTransferRule ? 'Transfer' : ((!dictTransferOnSpend && !dictIncomeOnSpend && known.type) || (!isCredit && known.category === 'Investment Outflow' ? 'Investment' : (isCredit ? 'Income' : rule.transaction_type))));
     finalCategory = (known.source === 'learned' && categoryFits(known.category, finalType))
       ? known.category
       : (isTransferRule ? rule.category_name : (usable(known, finalType) ? known.category : rule.category_name));
@@ -574,12 +575,22 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
     const isOut = finalType === 'Expense';
     const incomingUtr = extractUtr(text);
     const candidates = db.all(
-      "SELECT id, type, category, account_id, card_id, date, raw_sms FROM transactions WHERE amount = ? AND (type = 'Expense' OR type = 'Income' OR type = 'Investment')",
+      "SELECT id, type, category, account_id, card_id, date, raw_sms FROM transactions WHERE amount = ? AND COALESCE(is_ignored, 0) = 0",
       [finalAmount],
     );
 
     for (const opp of candidates) {
-      const oppIsOut = opp.type === 'Expense' || opp.type === 'Investment';
+      let oppIsOut;
+      if (opp.type === 'Expense' || opp.type === 'Investment') {
+        oppIsOut = true;
+      } else if (opp.type === 'Income') {
+        oppIsOut = false;
+      } else if (opp.type === 'Transfer') {
+        oppIsOut = !isCreditAlert(opp.raw_sms);
+      } else {
+        continue;
+      }
+
       if (oppIsOut === isOut) continue;
 
       let isMatch = false;
@@ -606,7 +617,9 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
         finalType = 'Transfer';
         finalCategory = isCard ? 'Credit Card' : 'Transfer';
         matchedRuleName = 'Reconciled transfer';
-        db.run("UPDATE transactions SET type = 'Transfer', category = ? WHERE id = ?", [finalCategory, opp.id]);
+        if (opp.type !== 'Transfer') {
+          db.run("UPDATE transactions SET type = 'Transfer', category = ? WHERE id = ?", [finalCategory, opp.id]);
+        }
         break;
       }
     }

@@ -311,7 +311,7 @@ export const RECORD_CONFIG = {
       const bal = Number(r.current_balance) || 0;
       const avail = r.available_limit !== null && r.available_limit !== undefined ? Number(r.available_limit) : (limit > 0 ? Math.max(0, limit - bal) : 0);
       const used = limit > 0 ? (bal / limit) * 100 : 0;
-      const availSub = limit > 0 ? ` · Avl: ${money(avail)}` : '';
+      const availSub = limit > 0 ? ` · Avl: ${formatCurrency(avail)}` : '';
       return {
         glyph: 'credit_card',
         avatarClass: 'avatar-credit',

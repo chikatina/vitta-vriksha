@@ -579,6 +579,9 @@ const SELF_TRANSFER = [
 
 const OUTWARD_DELIVERY_RECEIPT = /\b(?:neft|rtgs|imps|transaction)\b.*(?:has been credited to (?:the |your )?beneficiary|credited to (?:the )?beneficiary account)\b/i;
 const HAS_ACCOUNT_BALANCE = /\b(?:avl(?:able)?\s*bal|available\s*balance|balance\s*(?:is|:)|a\/c\s*bal)\b/i;
+const PAYEE_SETUP = /\b(?:payee|beneficiary)\b.*?\b(?:added|activated|registered|approved|updated)\b|\b(?:adding|added)\b.*?\b(?:as payee|as beneficiary)\b|\bmanage beneficiary\b|\b(?:transfer funds|send up to|send upto)\b.*?\b(?:after \d+|in first \d+)\b/i;
+const AMC_RECEIPT = /\b(?:payment|contribution|sip)\b.*?\b(?:towards|for|in)\b.*?\b(?:sip|fund|scheme|folio|mutual fund)\b.*?\b(?:received|successful|processed)\b/i;
+const BALANCE_ALERT = /\b(?:passbook|account|ledger|available|total|current|outstanding|effective|clear)?\s*balance\s*(?:against|in|as on|enquiry|is|for|of|:)\b|\bavl bal\b/i;
 
 /*
  * An amount sitting directly against a past tense verb, which is a movement that has
@@ -612,6 +615,12 @@ const HEDGED = new RegExp(
   'i',
 );
 
+/** Determines if text indicates an inward cashflow alert. */
+export function isCreditAlert(text) {
+  const t = String(text || '').toLowerCase();
+  return t.includes('credited') || t.includes('received') || t.includes('deposited');
+}
+
 /** Why this message is not a transaction, or an empty string when it is one. */
 export function notATransaction(text) {
   // Ignore ANY SMS with OTP / verification code first (excluding safety notifications like "without PIN/OTP")
@@ -619,6 +628,10 @@ export function notATransaction(text) {
       && !(/\bwithout (?:pin\/)?otp\b|\bno (?:pin\/)?otp\b/i.test(text))) {
     return 'otp';
   }
+  if (PAYEE_SETUP.test(text)) return 'payee-setup';
+  if (AMC_RECEIPT.test(text)) return 'amc-receipt';
+  if (BALANCE_ALERT.test(text) && !COMPLETED_MOVEMENT.test(text)) return 'balance';
+
   for (const [pattern, reason] of SELF_TRANSFER) {
     if (pattern.test(text)) return reason;
   }

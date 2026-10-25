@@ -11,7 +11,7 @@ import { fail } from './errors.js';
 import { BackupDecryptError, decryptData, encryptData, hashPin, pinMatches } from './crypto.js';
 import { Database } from './sqlite.js';
 import { deleteDatabase, deleteVaultKey, takePendingAlerts, writeAttempts } from './native.js';
-import { merchantKey } from './merchants.js';
+import { isCreditAlert, merchantKey, notATransaction } from './merchants.js';
 import { classifyAsset } from './asset-class.js';
 import {
   changeVaultPin, createVault, failedAttempts, isUnlocked, lockVault, mirrorConfig,
@@ -891,6 +891,8 @@ export function initDb(db, force = false) {
   for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
     db.run('INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)', [key, value]);
   }
+
+  reconcileExistingTransactions(db);
 
   schemaReady = true;
 }
@@ -4759,8 +4761,8 @@ export function mergeAccounts(db, args = {}) {
 
     // 2. Link raw SMS from source account identifiers
     if (sourceAccount.account_number) {
-      const sAcc = String(sourceAccount.account_number).trim().slice(-4);
-      if (sAcc.length >= 4) {
+       const sAcc = String(sourceAccount.account_number).trim().slice(-4);
+      if (sAcc.length >= 3) {
         db.run(
           "UPDATE transactions SET account_id = ? WHERE (account_id IS NULL OR account_id = 0) AND raw_sms LIKE '%' || ? || '%'",
           [targetAccountId, sAcc],
@@ -4793,6 +4795,8 @@ export function mergeAccounts(db, args = {}) {
         newAccNum = sourceAccNum;
       } else if (!targetAccNum && sourceAccNum) {
         newAccNum = sourceAccNum;
+      } else if (targetAccNum && sourceAccNum && targetAccNum.length < sourceAccNum.length) {
+        newAccNum = sourceAccNum;
       }
 
       if (updateDebitCard && sourceDc) {
@@ -4821,7 +4825,7 @@ export function mergeAccounts(db, args = {}) {
     const accNum = sourceAccount.account_number ? sourceAccount.account_number.slice(-4) : '';
     const dcLast4 = sourceAccount.debit_card_last_4 ? sourceAccount.debit_card_last_4.slice(-4) : '';
 
-    if (accNum && accNum.length >= 4) {
+    if (accNum && accNum.length >= 3) {
       db.run('INSERT OR REPLACE INTO ignored_discovered_accounts (identifier, issuer, last_4, ignored_at) VALUES (?, ?, ?, ?)',
         [`bank_account:${inst}:${accNum}`.toLowerCase(), inst, accNum, new Date().toISOString()]);
       db.run('INSERT OR REPLACE INTO ignored_discovered_accounts (identifier, issuer, last_4, ignored_at) VALUES (?, ?, ?, ?)',
@@ -4838,12 +4842,94 @@ export function mergeAccounts(db, args = {}) {
     db.run('DELETE FROM asset_accounts WHERE id = ?', [sourceAccountId]);
   });
 
+  reconcileExistingTransactions(db);
+
   return {
     status: 'success',
     merged: true,
     moved_transactions: movedTxns,
     target_account_id: targetAccountId,
   };
+}
+
+/**
+ * Automatically reconciles existing historical transactions against current registered accounts,
+ * pairs matching same-day transfers across distinct user instruments, corrects inverted investment
+ * credits, and marks non-transactions (like payee additions) as ignored.
+ */
+export function reconcileExistingTransactions(db) {
+  // 1. Mark non-transactions as ignored (payee additions, passbook balances, etc.)
+  const rows = db.all("SELECT id, raw_sms FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' AND COALESCE(is_ignored, 0) = 0");
+  for (const row of rows) {
+    if (notATransaction(row.raw_sms)) {
+      db.run('UPDATE transactions SET is_ignored = 1 WHERE id = ?', [row.id]);
+    }
+  }
+
+  // 2. Fix inverted investment credits (e.g. NSE clearing payouts credited to bank)
+  db.run(
+    "UPDATE transactions SET type = 'Income', category = 'Interest & Dividends', is_investment_outflow = 0"
+    + " WHERE (type = 'Investment' OR category = 'Investment Outflow' OR COALESCE(is_investment_outflow, 0) = 1)"
+    + " AND raw_sms IS NOT NULL AND (lower(raw_sms) LIKE '%credited%' OR lower(raw_sms) LIKE '%deposited%')"
+  );
+
+  // 3. Link transactions with missing account_id where raw_sms names an account
+  const userAccounts = db.all('SELECT id, account_number, debit_card_last_4 FROM asset_accounts');
+  const userCards = db.all('SELECT id, last_4 FROM credit_cards');
+
+  for (const acc of userAccounts) {
+    const accDigits = acc.account_number ? String(acc.account_number).trim().slice(-4) : '';
+    if (accDigits.length >= 3) {
+      db.run(
+        "UPDATE transactions SET account_id = ? WHERE (account_id IS NULL OR account_id = 0) AND (card_id IS NULL OR card_id = 0) AND raw_sms LIKE '%' || ? || '%'",
+        [acc.id, accDigits],
+      );
+    }
+    const dcDigits = acc.debit_card_last_4 ? String(acc.debit_card_last_4).trim().slice(-4) : '';
+    if (dcDigits.length >= 4) {
+      db.run(
+        "UPDATE transactions SET account_id = ? WHERE (account_id IS NULL OR account_id = 0) AND (card_id IS NULL OR card_id = 0) AND raw_sms LIKE '%' || ? || '%'",
+        [acc.id, dcDigits],
+      );
+    }
+  }
+  for (const card of userCards) {
+    const cardDigits = card.last_4 ? String(card.last_4).trim().slice(-4) : '';
+    if (cardDigits.length >= 4) {
+      db.run(
+        "UPDATE transactions SET card_id = ? WHERE (card_id IS NULL OR card_id = 0) AND raw_sms LIKE '%' || ? || '%'",
+        [card.id, cardDigits],
+      );
+    }
+  }
+
+  // 4. Pair matching outflow and inflow transactions across distinct user accounts/cards
+  const activeTx = db.all(
+    'SELECT id, date, amount, type, category, account_id, card_id, raw_sms FROM transactions WHERE amount > 0 AND COALESCE(is_ignored, 0) = 0'
+  );
+  for (let i = 0; i < activeTx.length; i++) {
+    const t1 = activeTx[i];
+    for (let j = i + 1; j < activeTx.length; j++) {
+      const t2 = activeTx[j];
+      if (Math.abs(t1.amount - t2.amount) < 0.01) {
+        const inst1 = t1.card_id ? `card:${t1.card_id}` : (t1.account_id ? `acc:${t1.account_id}` : null);
+        const inst2 = t2.card_id ? `card:${t2.card_id}` : (t2.account_id ? `acc:${t2.account_id}` : null);
+        if (inst1 && inst2 && inst1 !== inst2) {
+          const d1 = new Date(t1.date).getTime();
+          const d2 = new Date(t2.date).getTime();
+          if (!isNaN(d1) && !isNaN(d2) && Math.abs(d1 - d2) <= 86400000 * 2) {
+            const isT1Credit = isCreditAlert(t1.raw_sms) || t1.type === 'Income';
+            const isT2Credit = isCreditAlert(t2.raw_sms) || t2.type === 'Income';
+            if (isT1Credit !== isT2Credit) {
+              const isCard = Boolean(t1.card_id || t2.card_id);
+              const cat = isCard ? 'Credit Card' : 'Transfer';
+              db.run("UPDATE transactions SET type = 'Transfer', category = ? WHERE id IN (?, ?)", [cat, t1.id, t2.id]);
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 export function convertRecord(db, args = {}) {
@@ -5383,6 +5469,10 @@ const ACTIONS = {
   merge_cards: mergeCards,
   merge_accounts: mergeAccounts,
   convert_record: convertRecord,
+  reconcile_transactions: (db) => {
+    reconcileExistingTransactions(db);
+    return { status: 'success' };
+  },
   ignore_discovered_account: ignoreDiscoveredAccount,
   restore_discovered_account: restoreDiscoveredAccount,
   get_ignored_discovered_accounts: getIgnoredDiscoveredAccounts,
