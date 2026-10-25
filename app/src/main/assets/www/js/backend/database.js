@@ -357,7 +357,8 @@ const RECORD_TYPES = {
   loan: ['loans',
     ['member_id', 'name', 'direction', 'loan_type', 'principal_amount',
       'current_outstanding', 'interest_rate', 'tenure_months', 'start_date',
-      'monthly_emi', 'notes', 'lender', 'debit_day', 'is_active', 'linked_merchant_key'],
+      'monthly_emi', 'notes', 'lender', 'debit_day', 'is_active', 'linked_merchant_key',
+      'account_number', 'last_4', 'updated_at'],
     'name'],
   card: ['credit_cards',
     ['member_id', 'card_name', 'bank', 'last_4', 'total_limit', 'available_limit', 'current_balance',
@@ -507,6 +508,7 @@ export function initDb(db, force = false) {
         member_id INTEGER DEFAULT 1,
         account_id INTEGER,
         card_id INTEGER,
+        loan_id INTEGER,
         date TEXT NOT NULL,
         amount REAL NOT NULL,
         currency TEXT DEFAULT 'INR',
@@ -523,7 +525,8 @@ export function initDb(db, force = false) {
         created_at TEXT,
         FOREIGN KEY (member_id) REFERENCES family_members(id),
         FOREIGN KEY (account_id) REFERENCES asset_accounts(id),
-        FOREIGN KEY (card_id) REFERENCES credit_cards(id)
+        FOREIGN KEY (card_id) REFERENCES credit_cards(id),
+        FOREIGN KEY (loan_id) REFERENCES loans(id)
     );
     CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date DESC);
     CREATE INDEX IF NOT EXISTS idx_tx_member ON transactions(member_id);
@@ -532,6 +535,7 @@ export function initDb(db, force = false) {
     CREATE INDEX IF NOT EXISTS idx_tx_type ON transactions(type);
     CREATE INDEX IF NOT EXISTS idx_tx_account ON transactions(account_id);
     CREATE INDEX IF NOT EXISTS idx_tx_card ON transactions(card_id);
+    CREATE INDEX IF NOT EXISTS idx_tx_loan ON transactions(loan_id);
     CREATE INDEX IF NOT EXISTS idx_tx_merchant_key ON transactions(merchant_key);
     CREATE INDEX IF NOT EXISTS idx_tx_date_amount ON transactions(date, amount);
 
@@ -608,8 +612,12 @@ export function initDb(db, force = false) {
         debit_day INTEGER DEFAULT 5,
         is_active INTEGER DEFAULT 1,
         linked_merchant_key TEXT,
+        account_number TEXT DEFAULT '',
+        last_4 TEXT DEFAULT '',
+        updated_at TEXT,
         FOREIGN KEY (member_id) REFERENCES family_members(id)
     );
+    CREATE INDEX IF NOT EXISTS idx_loans_last_4 ON loans(last_4);
 
     CREATE TABLE IF NOT EXISTS credit_cards (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1308,16 +1316,22 @@ function runAdditiveMigrations(db) {
   addColumnIfMissing(db, 'loans', 'debit_day', 'INTEGER DEFAULT 5');
   addColumnIfMissing(db, 'loans', 'lender', "TEXT DEFAULT ''");
   addColumnIfMissing(db, 'loans', 'is_active', 'INTEGER DEFAULT 1');
+  addColumnIfMissing(db, 'loans', 'account_number', "TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'loans', 'last_4', "TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'loans', 'updated_at', "TEXT DEFAULT ''");
+  db.run('CREATE INDEX IF NOT EXISTS idx_loans_last_4 ON loans(last_4);');
   addColumnIfMissing(db, 'credit_cards', 'linked_merchant_key', 'TEXT');
   addColumnIfMissing(db, 'credit_cards', 'available_limit', 'REAL DEFAULT NULL');
   addColumnIfMissing(db, 'credit_cards', 'updated_at', "TEXT DEFAULT ''");
   addColumnIfMissing(db, 'asset_accounts', 'linked_holding_type', "TEXT DEFAULT ''");
   addColumnIfMissing(db, 'asset_accounts', 'linked_pran', "TEXT DEFAULT ''");
   addColumnIfMissing(db, 'transactions', 'card_id', 'INTEGER');
+  addColumnIfMissing(db, 'transactions', 'loan_id', 'INTEGER');
   addColumnIfMissing(db, 'transactions', 'sender', "TEXT DEFAULT ''");
   addColumnIfMissing(db, 'transactions', 'is_ignored', 'INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'transactions', 'is_duplicate', 'INTEGER DEFAULT 0');
   db.run('CREATE INDEX IF NOT EXISTS idx_tx_card ON transactions(card_id);');
+  db.run('CREATE INDEX IF NOT EXISTS idx_tx_loan ON transactions(loan_id);');
 
   db.run(
     "UPDATE sips SET start_date = COALESCE((SELECT MIN(date) FROM transactions"
@@ -1858,6 +1872,13 @@ function saveRecord(db, args) {
     if (!record.tenure_months) {
       record.tenure_months = 12;
     }
+    if (record.account_number && !record.last_4) {
+      const digits = String(record.account_number).replace(/\D/g, '');
+      if (digits.length >= 4) record.last_4 = digits.slice(-4);
+      else if (digits.length > 0) record.last_4 = digits;
+    } else if (record.last_4 && !record.account_number) {
+      record.account_number = record.last_4;
+    }
   }
   if (table === 'credit_cards') {
     if (!record.bank) record.bank = record.card_name || 'Bank';
@@ -1975,10 +1996,10 @@ function saveRecord(db, args) {
       }
     }
   }
-  if (table === 'asset_accounts' || table === 'credit_cards') {
+  if (table === 'asset_accounts' || table === 'credit_cards' || table === 'loans') {
     reconcileExistingTransactions(db);
   }
-  return { record_id: recordId };
+  return { record_id: recordId, id: recordId };
 }
 
 function deleteRecord(db, args) {
@@ -2988,14 +3009,19 @@ function saveTransaction(db, args) {
 
   let accountId = transaction.account_id !== undefined && transaction.account_id !== null ? Number(transaction.account_id) : null;
   let cardId = transaction.card_id !== undefined && transaction.card_id !== null ? Number(transaction.card_id) : null;
+  let loanId = transaction.loan_id !== undefined && transaction.loan_id !== null ? Number(transaction.loan_id) : null;
 
-  if (!accountId && !cardId && rawSms) {
+  if (!accountId && !cardId && !loanId && rawSms) {
     const resolved = resolveAccountAndCardFromSms(db, rawSms, transaction.sender || '', { memberId: transaction.member_id });
     accountId = resolved.account_id;
     cardId = resolved.card_id;
+    loanId = resolved.loan_id;
   }
   if (cardId && rawSms) {
     autoUpdateCreditCardFromSms(db, rawSms, transaction.sender || '', cardId);
+  }
+  if (loanId && rawSms) {
+    autoUpdateLoanFromSms(db, rawSms, transaction.sender || '', loanId);
   }
 
   const sender = String(transaction.sender ?? '');
@@ -3004,6 +3030,7 @@ function saveTransaction(db, args) {
     resolveMemberId(db, transaction.member_id),
     accountId,
     cardId,
+    loanId,
     transaction.date || today(),
     amount,
     transaction.currency || currentCurrency(db),
@@ -3021,9 +3048,9 @@ function saveTransaction(db, args) {
   let oldTx = null;
   let transactionId = transaction.id;
   if (transactionId) {
-    oldTx = db.get('SELECT id, account_id, card_id, amount, type FROM transactions WHERE id = ?', [transactionId]);
+    oldTx = db.get('SELECT id, account_id, card_id, loan_id, amount, type FROM transactions WHERE id = ?', [transactionId]);
     db.run(
-      'UPDATE transactions SET member_id = ?, account_id = ?, card_id = ?, date = ?, amount = ?,'
+      'UPDATE transactions SET member_id = ?, account_id = ?, card_id = ?, loan_id = ?, date = ?, amount = ?,'
       + ' currency = ?, type = ?, category = ?, merchant = ?,'
       + ' description = ?, is_investment_outflow = ?, raw_sms = ?, sender = ?,'
       + ' is_ignored = ?, is_duplicate = ? WHERE id = ?',
@@ -3033,9 +3060,9 @@ function saveTransaction(db, args) {
     db.run('DELETE FROM transaction_cashbacks WHERE transaction_id = ?', [transactionId]);
   } else {
     const result = db.run(
-      'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type,'
+      'INSERT INTO transactions (member_id, account_id, card_id, loan_id, date, amount, currency, type,'
       + ' category, merchant, description, is_investment_outflow, raw_sms, sender,'
-      + ' is_ignored, is_duplicate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      + ' is_ignored, is_duplicate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [...values, new Date().toISOString()],
     );
     transactionId = result.lastInsertRowid;
@@ -3049,6 +3076,10 @@ function saveTransaction(db, args) {
   }
   if (cardId && rawSms) {
     const updated = autoUpdateCreditCardFromSms(db, rawSms, transaction.sender || '', cardId);
+    if (updated) handledBySms = true;
+  }
+  if (loanId && rawSms) {
+    const updated = autoUpdateLoanFromSms(db, rawSms, transaction.sender || '', loanId);
     if (updated) handledBySms = true;
   }
 
@@ -3464,29 +3495,49 @@ function extractCreditLimits(text) {
 
 /**
  * Extracts bank account, wallet, or food card available/clear balance from SMS alert text.
+ * Sign-aware: detects leading negative sign (-) or Dr/DR indicator for overdraft accounts.
  */
 export function extractAccountBalanceFromText(text) {
   const t = String(text || '');
   const balPatterns = [
     // 1. Explicit Avl / Available / Clear / Total / Updated / Effective / Net / Wallet / A/c Balance
-    /(?:avl\.?|avail(?:able)?|clear|total|updated|effective|net|wallet|acct?|a\/c)?\s*bal(?:ance)?(?:\s*in\s*(?:your\s*)?(?:a\/c|account|wallet|card|bank))?\s*(?:is)?\s*[:\s-]*\s*(?:rs\.?|inr|₹|inr\.)?\s*[:\s-]*\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:cr\.?|dr\.?)?/i,
+    /(?:avl\.?|avail(?:able)?|clear|total|updated|effective|net|wallet|acct?|a\/c)?\s*bal(?:ance)?(?:\s*in\s*(?:your\s*)?(?:a\/c|account|wallet|card|bank))?\s*(?:is)?\s*[:\s]*(-?)\s*(?:rs\.?|inr|₹|inr\.)?\s*[:\s]*(-?)\s*([0-9,]+(?:\.[0-9]+)?)\s*(cr\.?|dr\.?)?/i,
     // 2. Bal: Rs. 1234 or Bal: 1234 or Bal Rs 1234 or Bal INR 1234
-    /\bbal(?:ance)?\s*[:\s-]+\s*(?:rs\.?|inr|₹)?\s*[:\s-]*\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:cr\.?|dr\.?)?/i,
+    /\bbal(?:ance)?\s*[:\s]+(-?)\s*(?:rs\.?|inr|₹)?\s*[:\s]*(-?)\s*([0-9,]+(?:\.[0-9]+)?)\s*(cr\.?|dr\.?)?/i,
     // 3. Currency followed by is Avl Bal
-    /(?:rs\.?|inr|₹)\s*[:\s-]*\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:is\s*)?(?:avl\.?|available|clear|total|updated|current)?\s*bal(?:ance)?/i,
+    /(?:rs\.?|inr|₹)\s*[:\s]*(-?)\s*([0-9,]+(?:\.[0-9]+)?)\s*(?:is\s*)?(?:avl\.?|available|clear|total|updated|current)?\s*bal(?:ance)?\s*(cr\.?|dr\.?)?/i,
     // 4. Standalone Balance is / Balance:
-    /\bbalance\s*(?:is)?\s*[:\s-]+\s*(?:rs\.?|inr|₹)?\s*([0-9,]+(?:\.[0-9]+)?)/i,
+    /\bbalance\s*(?:is)?\s*[:\s]+(-?)\s*(?:rs\.?|inr|₹)?\s*[:\s]*(-?)\s*([0-9,]+(?:\.[0-9]+)?)\s*(cr\.?|dr\.?)?/i,
     // 5. Account Balance Rs 1234
-    /(?:account|a\/c)\s+bal(?:ance)?\s*[:\s-]*\s*(?:rs\.?|inr|₹)?\s*([0-9,]+(?:\.[0-9]+)?)/i,
+    /(?:account|a\/c)\s+bal(?:ance)?\s*[:\s]*(-?)\s*(?:rs\.?|inr|₹)?\s*[:\s]*(-?)\s*([0-9,]+(?:\.[0-9]+)?)\s*(cr\.?|dr\.?)?/i,
   ];
 
   for (const pat of balPatterns) {
     const m = pat.exec(t);
-    if (m && m[1]) {
-      const clean = m[1].replace(/,/g, '').replace(/\/[- ]*$/, '').trim();
-      const val = Number(clean);
-      if (Number.isFinite(val) && val >= 0) {
-        return val;
+    if (m) {
+      let sign1 = '';
+      let sign2 = '';
+      let numStr = '';
+      let suffix = '';
+
+      if (pat === balPatterns[2]) {
+        sign1 = m[1];
+        numStr = m[2];
+        suffix = m[3] || '';
+      } else {
+        sign1 = m[1];
+        sign2 = m[2];
+        numStr = m[3];
+        suffix = m[4] || '';
+      }
+
+      if (numStr) {
+        const clean = numStr.replace(/,/g, '').replace(/\/[- ]*$/, '').trim();
+        const val = Number(clean);
+        if (Number.isFinite(val)) {
+          const isNegative = sign1 === '-' || sign2 === '-' || /^dr/i.test(suffix);
+          return isNegative ? -Math.abs(val) : Math.abs(val);
+        }
       }
     }
   }
@@ -3819,15 +3870,21 @@ export function parseAccountDetailsFromText(text = '', sender = '') {
   else if (/scapia/i.test(combined)) cardVariant = 'Scapia';
   else if (/slice/i.test(combined)) cardVariant = 'Slice';
 
+  const limits = extractCreditLimits(t);
+  const accountBalance = extractAccountBalanceFromText(t);
+
+  const isLoan = !isFoodCard && !isWallet && !isPrepaidCard && !isCreditCard && !isDebitCard && (
+    /overdraft|\bod\b|home loan|loan a\/c|loan account|nach dr ow|star home/i.test(combined)
+    || (accountBalance !== null && accountBalance < 0)
+  );
+
   let instrumentType = 'bank_account';
   if (isFoodCard) instrumentType = 'meal_card';
   else if (isWallet) instrumentType = 'wallet';
   else if (isPrepaidCard) instrumentType = 'prepaid_card';
   else if (isDebitCard) instrumentType = 'debit_card';
   else if (isCreditCard) instrumentType = 'credit_card';
-
-  const limits = extractCreditLimits(t);
-  const accountBalance = extractAccountBalanceFromText(t);
+  else if (isLoan) instrumentType = 'loan';
 
   return {
     last4: primaryLast4,
@@ -3841,20 +3898,23 @@ export function parseAccountDetailsFromText(text = '', sender = '') {
     isPrepaidCard,
     isDebitCard,
     isCreditCard,
+    isLoan,
     isBankAccount: instrumentType === 'bank_account',
     cardVariant,
     available_limit: limits.available_limit,
     total_limit: limits.total_limit,
-    current_outstanding: limits.current_outstanding,
+    current_outstanding: isLoan && accountBalance !== null && accountBalance < 0
+      ? Math.abs(accountBalance)
+      : limits.current_outstanding,
     min_due: limits.min_due,
     account_balance: accountBalance,
   };
 }
 
 /**
- * Resolves matched asset_account (bank/wallet/meal card) or credit_card for an SMS message.
+ * Resolves matched asset_account (bank/wallet/meal card), credit_card, or loan for an SMS message.
  */
-export function resolveAccountAndCardFromSms(db, text = '', sender = '', { memberId = null, cachedAccounts = null, cachedCards = null } = {}) {
+export function resolveAccountAndCardFromSms(db, text = '', sender = '', { memberId = null, cachedAccounts = null, cachedCards = null, cachedLoans = null } = {}) {
   const info = parseAccountDetailsFromText(text, sender);
   const last4 = info.last4 || '';
   const dcLast4 = info.debit_card_last_4 || '';
@@ -3864,13 +3924,27 @@ export function resolveAccountAndCardFromSms(db, text = '', sender = '', { membe
 
   const existingAccounts = cachedAccounts || db.all(`SELECT id, name, category, institution, account_number, debit_card_last_4 FROM asset_accounts${clause}`, params);
   const existingCards = cachedCards || db.all(`SELECT id, card_name, bank, last_4, total_limit, available_limit, current_balance FROM credit_cards${clause}`, params);
+  const existingLoans = cachedLoans || db.all(`SELECT id, name, lender, account_number, last_4, current_outstanding, monthly_emi, debit_day FROM loans${clause}`, params);
 
   let matchedAccountId = null;
   let matchedCardId = null;
+  let matchedLoanId = null;
   let matchedAccount = null;
   let matchedCard = null;
+  let matchedLoan = null;
 
-  if (info.isCreditCard) {
+  if (info.isLoan) {
+    if (last4) {
+      matchedLoan = existingLoans.find((l) => (l.last_4 && l.last_4.endsWith(last4)) || (l.account_number && l.account_number.endsWith(last4)) || (l.name && l.name.includes(last4)));
+    }
+    if (!matchedLoan && issuer && issuer !== 'Bank') {
+      const issuerLower = issuer.toLowerCase();
+      matchedLoan = existingLoans.find((l) => (l.lender && l.lender.toLowerCase().includes(issuerLower)) || (l.name && l.name.toLowerCase().includes(issuerLower)));
+    }
+    if (matchedLoan) {
+      matchedLoanId = matchedLoan.id;
+    }
+  } else if (info.isCreditCard) {
     if (last4) {
       matchedCard = existingCards.find((c) => c.last_4 && c.last_4.endsWith(last4))
         || existingCards.find((c) => c.card_name && c.card_name.includes(last4));
@@ -3908,19 +3982,54 @@ export function resolveAccountAndCardFromSms(db, text = '', sender = '', { membe
     if (matchedAccount) {
       matchedAccountId = matchedAccount.id;
     } else if (last4 && !info.isDebitCard && !info.isBankAccount) {
-      // Fallback: check if last4 matches a credit card
-      matchedCard = existingCards.find((c) => c.last_4 && c.last_4.endsWith(last4));
-      if (matchedCard) matchedCardId = matchedCard.id;
+      // Fallback: check if last4 matches a loan or credit card
+      matchedLoan = existingLoans.find((l) => l.last_4 && l.last_4.endsWith(last4));
+      if (matchedLoan) {
+        matchedLoanId = matchedLoan.id;
+      } else {
+        matchedCard = existingCards.find((c) => c.last_4 && c.last_4.endsWith(last4));
+        if (matchedCard) matchedCardId = matchedCard.id;
+      }
     }
   }
 
   return {
     account_id: matchedAccountId,
     card_id: matchedCardId,
+    loan_id: matchedLoanId,
     account: matchedAccount,
     card: matchedCard,
+    loan: matchedLoan,
     info,
   };
+}
+
+/**
+ * Automatically updates active loan outstanding balance from SMS text.
+ */
+export function autoUpdateLoanFromSms(db, text = '', sender = '', matchedLoanId = null) {
+  const info = parseAccountDetailsFromText(text, sender);
+  let loanId = matchedLoanId;
+  if (!loanId) {
+    const res = resolveAccountAndCardFromSms(db, text, sender);
+    loanId = res.loan_id;
+  }
+  if (!loanId) return null;
+
+  const loan = db.get('SELECT id, current_outstanding FROM loans WHERE id = ?', [loanId]);
+  if (!loan) return null;
+
+  if (info.current_outstanding !== null && info.current_outstanding !== undefined && info.current_outstanding >= 0) {
+    db.run(
+      'UPDATE loans SET current_outstanding = ?, updated_at = ? WHERE id = ?',
+      [info.current_outstanding, new Date().toISOString(), loanId],
+    );
+    return {
+      loan_id: loanId,
+      current_outstanding: info.current_outstanding,
+    };
+  }
+  return null;
 }
 
 /**
@@ -3997,6 +4106,7 @@ export function discoverAccountsFromSms(db) {
   const transactions = db.all("SELECT raw_sms, sender, type, amount, date, id FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' ORDER BY date DESC, id DESC");
   const existingAccounts = db.all('SELECT id, name, category, institution, account_number, debit_card_last_4 FROM asset_accounts');
   const existingCards = db.all('SELECT id, card_name, bank, last_4 FROM credit_cards');
+  const existingLoans = db.all('SELECT id, name, lender, account_number, last_4, current_outstanding, monthly_emi, debit_day FROM loans');
 
   const ignoredRows = db.all('SELECT identifier, issuer, last_4 FROM ignored_discovered_accounts');
   const ignoredSet = new Set();
@@ -4006,7 +4116,7 @@ export function discoverAccountsFromSms(db) {
     if (r.last_4) ignoredSet.add(String(r.last_4).trim().toLowerCase());
   }
 
-  // Pre-collect existing last_4 digits across both cards and accounts
+  // Pre-collect existing last_4 digits across cards, accounts, and loans
   const extractDigits4 = (str) => {
     if (!str) return '';
     const digits = String(str).replace(/\D/g, '');
@@ -4016,6 +4126,7 @@ export function discoverAccountsFromSms(db) {
   const existingCardLast4Set = new Set();
   const existingAccountLast4Set = new Set();
   const existingDebitCardLast4Set = new Set();
+  const existingLoanLast4Set = new Set();
   const existingAllLast4Set = new Set();
 
   for (const c of existingCards) {
@@ -4035,6 +4146,13 @@ export function discoverAccountsFromSms(db) {
     if (dcD) {
       existingDebitCardLast4Set.add(dcD);
       existingAllLast4Set.add(dcD);
+    }
+  }
+  for (const l of existingLoans) {
+    const loanD = extractDigits4(l.last_4) || extractDigits4(l.account_number) || extractDigits4(l.name);
+    if (loanD) {
+      existingLoanLast4Set.add(loanD);
+      existingAllLast4Set.add(loanD);
     }
   }
 
@@ -4080,6 +4198,8 @@ export function discoverAccountsFromSms(db) {
         available_limit: info.available_limit,
         current_balance: info.current_outstanding || 0,
         balance: info.account_balance || 0,
+        monthly_emi: 0,
+        debit_day: null,
         last_balance_date: (info.account_balance !== null && info.account_balance !== undefined) ? (m.date || '') : '',
         last_seen: m.date || '',
         sample_sms: text.trim(),
@@ -4087,9 +4207,9 @@ export function discoverAccountsFromSms(db) {
       map.set(key, entry);
     }
 
-    if (info.account_balance !== null && info.account_balance !== undefined && info.account_balance >= 0) {
+    if (info.account_balance !== null && info.account_balance !== undefined) {
       if (!entry.balance || !entry.last_balance_date || (m.date && m.date >= entry.last_balance_date)) {
-        entry.balance = info.account_balance;
+        entry.balance = info.isLoan ? Math.abs(info.account_balance) : info.account_balance;
         entry.last_balance_date = m.date || '';
       }
     }
@@ -4100,7 +4220,9 @@ export function discoverAccountsFromSms(db) {
       entry.total_limit = info.total_limit;
     }
     if (info.current_outstanding !== null && info.current_outstanding !== undefined) {
-      entry.current_balance = info.current_outstanding;
+      if (!entry.current_balance || !entry.last_balance_date || (m.date && m.date >= entry.last_balance_date)) {
+        entry.current_balance = info.current_outstanding;
+      }
     }
 
     entry.txn_count += 1;
@@ -4110,6 +4232,20 @@ export function discoverAccountsFromSms(db) {
       entry.total_spent += amt;
     } else if (txType === 'income' || txType === 'credit') {
       entry.total_received += amt;
+    }
+
+    const isEmiOrMandate = Boolean(info.isLoan || /nach dr ow|\bemi\b|towards ecs/i.test(text));
+    if (isEmiOrMandate && amt > 0) {
+      if (!entry.monthly_emi || (txType === 'credit' && /nach dr ow/i.test(text))) {
+        entry.monthly_emi = amt;
+      }
+    }
+    if (isEmiOrMandate && m.date) {
+      const matchDay = /-(\d{2})$/.exec(m.date) || /(\d{2})[-/]\d{2}[-/]\d{4}/.exec(text);
+      if (matchDay && matchDay[1]) {
+        const d = parseInt(matchDay[1], 10);
+        if (d >= 1 && d <= 31) entry.debit_day = d;
+      }
     }
     if (m.date && (!entry.last_seen || m.date > entry.last_seen)) {
       entry.last_seen = m.date;
@@ -4277,6 +4413,37 @@ export function discoverAccountsFromSms(db) {
           sample_sms: entry.sample_sms,
         });
       }
+    } else if (instrument_type === 'loan') {
+      const alreadyHas = existingLoanLast4Set.has(last4)
+        || existingLoans.some((l) =>
+          (l.last_4 && l.last_4.endsWith(last4))
+          || (l.account_number && l.account_number.endsWith(last4))
+          || (l.name && l.name.includes(last4)));
+      if (!alreadyHas) {
+        const displayName = `${info.issuer} Home Loan / OD`;
+        const outstanding = entry.current_balance || info.current_outstanding || (entry.balance > 0 ? entry.balance : 0);
+        discovered.push({
+          kind: 'loan',
+          bank: info.issuer,
+          lender: info.issuer,
+          name: `${displayName}${last4 !== 'Loan' ? ` (${last4})` : ''}`,
+          account_type: 'Home Loan',
+          instrument_type: 'loan',
+          last_4: last4,
+          account_number: last4 !== 'Loan' ? last4 : '',
+          suggested_name: `${displayName}${last4 !== 'Loan' ? ` (${last4})` : ''}`,
+          current_outstanding: outstanding,
+          current_balance: outstanding,
+          balance: outstanding,
+          monthly_emi: entry.monthly_emi || 0,
+          debit_day: entry.debit_day || 5,
+          txn_count: entry.txn_count,
+          total_spent: Math.round(entry.total_spent * 100) / 100,
+          total_received: Math.round(entry.total_received * 100) / 100,
+          last_seen: entry.last_seen,
+          sample_sms: entry.sample_sms,
+        });
+      }
     } else {
       const alreadyHas = existingAccountLast4Set.has(last4)
         || existingDebitCardLast4Set.has(last4)
@@ -4312,6 +4479,7 @@ export function discoverAccountsFromSms(db) {
     discovered,
     existing_accounts: existingAccounts,
     existing_cards: existingCards,
+    existing_loans: existingLoans,
   };
 }
 
@@ -4324,12 +4492,41 @@ export function addDiscoveredAccounts(db, args = {}) {
 
   db.transaction(() => {
     for (const item of items) {
-      const isCard = item.kind === 'card' || item.instrument_type === 'credit_card';
-      const isDebit = Boolean(item.is_debit_card || item.instrument_type === 'debit_card');
-      const bank = String(item.bank || item.institution || 'Bank').trim();
+      const isLoan = item.kind === 'loan' || item.instrument_type === 'loan';
+      const isCard = !isLoan && (item.kind === 'card' || item.instrument_type === 'credit_card');
+      const isDebit = !isLoan && Boolean(item.is_debit_card || item.instrument_type === 'debit_card');
+      const bank = String(item.bank || item.institution || item.lender || 'Bank').trim();
       const last4 = String(item.last_4 || item.account_number || item.debit_card_last_4 || '').trim().slice(-4);
 
-      if (isCard) {
+      if (isLoan) {
+        const loanName = String(item.suggested_name || item.name || `${bank} Home Loan`).trim();
+        const loanType = String(item.loan_type || 'Home Loan').trim();
+        const principal = Math.abs(Number(item.principal_amount || item.current_outstanding || item.current_balance || item.balance) || 0);
+        const outstanding = Math.abs(Number(item.current_outstanding || item.current_balance || item.balance) || principal);
+        const emi = Math.abs(Number(item.monthly_emi) || 0);
+        const debitDay = Number(item.debit_day) || 5;
+        const interestRate = Number(item.interest_rate) || 8.5;
+        const loanRes = db.run(
+          `INSERT INTO loans (
+            member_id, name, loan_type, principal_amount, current_outstanding,
+            interest_rate, start_date, tenure_months, monthly_emi, lender,
+            debit_day, account_number, last_4, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            memberId, loanName, loanType, principal, outstanding,
+            interestRate, new Date().toISOString().slice(0, 10), 240, emi, bank,
+            debitDay, last4, last4, new Date().toISOString(),
+          ],
+        );
+        const newLoanId = loanRes.lastInsertRowid;
+        if (last4 && last4.length >= 4) {
+          db.run(
+            "UPDATE transactions SET loan_id = ? WHERE (loan_id IS NULL OR loan_id = 0) AND raw_sms LIKE '%' || ? || '%'",
+            [newLoanId, last4],
+          );
+        }
+        added += 1;
+      } else if (isCard) {
         const cardName = String(item.suggested_name || item.card_name || item.name || `${bank} Credit Card`).trim();
         const limit = Math.abs(Number(item.total_limit) || 0);
         const avail = item.available_limit !== null && item.available_limit !== undefined ? Math.abs(Number(item.available_limit) || 0) : null;
@@ -4396,12 +4593,15 @@ export function addDiscoveredAccounts(db, args = {}) {
       }
 
       // Register all keys into ignored_discovered_accounts
-      const instType = item.instrument_type || (isCard ? 'credit_card' : (isDebit ? 'debit_card' : 'bank_account'));
+      const instType = item.instrument_type || (isLoan ? 'loan' : (isCard ? 'credit_card' : (isDebit ? 'debit_card' : 'bank_account')));
       const keys = [
         `${instType}:${bank}:${last4}`.toLowerCase(),
         `${bank}:${last4}`.toLowerCase(),
         last4 ? last4.toLowerCase() : null,
       ].filter(Boolean);
+      if (isLoan) {
+        keys.push(`overdraft:${bank}:${last4}`.toLowerCase());
+      }
 
       for (const k of keys) {
         db.run(
@@ -4430,7 +4630,26 @@ export function combineDiscoveredAccount(db, args = {}) {
   }
 
   db.transaction(() => {
-    if (targetType === 'card') {
+    if (targetType === 'loan') {
+      const loan = db.get('SELECT id, name, lender, account_number, last_4, current_outstanding, monthly_emi, debit_day FROM loans WHERE id = ?', [targetId]);
+      if (loan) {
+        const updateLast4Val = (updateLast4 && last4) || !loan.last_4 ? last4 : loan.last_4;
+        const updateLender = loan.lender ? loan.lender : bank;
+        const updateOutstanding = args.current_outstanding !== undefined ? Math.abs(Number(args.current_outstanding)) : (args.balance !== undefined ? Math.abs(Number(args.balance)) : loan.current_outstanding);
+        const updateEmi = args.monthly_emi !== undefined ? Math.abs(Number(args.monthly_emi)) : loan.monthly_emi;
+        const updateDebitDay = args.debit_day !== undefined ? Number(args.debit_day) : loan.debit_day;
+        db.run(
+          'UPDATE loans SET last_4 = ?, account_number = COALESCE(NULLIF(account_number, \'\'), ?), lender = ?, current_outstanding = ?, monthly_emi = ?, debit_day = ?, updated_at = ? WHERE id = ?',
+          [updateLast4Val, updateLast4Val, updateLender, updateOutstanding, updateEmi, updateDebitDay, new Date().toISOString(), targetId],
+        );
+        if (last4) {
+          db.run(
+            "UPDATE transactions SET loan_id = ? WHERE (loan_id IS NULL OR loan_id = 0) AND raw_sms LIKE '%' || ? || '%'",
+            [targetId, last4],
+          );
+        }
+      }
+    } else if (targetType === 'card') {
       const card = db.get('SELECT id, last_4, bank, total_limit, available_limit, current_balance FROM credit_cards WHERE id = ?', [targetId]);
       if (card) {
         const updateLast4Val = (updateLast4 && last4) || !card.last_4 ? last4 : card.last_4;
@@ -4478,12 +4697,15 @@ export function combineDiscoveredAccount(db, args = {}) {
     }
 
     // Register into ignored_discovered_accounts with all key variants
-    const instType = args.instrument_type || (isDebitCard ? 'debit_card' : (targetType === 'card' ? 'credit_card' : 'bank_account'));
+    const instType = args.instrument_type || (targetType === 'loan' ? 'loan' : (isDebitCard ? 'debit_card' : (targetType === 'card' ? 'credit_card' : 'bank_account')));
     const keys = [
       `${instType}:${bank}:${last4}`.toLowerCase(),
       `${bank}:${last4}`.toLowerCase(),
       last4 ? last4.toLowerCase() : null,
     ].filter(Boolean);
+    if (targetType === 'loan' || instType === 'loan') {
+      keys.push(`overdraft:${bank}:${last4}`.toLowerCase());
+    }
 
     for (const k of keys) {
       db.run(
@@ -4501,10 +4723,11 @@ export function combineDiscoveredAccount(db, args = {}) {
 export function resyncAccountFromSms(db, args = {}) {
   const accountId = Number(args.account_id);
   const cardId = Number(args.card_id);
+  const loanId = Number(args.loan_id);
   const resyncAll = Boolean(args.all);
 
-  if (!accountId && !cardId && !resyncAll) {
-    return fail('BAD_REQUEST', 'Please provide an account_id, card_id, or all: true.');
+  if (!accountId && !cardId && !loanId && !resyncAll) {
+    return fail('BAD_REQUEST', 'Please provide an account_id, card_id, loan_id, or all: true.');
   }
 
   const results = [];
@@ -4517,6 +4740,10 @@ export function resyncAccountFromSms(db, args = {}) {
     const cardsToResync = cardId
       ? db.all('SELECT * FROM credit_cards WHERE id = ?', [cardId])
       : (resyncAll ? db.all('SELECT * FROM credit_cards') : []);
+
+    const loansToResync = loanId
+      ? db.all('SELECT * FROM loans WHERE id = ?', [loanId])
+      : (resyncAll ? db.all('SELECT * FROM loans') : []);
 
     // 1. Process Bank/Asset Accounts
     for (const acc of accountsToResync) {
@@ -4636,6 +4863,55 @@ export function resyncAccountFromSms(db, args = {}) {
         total_limit: newTotal,
         remapped_transactions: remapped,
         total_transactions: txns.length,
+      });
+    }
+
+    // 3. Process Loans
+    for (const loan of loansToResync) {
+      const last4 = loan.last_4 ? String(loan.last_4).trim().slice(-4) : (loan.account_number ? String(loan.account_number).trim().slice(-4) : '');
+      let remapped = 0;
+      if (last4 && last4.length >= 4) {
+        const r = db.run(
+          "UPDATE transactions SET loan_id = ? WHERE (loan_id IS NULL OR loan_id = 0) AND raw_sms LIKE '%' || ? || '%'",
+          [loan.id, last4],
+        );
+        remapped += r.changes || 0;
+      }
+
+      const txns = db.all(
+        `SELECT raw_sms, date, amount, type FROM transactions
+         WHERE (loan_id = ? OR (raw_sms IS NOT NULL AND ? != '' AND raw_sms LIKE '%' || ? || '%'))
+         ORDER BY date DESC, id DESC`,
+        [loan.id, last4, last4],
+      );
+
+      let latestOutstanding = null;
+      let latestOutstandingDate = null;
+
+      for (const t of txns) {
+        if (!t.raw_sms) continue;
+        const info = parseAccountDetailsFromText(t.raw_sms);
+        if (info.current_outstanding !== null && info.current_outstanding !== undefined && info.current_outstanding >= 0) {
+          latestOutstanding = info.current_outstanding;
+          latestOutstandingDate = t.date;
+          break;
+        }
+      }
+
+      if (latestOutstanding !== null) {
+        db.run('UPDATE loans SET current_outstanding = ?, updated_at = ? WHERE id = ?', [latestOutstanding, new Date().toISOString(), loan.id]);
+      }
+
+      results.push({
+        id: loan.id,
+        name: loan.name,
+        type: 'loan',
+        current_outstanding: latestOutstanding !== null ? latestOutstanding : loan.current_outstanding,
+        previous_outstanding: loan.current_outstanding,
+        updated: latestOutstanding !== null && latestOutstanding !== loan.current_outstanding,
+        remapped_transactions: remapped,
+        total_transactions: txns.length,
+        latest_date: latestOutstandingDate,
       });
     }
   });
@@ -4884,13 +5160,15 @@ export function reconcileExistingTransactions(db) {
     + " AND raw_sms IS NOT NULL AND (lower(raw_sms) LIKE '%credited%' OR lower(raw_sms) LIKE '%deposited%')"
   );
 
-  // 3. Link transactions with missing account_id or card_id using resolveAccountAndCardFromSms
+  // 3. Link transactions with missing account_id, card_id, or loan_id using resolveAccountAndCardFromSms
   const unlinked = db.all(
-    "SELECT id, raw_sms, sender FROM transactions WHERE (account_id IS NULL OR account_id = 0) AND (card_id IS NULL OR card_id = 0) AND raw_sms IS NOT NULL AND raw_sms != ''",
+    "SELECT id, raw_sms, sender FROM transactions WHERE (account_id IS NULL OR account_id = 0) AND (card_id IS NULL OR card_id = 0) AND (loan_id IS NULL OR loan_id = 0) AND raw_sms IS NOT NULL AND raw_sms != ''",
   );
   for (const row of unlinked) {
     const res = resolveAccountAndCardFromSms(db, row.raw_sms, row.sender || '');
-    if (res.account_id) {
+    if (res.loan_id) {
+      db.run('UPDATE transactions SET loan_id = ? WHERE id = ?', [res.loan_id, row.id]);
+    } else if (res.account_id) {
       db.run('UPDATE transactions SET account_id = ? WHERE id = ?', [res.account_id, row.id]);
     } else if (res.card_id) {
       db.run('UPDATE transactions SET card_id = ? WHERE id = ?', [res.card_id, row.id]);
@@ -4899,15 +5177,16 @@ export function reconcileExistingTransactions(db) {
 
   const userAccounts = db.all('SELECT id, account_number, debit_card_last_4 FROM asset_accounts');
   const userCards = db.all('SELECT id, last_4 FROM credit_cards');
+  const userLoans = db.all('SELECT id, name, lender, account_number, last_4, monthly_emi, debit_day, current_outstanding FROM loans');
 
-  // 4. Single-leg self-transfers where raw_sms explicitly specifies another registered user account/card
+  // 4. Single-leg self-transfers where raw_sms explicitly specifies another registered user account/card/loan
   const activeTx = db.all(
-    'SELECT id, date, created_at, amount, type, category, account_id, card_id, raw_sms FROM transactions WHERE amount > 0 AND COALESCE(is_ignored, 0) = 0',
+    'SELECT id, date, created_at, amount, type, category, account_id, card_id, loan_id, raw_sms FROM transactions WHERE amount > 0 AND COALESCE(is_ignored, 0) = 0',
   );
 
   for (const t of activeTx) {
     if (t.type === 'Expense' && t.raw_sms) {
-      const targetMatch = /(?:(?:credited to|transferred to|sent to|to your)\s+(?:a\/c|acct|account|card)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\b|(?:a\/c|acct|account|card)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\s+(?:is\s+)?credited\b)/i.exec(t.raw_sms);
+      const targetMatch = /(?:(?:credited to|transferred to|sent to|to your)\s+(?:a\/c|acct|account|card|loan)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\b|(?:a\/c|acct|account|card|loan)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\s+(?:is\s+)?credited\b)/i.exec(t.raw_sms);
       const targetSuffix = (targetMatch ? (targetMatch[1] || targetMatch[2]) : '').toLowerCase();
       if (targetSuffix) {
         const isUserAcc = userAccounts.some((a) => {
@@ -4918,23 +5197,33 @@ export function reconcileExistingTransactions(db) {
           const num = String(c.last_4 || '').toLowerCase();
           return num && (num.endsWith(targetSuffix) || targetSuffix.endsWith(num)) && (!t.card_id || c.id !== t.card_id);
         });
-        if (isUserAcc || isUserCard) {
+        const matchedLoan = userLoans.find((l) => {
+          const num = String(l.last_4 || l.account_number || '').toLowerCase();
+          return num && (num.endsWith(targetSuffix) || targetSuffix.endsWith(num));
+        });
+
+        if (isUserAcc || isUserCard || matchedLoan) {
           t.type = 'Transfer';
-          t.category = isUserCard ? 'Credit Card' : 'Transfer';
-          db.run("UPDATE transactions SET type = 'Transfer', category = ? WHERE id = ?", [t.category, t.id]);
+          t.category = matchedLoan ? 'Loans & EMI' : (isUserCard ? 'Credit Card' : 'Transfer');
+          if (matchedLoan && !t.loan_id) {
+            t.loan_id = matchedLoan.id;
+            db.run("UPDATE transactions SET type = 'Transfer', category = ?, loan_id = ? WHERE id = ?", [t.category, matchedLoan.id, t.id]);
+          } else {
+            db.run("UPDATE transactions SET type = 'Transfer', category = ? WHERE id = ?", [t.category, t.id]);
+          }
         }
       }
     }
   }
 
-  // 5. Pair matching outflow and inflow transactions across distinct user accounts/cards
+  // 5. Pair matching outflow and inflow transactions across distinct user accounts/cards/loans
   for (let i = 0; i < activeTx.length; i++) {
     const t1 = activeTx[i];
     for (let j = i + 1; j < activeTx.length; j++) {
       const t2 = activeTx[j];
       if (Math.abs(t1.amount - t2.amount) < 0.01) {
-        const inst1 = t1.card_id ? `card:${t1.card_id}` : (t1.account_id ? `acc:${t1.account_id}` : null);
-        const inst2 = t2.card_id ? `card:${t2.card_id}` : (t2.account_id ? `acc:${t2.account_id}` : null);
+        const inst1 = t1.loan_id ? `loan:${t1.loan_id}` : (t1.card_id ? `card:${t1.card_id}` : (t1.account_id ? `acc:${t1.account_id}` : null));
+        const inst2 = t2.loan_id ? `loan:${t2.loan_id}` : (t2.card_id ? `card:${t2.card_id}` : (t2.account_id ? `acc:${t2.account_id}` : null));
         if (inst1 && inst2 && inst1 !== inst2) {
           const d1 = new Date(t1.date || t1.created_at).getTime();
           const d2 = new Date(t2.date || t2.created_at).getTime();
@@ -4942,15 +5231,57 @@ export function reconcileExistingTransactions(db) {
             const isT1Credit = t1.type === 'Income' ? true : (t1.type === 'Expense' ? false : isCreditAlert(t1.raw_sms));
             const isT2Credit = t2.type === 'Income' ? true : (t2.type === 'Expense' ? false : isCreditAlert(t2.raw_sms));
             if (isT1Credit !== isT2Credit) {
+              const hasLoan = Boolean(t1.loan_id || t2.loan_id);
               const isCard = Boolean(t1.card_id || t2.card_id);
-              const cat = isCard ? 'Credit Card' : 'Transfer';
+              const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
               t1.type = 'Transfer';
               t1.category = cat;
               t2.type = 'Transfer';
               t2.category = cat;
-              db.run("UPDATE transactions SET type = 'Transfer', category = ? WHERE id IN (?, ?)", [cat, t1.id, t2.id]);
+              const matchedLoanId = t1.loan_id || t2.loan_id;
+              if (matchedLoanId) {
+                t1.loan_id = matchedLoanId;
+                t2.loan_id = matchedLoanId;
+                db.run("UPDATE transactions SET type = 'Transfer', category = ?, loan_id = ? WHERE id IN (?, ?)", [cat, matchedLoanId, t1.id, t2.id]);
+                const creditSms = isT1Credit ? t1.raw_sms : t2.raw_sms;
+                if (creditSms) {
+                  autoUpdateLoanFromSms(db, creditSms, '', matchedLoanId);
+                }
+              } else {
+                db.run("UPDATE transactions SET type = 'Transfer', category = ? WHERE id IN (?, ?)", [cat, t1.id, t2.id]);
+              }
             }
           }
+        }
+      }
+    }
+  }
+
+  // 6. Standalone loan alerts & EMI debits
+  for (const t of activeTx) {
+    if (t.raw_sms) {
+      // 6a. NACH DR OW / Loan credits into registered loan account
+      if (/nach dr ow|star home|overdraft|home loan/i.test(t.raw_sms) && isCreditAlert(t.raw_sms)) {
+        if (!t.loan_id) {
+          const res = resolveAccountAndCardFromSms(db, t.raw_sms);
+          if (res.loan_id) t.loan_id = res.loan_id;
+        }
+        if (t.loan_id || /nach dr ow/i.test(t.raw_sms)) {
+          t.type = 'Transfer';
+          t.category = 'Loans & EMI';
+          db.run("UPDATE transactions SET type = 'Transfer', category = 'Loans & EMI', loan_id = COALESCE(loan_id, ?) WHERE id = ?", [t.loan_id || null, t.id]);
+          if (t.loan_id) {
+            autoUpdateLoanFromSms(db, t.raw_sms, '', t.loan_id);
+          }
+        }
+      }
+      // 6b. Standalone debit towards ECS matching loan monthly EMI
+      if (t.type === 'Expense' && /towards ecs|\bemi\b|loan debit/i.test(t.raw_sms)) {
+        const matchingLoan = userLoans.find((l) => l.monthly_emi && Math.abs(l.monthly_emi - t.amount) < 1.0);
+        if (matchingLoan) {
+          t.category = 'Loans & EMI';
+          t.loan_id = matchingLoan.id;
+          db.run("UPDATE transactions SET category = 'Loans & EMI', loan_id = ? WHERE id = ?", [matchingLoan.id, t.id]);
         }
       }
     }
@@ -5491,10 +5822,18 @@ const ACTIONS = {
   add_discovered_accounts: addDiscoveredAccounts,
   combine_discovered_account: combineDiscoveredAccount,
   resync_account_from_sms: resyncAccountFromSms,
+  auto_update_loan_from_sms: (db, args) => {
+    const res = autoUpdateLoanFromSms(db, args.text || '', args.sender || '', args.loan_id || null);
+    return { status: 'success', result: res };
+  },
   merge_cards: mergeCards,
   merge_accounts: mergeAccounts,
   convert_record: convertRecord,
   reconcile_transactions: (db) => {
+    reconcileExistingTransactions(db);
+    return { status: 'success' };
+  },
+  reconcile_existing_transactions: (db) => {
     reconcileExistingTransactions(db);
     return { status: 'success' };
   },
