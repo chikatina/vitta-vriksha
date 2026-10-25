@@ -429,7 +429,7 @@ export function getCashflowRunway(db, args = {}) {
 
   // Salary expectation day: default to 1st of next month or learned from history
   const salaryRow = db.get(
-    "SELECT strftime('%d', date) AS day, amount FROM transactions WHERE type = 'Income' ORDER BY date DESC LIMIT 1",
+    "SELECT strftime('%d', date) AS day, amount FROM transactions WHERE type = 'Income' AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0 ORDER BY date DESC LIMIT 1",
   );
   const expectedSalaryDay = salaryRow ? Number(salaryRow.day) : 1;
   const expectedSalaryAmount = salaryRow ? number(salaryRow.amount) : 0;
@@ -504,7 +504,7 @@ export function getSalaryChecklist(db, args = {}) {
   const [clause, params] = memberClause(memberId, 'AND');
 
   const latestSalary = db.get(
-    `SELECT date, amount, description FROM transactions WHERE type = 'Income' AND category = 'Salary'${clause} ORDER BY date DESC LIMIT 1`,
+    `SELECT date, amount, description FROM transactions WHERE type = 'Income' AND category = 'Salary' AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0${clause} ORDER BY date DESC LIMIT 1`,
     params,
   );
 

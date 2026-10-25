@@ -1161,6 +1161,18 @@ async function openRecordSheet(app, type, existing, preset = null) {
           <button type="button" class="btn btn-outlined btn-xs" data-convert-to-card style="flex-shrink:0">
             ${icon('autorenew', 'icon-sm')}Convert
           </button>
+        </div>
+        <div class="card-flat convert-prompt-banner" style="margin-top:6px">
+          <div class="row" style="gap:8px;align-items:center;min-width:0">
+            <span class="avatar avatar-xs avatar-investment">${icon('home', 'icon-sm')}</span>
+            <div style="min-width:0">
+              <div style="font-weight:600;font-size:12.5px">Is this a Home Loan / OD?</div>
+              <div class="caption" style="font-size:11px">Track EMI, overdraft & outstanding</div>
+            </div>
+          </div>
+          <button type="button" class="btn btn-outlined btn-xs" data-convert-to-loan style="flex-shrink:0">
+            ${icon('autorenew', 'icon-sm')}Convert
+          </button>
         </div>`
       : (type === 'card'
         ? `<div class="card-flat convert-prompt-banner">
@@ -1174,8 +1186,33 @@ async function openRecordSheet(app, type, existing, preset = null) {
             <button type="button" class="btn btn-outlined btn-xs" data-convert-to-account style="flex-shrink:0">
               ${icon('autorenew', 'icon-sm')}Convert
             </button>
+          </div>
+          <div class="card-flat convert-prompt-banner" style="margin-top:6px">
+            <div class="row" style="gap:8px;align-items:center;min-width:0">
+              <span class="avatar avatar-xs avatar-investment">${icon('home', 'icon-sm')}</span>
+              <div style="min-width:0">
+                <div style="font-weight:600;font-size:12.5px">Is this a Loan / OD Account?</div>
+                <div class="caption" style="font-size:11px">Track EMI, overdraft & outstanding</div>
+              </div>
+            </div>
+            <button type="button" class="btn btn-outlined btn-xs" data-convert-to-loan style="flex-shrink:0">
+              ${icon('autorenew', 'icon-sm')}Convert
+            </button>
           </div>`
-        : '')
+        : (type === 'loan'
+          ? `<div class="card-flat convert-prompt-banner">
+              <div class="row" style="gap:8px;align-items:center;min-width:0">
+                <span class="avatar avatar-xs avatar-bank">${icon('account_balance', 'icon-sm')}</span>
+                <div style="min-width:0">
+                  <div style="font-weight:600;font-size:12.5px">Is this a Bank Account?</div>
+                  <div class="caption" style="font-size:11px">Track savings & debit card</div>
+                </div>
+              </div>
+              <button type="button" class="btn btn-outlined btn-xs" data-convert-to-account style="flex-shrink:0">
+                ${icon('autorenew', 'icon-sm')}Convert
+              </button>
+            </div>`
+          : ''))
   ) : '';
 
   const mergeBtnHtml = existing ? (
@@ -1364,6 +1401,32 @@ async function openRecordSheet(app, type, existing, preset = null) {
             close(true);
           } else {
             toast(res?.message || 'Could not convert card.', 'error');
+          }
+        });
+      }
+
+      const convertToLoanBtn = node.querySelector('[data-convert-to-loan]');
+      if (convertToLoanBtn && existing) {
+        convertToLoanBtn.addEventListener('click', async () => {
+          const title = existing.name || existing.card_name || 'Account';
+          const confirmed = await confirmDialog(
+            'Convert to Loan / OD?',
+            `Move "${h(title)}" to Loans & Liabilities to track outstanding, interest, EMI, and overdraft balance. All existing transactions will be transferred.`,
+            { confirmLabel: 'Convert to Loan' },
+          );
+          if (!confirmed) return;
+
+          const res = await Bridge.db('convert_record', {
+            from_type: type,
+            id: existing.id,
+            to_type: 'loan',
+          });
+
+          if (res && res.status === 'success') {
+            toast('Converted to Loan Account', 'success');
+            close(true);
+          } else {
+            toast(res?.message || 'Could not convert record.', 'error');
           }
         });
       }

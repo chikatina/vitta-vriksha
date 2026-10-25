@@ -48,7 +48,8 @@ export function flowClause(db, flow) {
     transfer: "(type = 'Transfer' OR category = 'Transfer' OR category = 'Credit Card')",
     all: "(type != 'Transfer' AND category != 'Transfer' AND category != 'Credit Card')",
   };
-  return clauses[flow] || clauses.all;
+  const base = clauses[flow] || clauses.all;
+  return `(${base} AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0)`;
 }
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -64,7 +65,7 @@ const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frida
  * without a second trip.
  */
 function transactionRows(db, { from, to, memberId, category, merchant, flow = 'all' }) {
-  const filters = ['date >= ?', 'date < ?'];
+  const filters = ['date >= ?', 'date < ?', 'COALESCE(is_ignored, 0) = 0', 'COALESCE(is_duplicate, 0) = 0'];
   const params = [from, to];
 
   const [clause, memberParams] = memberClause(memberId, 'AND');
@@ -574,7 +575,7 @@ function carryInto(db, spec, { from, memberId }) {
   const [clause, params] = memberClause(memberId, 'AND');
   const rows = db.all(
     'SELECT type, category, COALESCE(is_investment_outflow, 0) AS is_investment_outflow, SUM(amount) AS total'
-    + ` FROM transactions WHERE date < ?${clause}`
+    + ` FROM transactions WHERE date < ? AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0${clause}`
     + ' GROUP BY type, category, is_investment_outflow',
     [from, ...params],
   );

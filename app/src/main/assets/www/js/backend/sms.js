@@ -387,15 +387,16 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
    */
   if (notMoney === 'card-payment' || notMoney === 'self-transfer') {
     const moved = extractTransactionAmount(text) || (FALLBACK_AMOUNT_RE.exec(text) ? toAmount(FALLBACK_AMOUNT_RE.exec(text)[1]) : 0);
+    const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(text || '');
     return {
       status: 'classified',
       matched_rule: notMoney === 'card-payment' ? 'Credit card payment' : 'Own transfer',
       amount: moved,
       type: 'Transfer',
-      category: notMoney === 'card-payment' ? 'Credit Card' : 'Transfer',
+      category: isLoanOrEmi ? 'Loans & EMI' : (notMoney === 'card-payment' ? 'Credit Card' : 'Transfer'),
       category_source: 'rule',
-      merchant: merchant || (notMoney === 'card-payment' ? 'Credit Card Payment' : ''),
-      merchant_key: key || (notMoney === 'card-payment' ? 'credit card payment' : ''),
+      merchant: merchant || (isLoanOrEmi ? 'Loan Repayment' : (notMoney === 'card-payment' ? 'Credit Card Payment' : '')),
+      merchant_key: key || (isLoanOrEmi ? 'loan repayment' : (notMoney === 'card-payment' ? 'credit card payment' : '')),
       account_last4: accountLast4,
       account_issuer: accountInfo.issuer,
       is_food_card: accountInfo.isFoodCard,
@@ -535,9 +536,10 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
           const num = String(l.last_4 || l.account_number || '').toLowerCase();
           return num && (num.endsWith(targetSuffix) || targetSuffix.endsWith(num));
         });
-        if (isUserAcc || isUserCard || matchedLoan) {
+        const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(text || '');
+        if (isUserAcc || isUserCard || matchedLoan || isLoanOrEmi) {
           finalType = 'Transfer';
-          finalCategory = matchedLoan ? 'Loans & EMI' : (isUserCard ? 'Credit Card' : 'Transfer');
+          finalCategory = (matchedLoan || isLoanOrEmi) ? 'Loans & EMI' : (isUserCard ? 'Credit Card' : 'Transfer');
           matchedRuleName = 'Target account transfer';
           if (matchedLoan && !resolvedAccount.loan_id) {
             resolvedAccount.loan_id = matchedLoan.id;
@@ -618,8 +620,10 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
       }
 
       if (isMatch) {
-        const hasLoan = Boolean(resolvedAccount.loan_id || opp.loan_id);
-        const isCard = Boolean(resolvedAccount.card_id || opp.card_id);
+        const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(text || '')
+          || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(opp.raw_sms || '');
+        const hasLoan = Boolean(resolvedAccount.loan_id || opp.loan_id) || isLoanOrEmi;
+        const isCard = !isLoanOrEmi && Boolean(resolvedAccount.card_id || opp.card_id);
         finalType = 'Transfer';
         finalCategory = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
         matchedRuleName = 'Reconciled transfer';
@@ -705,8 +709,10 @@ export function reconcileTransfers(rows, db, { memberId = null, cachedAccounts =
         && Math.abs(inRow.classified.amount - outRow.classified.amount) < 0.01,
       );
       if (matchingIn) {
-        const hasLoan = Boolean(outRow.classified.loan_id || matchingIn.classified.loan_id || outRow.classified.is_loan || matchingIn.classified.is_loan);
-        const isCard = Boolean(outRow.classified.card_id || matchingIn.classified.card_id || outRow.classified.is_credit_card || matchingIn.classified.is_credit_card);
+        const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(outRow.body || outRow.raw_sms || '')
+          || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(matchingIn.body || matchingIn.raw_sms || '');
+        const hasLoan = Boolean(outRow.classified.loan_id || matchingIn.classified.loan_id || outRow.classified.is_loan || matchingIn.classified.is_loan) || isLoanOrEmi;
+        const isCard = !isLoanOrEmi && Boolean(outRow.classified.card_id || matchingIn.classified.card_id || outRow.classified.is_credit_card || matchingIn.classified.is_credit_card);
         const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
 
         outRow.classified.type = 'Transfer';
@@ -748,8 +754,10 @@ export function reconcileTransfers(rows, db, { memberId = null, cachedAccounts =
         if (candUtr && candUtr === utr) {
           const candIsOut = cand.type === 'Expense' || cand.type === 'Investment';
           if (candIsOut !== isOut) {
-            const hasLoan = Boolean(row.classified.loan_id || cand.loan_id || row.classified.is_loan);
-            const isCard = Boolean(row.classified.card_id || cand.card_id || row.classified.is_credit_card);
+            const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(body)
+              || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(cand.raw_sms || '');
+            const hasLoan = Boolean(row.classified.loan_id || cand.loan_id || row.classified.is_loan) || isLoanOrEmi;
+            const isCard = !isLoanOrEmi && Boolean(row.classified.card_id || cand.card_id || row.classified.is_credit_card);
             const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
 
             row.classified.type = 'Transfer';
@@ -1464,11 +1472,15 @@ async function reviewAlerts(db, args) {
       return false;
     });
     if (matchIn) {
-      const isCard = Boolean(o.card_id || matchIn.card_id);
+      const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(o.raw_sms || '')
+        || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(matchIn.raw_sms || '');
+      const hasLoan = Boolean(o.loan_id || matchIn.loan_id || o.is_loan || matchIn.is_loan) || isLoanOrEmi;
+      const isCard = !isLoanOrEmi && Boolean(o.card_id || matchIn.card_id);
+      const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
       o.suggested_type = 'Transfer';
-      o.suggested_category = isCard ? 'Credit Card' : 'Transfer';
+      o.suggested_category = cat;
       matchIn.suggested_type = 'Transfer';
-      matchIn.suggested_category = isCard ? 'Credit Card' : 'Transfer';
+      matchIn.suggested_category = cat;
     }
   }
 

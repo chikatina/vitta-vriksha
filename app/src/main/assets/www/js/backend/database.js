@@ -1672,7 +1672,7 @@ function getSummary(db, args) {
   const monthTotals = new Map();
   for (const row of db.all(
     'SELECT SUBSTR(date, 1, 7) AS month_key, type, category, is_investment_outflow, SUM(amount) AS total FROM transactions'
-    + ` WHERE date >= ? AND date < ?${txClause} GROUP BY SUBSTR(date, 1, 7), type, category, is_investment_outflow`,
+    + ` WHERE date >= ? AND date < ? AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0${txClause} GROUP BY SUBSTR(date, 1, 7), type, category, is_investment_outflow`,
     [earliestStart, currentEnd, ...txParams],
   )) {
     if (row.type === 'Transfer' || row.category === 'Transfer' || row.category === 'Credit Card') continue;
@@ -1699,8 +1699,11 @@ function getSummary(db, args) {
     months.push({ month: monthKey, ...bucket });
   }
 
+  const recentClause = clause
+    ? `${clause} AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0`
+    : ' WHERE COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0';
   const recent = db.all(
-    `SELECT * FROM transactions${clause} ORDER BY date DESC, id DESC LIMIT 8`, params,
+    `SELECT * FROM transactions${recentClause} ORDER BY date DESC, id DESC LIMIT 8`, params,
   );
   const members = db.all('SELECT * FROM family_members ORDER BY is_primary DESC, id ASC');
   const budget = db.get("SELECT value FROM app_settings WHERE key = 'monthly_budget'");
@@ -1798,6 +1801,7 @@ function getTopMerchants(db, args) {
   const merchants = db.all(
     'SELECT merchant, SUM(amount) AS total, COUNT(*) AS times FROM transactions'
     + " WHERE date >= ? AND type != 'Income' AND type != 'Transfer' AND type != 'Investment' AND category != 'Transfer' AND category != 'Credit Card' AND category != 'Investment Outflow' AND COALESCE(is_investment_outflow, 0) = 0"
+    + " AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0"
     + ` AND merchant IS NOT NULL AND merchant != ''${clause}`
     + ' GROUP BY lower(merchant) ORDER BY total DESC LIMIT ?',
     [since, ...params, Number.parseInt(args.limit ?? 6, 10)],
@@ -2751,7 +2755,7 @@ function getCategories(db) {
   const [start, end] = monthBounds();
   const spent = new Map(db.all(
     'SELECT category, SUM(amount) AS spent FROM transactions'
-    + ' WHERE date >= ? AND date < ? GROUP BY category',
+    + ' WHERE date >= ? AND date < ? AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0 GROUP BY category',
     [start, end],
   ).map((row) => [row.category, number(row.spent)]));
 
@@ -5202,9 +5206,10 @@ export function reconcileExistingTransactions(db) {
           return num && (num.endsWith(targetSuffix) || targetSuffix.endsWith(num));
         });
 
-        if (isUserAcc || isUserCard || matchedLoan) {
+        const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(t.raw_sms || '');
+        if (isUserAcc || isUserCard || matchedLoan || isLoanOrEmi) {
           t.type = 'Transfer';
-          t.category = matchedLoan ? 'Loans & EMI' : (isUserCard ? 'Credit Card' : 'Transfer');
+          t.category = (matchedLoan || isLoanOrEmi) ? 'Loans & EMI' : (isUserCard ? 'Credit Card' : 'Transfer');
           if (matchedLoan && !t.loan_id) {
             t.loan_id = matchedLoan.id;
             db.run("UPDATE transactions SET type = 'Transfer', category = ?, loan_id = ? WHERE id = ?", [t.category, matchedLoan.id, t.id]);
@@ -5231,8 +5236,10 @@ export function reconcileExistingTransactions(db) {
             const isT1Credit = t1.type === 'Income' ? true : (t1.type === 'Expense' ? false : isCreditAlert(t1.raw_sms));
             const isT2Credit = t2.type === 'Income' ? true : (t2.type === 'Expense' ? false : isCreditAlert(t2.raw_sms));
             if (isT1Credit !== isT2Credit) {
-              const hasLoan = Boolean(t1.loan_id || t2.loan_id);
-              const isCard = Boolean(t1.card_id || t2.card_id);
+              const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(t1.raw_sms || '')
+                || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(t2.raw_sms || '');
+              const hasLoan = Boolean(t1.loan_id || t2.loan_id) || isLoanOrEmi;
+              const isCard = !isLoanOrEmi && Boolean(t1.card_id || t2.card_id);
               const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
               t1.type = 'Transfer';
               t1.category = cat;
@@ -5290,9 +5297,84 @@ export function reconcileExistingTransactions(db) {
 
 export function convertRecord(db, args = {}) {
   const fromType = args.from_type;
+  const toType = args.to_type || args.target_type || (fromType === 'account' ? 'card' : (fromType === 'card' ? 'account' : 'account'));
   const id = Number(args.id);
-  if (!id || (fromType !== 'account' && fromType !== 'card')) {
-    return fail('BAD_REQUEST', 'Valid from_type (account|card) and id required.');
+  if (!id || !['account', 'card', 'loan'].includes(fromType)) {
+    return fail('BAD_REQUEST', 'Valid from_type (account|card|loan) and id required.');
+  }
+
+  if (fromType === 'account' && toType === 'loan') {
+    const acc = db.get('SELECT * FROM asset_accounts WHERE id = ?', [id]);
+    if (!acc) return fail('ACCOUNT_NOT_FOUND', 'Bank account could not be found.');
+    const bank = acc.institution || 'Bank';
+    const last4 = String(acc.account_number || acc.debit_card_last_4 || '').trim().slice(-4);
+    const loanName = acc.name || `${bank} Loan`;
+    const balance = Math.abs(Number(acc.balance) || 0);
+
+    let newLoanId;
+    db.transaction(() => {
+      const res = db.run(
+        'INSERT INTO loans (member_id, name, lender, loan_type, principal_amount, current_outstanding, interest_rate, tenure_months, start_date, monthly_emi, notes, direction, account_number, last_4, updated_at)'
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          acc.member_id || 1, loanName, bank, 'Home', balance, balance, 8.5, 240,
+          new Date().toISOString().slice(0, 10), 0, 'Converted from bank account', 'borrowed', acc.account_number || '', last4, new Date().toISOString(),
+        ],
+      );
+      newLoanId = res.lastInsertRowid;
+      db.run('UPDATE transactions SET loan_id = ?, account_id = NULL WHERE account_id = ?', [newLoanId, id]);
+      db.run('DELETE FROM asset_accounts WHERE id = ?', [id]);
+      reconcileExistingTransactions(db);
+    });
+    return { status: 'success', new_id: newLoanId, target_type: 'loan' };
+  }
+
+  if (fromType === 'card' && toType === 'loan') {
+    const card = db.get('SELECT * FROM credit_cards WHERE id = ?', [id]);
+    if (!card) return fail('CARD_NOT_FOUND', 'Credit card could not be found.');
+    const bank = card.bank || 'Bank';
+    const last4 = String(card.last_4 || '').trim().slice(-4);
+    const loanName = card.card_name || `${bank} Loan`;
+    const balance = Math.abs(Number(card.current_balance) || 0);
+
+    let newLoanId;
+    db.transaction(() => {
+      const res = db.run(
+        'INSERT INTO loans (member_id, name, lender, loan_type, principal_amount, current_outstanding, interest_rate, tenure_months, start_date, monthly_emi, notes, direction, account_number, last_4, updated_at)'
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          card.member_id || 1, loanName, bank, 'Home', balance, balance, 8.5, 240,
+          new Date().toISOString().slice(0, 10), 0, 'Converted from credit card', 'borrowed', '', last4, new Date().toISOString(),
+        ],
+      );
+      newLoanId = res.lastInsertRowid;
+      db.run('UPDATE transactions SET loan_id = ?, card_id = NULL WHERE card_id = ?', [newLoanId, id]);
+      db.run('DELETE FROM credit_cards WHERE id = ?', [id]);
+      reconcileExistingTransactions(db);
+    });
+    return { status: 'success', new_id: newLoanId, target_type: 'loan' };
+  }
+
+  if (fromType === 'loan' && toType === 'account') {
+    const loan = db.get('SELECT * FROM loans WHERE id = ?', [id]);
+    if (!loan) return fail('LOAN_NOT_FOUND', 'Loan could not be found.');
+    const bank = loan.lender || 'Bank';
+    const last4 = String(loan.last_4 || loan.account_number || '').trim().slice(-4);
+    const accName = loan.name || `${bank} Account`;
+    const balance = Math.abs(Number(loan.current_outstanding) || 0);
+
+    let newAccId;
+    db.transaction(() => {
+      const res = db.run(
+        'INSERT INTO asset_accounts (member_id, name, category, institution, account_number, debit_card_last_4, balance) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [loan.member_id || 1, accName, 'Bank', bank, loan.account_number || '', last4, balance],
+      );
+      newAccId = res.lastInsertRowid;
+      db.run('UPDATE transactions SET account_id = ?, loan_id = NULL WHERE loan_id = ?', [newAccId, id]);
+      db.run('DELETE FROM loans WHERE id = ?', [id]);
+      reconcileExistingTransactions(db);
+    });
+    return { status: 'success', new_id: newAccId, target_type: 'account' };
   }
 
   if (fromType === 'account') {
@@ -5317,6 +5399,7 @@ export function convertRecord(db, args = {}) {
 
       // Delete the old account
       db.run('DELETE FROM asset_accounts WHERE id = ?', [id]);
+      reconcileExistingTransactions(db);
     });
 
     return { status: 'success', new_id: newCardId, target_type: 'card' };
@@ -5344,6 +5427,7 @@ export function convertRecord(db, args = {}) {
 
       // Delete the old card
       db.run('DELETE FROM credit_cards WHERE id = ?', [id]);
+      reconcileExistingTransactions(db);
     });
 
     return { status: 'success', new_id: newAccId, target_type: 'account' };
@@ -5421,7 +5505,7 @@ function getSalaryInvestmentTrend(db, args) {
 
     const rows = db.all(
       `SELECT type, amount, is_investment_outflow FROM transactions
-       ${clause ? `${clause} AND` : 'WHERE'} date >= ? AND date < ?`,
+       ${clause ? `${clause} AND` : 'WHERE'} date >= ? AND date < ? AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0`,
       [...params, from, to],
     );
 
