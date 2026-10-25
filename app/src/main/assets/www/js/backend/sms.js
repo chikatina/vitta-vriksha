@@ -17,7 +17,7 @@ import {
 import { memberClause } from './periods.js';
 import { readSmsInbox, takePendingAlerts } from './native.js';
 import {
-  categoryForMerchant, extractMerchant, isCreditAlert, merchantKey, notATransaction,
+  categoryForMerchant, extractMerchant, extractPrimaryClause, isCreditAlert, merchantKey, notATransaction,
 } from './merchants.js';
 import { fail } from './errors.js';
 
@@ -277,20 +277,7 @@ export function extractDescription(text) {
 }
 
 /**
- * Isolates the primary clause describing what happened to the user's account.
- * Modern Indian banking alerts often mention both accounts (e.g. "Your a/c XX2219 is credited
- * for Rs. 2500 and debited from a/c 1528" or "Acct XX386 debited for Rs 10; MERCHANT credited").
- * Isolating the primary clause ensures counterparty clauses do not invert transaction direction.
- */
-export function extractPrimaryClause(text) {
-  if (!text) return '';
-  const counterpartyRe = /(?:[\s,;&]+(?:and|&)\s+(?:debited\s+from|credited\s+to)\b|;\s*[^;.]+?\s+(?:credited|debited)\b|[\s,;&]+(?:and|&)\s+[^;.]+?\s+(?:credited|debited)\b)/i;
-  const match = counterpartyRe.exec(text);
-  if (match) {
-    return text.slice(0, match.index).trim();
-  }
-  return text;
-}
+export { extractPrimaryClause };
 
 /** Classifies one message against the stored rules and everything known about the vendor. */
 export async function parseSmsText(text, sender = '', receivedAt = null, context = null) {

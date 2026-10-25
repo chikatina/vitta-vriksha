@@ -615,10 +615,37 @@ const HEDGED = new RegExp(
   'i',
 );
 
+/**
+ * Isolates the primary clause describing what happened to the user's account.
+ * Modern Indian banking alerts often mention both accounts (e.g. "Your a/c XX2219 is debited
+ * for Rs. 2500 and credited to a/c 1528" or "Acct XX386 debited for Rs 10; MERCHANT credited").
+ * Isolating the primary clause ensures counterparty clauses do not invert transaction direction.
+ */
+export function extractPrimaryClause(text) {
+  if (!text) return '';
+  const counterpartyRe = /(?:[\s,;&]+(?:and|&)\s+(?:debited\s+from|credited\s+to)\b|;\s*[^;.]+?\s+(?:credited|debited)\b|[\s,;&]+(?:and|&)\s+[^;.]+?\s+(?:credited|debited)\b)/i;
+  const match = counterpartyRe.exec(text);
+  if (match) {
+    return text.slice(0, match.index).trim();
+  }
+  return text;
+}
+
 /** Determines if text indicates an inward cashflow alert. */
 export function isCreditAlert(text) {
-  const t = String(text || '').toLowerCase();
-  return t.includes('credited') || t.includes('received') || t.includes('deposited');
+  if (!text) return false;
+  const primary = extractPrimaryClause(text).toLowerCase();
+  if (/\b(?:debited|withdrawn|spent|sent|paid)\b/i.test(primary)) {
+    return false;
+  }
+  if (/\b(?:credited|received|deposited|refunded)\b/i.test(primary)) {
+    return true;
+  }
+  const full = String(text).toLowerCase();
+  if (/\b(?:debited|withdrawn|spent|sent|paid)\b/i.test(full) && !/\b(?:credited to your|deposited into your|refund credited)\b/i.test(full)) {
+    return false;
+  }
+  return /\b(?:credited|received|deposited|refunded)\b/i.test(full);
 }
 
 /** Why this message is not a transaction, or an empty string when it is one. */

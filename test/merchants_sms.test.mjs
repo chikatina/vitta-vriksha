@@ -959,12 +959,12 @@ describe('sms.js SMS classifier and dispatcher', () => {
     await handleDbAction({
       action: 'save_transaction',
       transaction: {
-        date: '2026-05-20',
+        date: '2026-05-10',
         amount: 1458977,
         type: 'Expense',
         category: 'Shopping',
         account_id: scAcc.record_id,
-        raw_sms: 'Your a/c no XXXXXXX2219 is debited for Rs. 14,58,977.00 on 20-May-2026',
+        raw_sms: 'Your a/c no XXXXXXX2219 is debited for Rs. 1,458,977.00 and credited to a/c no.XXXXXXXX8386 on  . (NEFT Ref no  2605-102304109300 ) - StanChart',
       },
     });
 
@@ -972,12 +972,12 @@ describe('sms.js SMS classifier and dispatcher', () => {
     await handleDbAction({
       action: 'save_transaction',
       transaction: {
-        date: '2026-05-20',
+        date: '2026-05-11',
         amount: 1458977,
         type: 'Income',
         category: 'Other Income',
         account_id: iciciAcc.record_id,
-        raw_sms: 'ICICI Bank Account XX386 credited:Rs. 14,58,977.00 on 20-May-26',
+        raw_sms: 'ICICI Bank Account XX386 credited:Rs. 14,58,977.00 on 10-May-26. Info NEFT-SCBLH13000550145-AMIT R. Available Balance is Rs. 17,31,828.31.',
       },
     });
 
