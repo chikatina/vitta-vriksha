@@ -488,7 +488,7 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
   const isCredit = checkText.includes('credited') || checkText.includes('received') || checkText.includes('deposited');
   const hasSalarySignal = /\b(?:salary|payroll|stipend|wages|sal\s+for|monthly\s+pay)\b/i.test(checkText);
   const guess = isCredit ? (hasSalarySignal ? 'Salary' : 'Other Income') : 'Shopping';
-  const defaultType = known.type || (known.category === 'Investment Outflow' ? 'Investment' : (isCredit ? 'Income' : 'Expense'));
+  const defaultType = known.type || (!isCredit && known.category === 'Investment Outflow' ? 'Investment' : (isCredit ? 'Income' : 'Expense'));
 
   let matchedRuleName = 'Default Classifier';
   let finalAmount = fallbackAmount;
@@ -504,7 +504,7 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
     const dictTransferOnSpend = !isTransferRule && rule.transaction_type === 'Expense' && known.type === 'Transfer' && known.source !== 'learned';
     finalType = (known.source === 'learned' && known.type)
       ? known.type
-      : (isTransferRule ? 'Transfer' : ((!dictTransferOnSpend && known.type) || (known.category === 'Investment Outflow' ? 'Investment' : rule.transaction_type)));
+      : (isTransferRule ? 'Transfer' : ((!dictTransferOnSpend && known.type) || (!isCredit && known.category === 'Investment Outflow' ? 'Investment' : (isCredit ? 'Income' : rule.transaction_type))));
     finalCategory = (known.source === 'learned' && categoryFits(known.category, finalType))
       ? known.category
       : (isTransferRule ? rule.category_name : (usable(known, finalType) ? known.category : rule.category_name));
@@ -512,46 +512,102 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
     categorySource = (known.source === 'learned' || (!isTransferRule && usable(known, finalType))) ? known.source : 'rule';
   }
 
+  // Direction invariant: A bank credit (Money In) can never be an Investment Outflow.
+  // Payouts from stock exchanges, brokers, clearing houses (e.g. NSE, Zerodha) credited to bank
+  // are inflows (Dividends, Capital Gains, or Investment Returns).
+  if (isCredit && (finalType === 'Investment' || finalCategory === 'Investment Outflow')) {
+    finalType = 'Income';
+    finalCategory = 'Interest & Dividends';
+    categorySource = 'rule';
+  }
+
   // Inter-account transfer check:
-  // 1. Destination is a known user account (e.g. "debited ... credited to a/c XX8386")
+  // 1. Destination is a known user account or credit card (e.g. "debited ... credited to a/c XX8386" or "and a/c XX8386 credited")
   if (finalType === 'Expense') {
-    const targetMatch = /(?:credited to|transferred to|sent to)\s+(?:a\/c|acct|account)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\b/i.exec(text);
-    if (targetMatch && targetMatch[1]) {
-      const targetSuffix = targetMatch[1].toLowerCase();
+    const targetMatch = /(?:(?:credited to|transferred to|sent to|to your)\s+(?:a\/c|acct|account|card)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\b|(?:a\/c|acct|account|card)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\s+(?:is\s+)?credited\b)/i.exec(text);
+    const targetSuffix = (targetMatch ? (targetMatch[1] || targetMatch[2]) : '').toLowerCase();
+    if (targetSuffix) {
       const originAcc = (accountLast4 || '').toLowerCase();
       if (targetSuffix !== originAcc) {
         const userAccounts = context?.cachedAccounts || db.all('SELECT account_number FROM asset_accounts');
+        const userCards = context?.cachedCards || db.all('SELECT last_4 FROM credit_cards');
         const isUserAcc = userAccounts.some((a) => {
           const num = String(a.account_number || '').toLowerCase();
           return num && (num.endsWith(targetSuffix) || targetSuffix.endsWith(num));
         });
-        if (isUserAcc) {
+        const isUserCard = userCards.some((c) => {
+          const num = String(c.last_4 || '').toLowerCase();
+          return num && (num.endsWith(targetSuffix) || targetSuffix.endsWith(num));
+        });
+        if (isUserAcc || isUserCard) {
           finalType = 'Transfer';
-          finalCategory = 'Transfer';
+          finalCategory = isUserCard ? 'Credit Card' : 'Transfer';
           matchedRuleName = 'Target account transfer';
         }
       }
     }
   }
 
-  // 2. Exact UTR counterpart already in database
-  const incomingUtr = extractUtr(text);
-  if (incomingUtr && finalAmount > 0 && (finalType === 'Expense' || finalType === 'Income')) {
-    const isOut = finalType === 'Expense';
-    const opp = db.get(
-      "SELECT id, type, category, raw_sms FROM transactions WHERE amount = ? AND raw_sms IS NOT NULL AND raw_sms != ''",
-      [finalAmount],
-    );
-    if (opp && opp.type !== 'Transfer') {
-      const oppUtr = extractUtr(opp.raw_sms);
-      if (oppUtr && oppUtr === incomingUtr) {
-        const oppIsOut = opp.type === 'Expense' || opp.type === 'Investment';
-        if (oppIsOut !== isOut) {
+  // Check if incoming credit comes from a known user account (e.g. "credited ... debited from a/c XX2219")
+  if (finalType === 'Income') {
+    const sourceMatch = /(?:(?:debited from|transferred from|from your|from)\s+(?:a\/c|acct|account)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\b|(?:a\/c|acct|account)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\s+(?:is\s+)?debited\b)/i.exec(text);
+    const sourceSuffix = (sourceMatch ? (sourceMatch[1] || sourceMatch[2]) : '').toLowerCase();
+    if (sourceSuffix) {
+      const destAcc = (accountLast4 || '').toLowerCase();
+      if (sourceSuffix !== destAcc) {
+        const userAccounts = context?.cachedAccounts || db.all('SELECT account_number FROM asset_accounts');
+        const isUserAcc = userAccounts.some((a) => {
+          const num = String(a.account_number || '').toLowerCase();
+          return num && (num.endsWith(sourceSuffix) || sourceSuffix.endsWith(num));
+        });
+        if (isUserAcc) {
           finalType = 'Transfer';
           finalCategory = 'Transfer';
-          matchedRuleName = 'Reconciled transfer';
-          db.run("UPDATE transactions SET type = 'Transfer', category = 'Transfer' WHERE id = ?", [opp.id]);
+          matchedRuleName = 'Source account transfer';
         }
+      }
+    }
+  }
+
+  // 2. Reconcile transfer counterpart in database (matching UTR, or same-day exact amount between distinct registered user accounts/cards)
+  if (finalAmount > 0 && (finalType === 'Expense' || finalType === 'Income')) {
+    const isOut = finalType === 'Expense';
+    const incomingUtr = extractUtr(text);
+    const candidates = db.all(
+      "SELECT id, type, category, account_id, card_id, date, raw_sms FROM transactions WHERE amount = ? AND (type = 'Expense' OR type = 'Income' OR type = 'Investment')",
+      [finalAmount],
+    );
+
+    for (const opp of candidates) {
+      const oppIsOut = opp.type === 'Expense' || opp.type === 'Investment';
+      if (oppIsOut === isOut) continue;
+
+      let isMatch = false;
+      if (incomingUtr) {
+        const oppUtr = extractUtr(opp.raw_sms);
+        if (oppUtr && oppUtr === incomingUtr) isMatch = true;
+      }
+
+      // Check same-day (or +/- 2 days) between distinct registered user accounts/cards
+      if (!isMatch && dateFromSms && opp.date) {
+        const d1 = new Date(dateFromSms).getTime();
+        const d2 = new Date(opp.date).getTime();
+        if (!isNaN(d1) && !isNaN(d2) && Math.abs(d1 - d2) <= 86400000 * 2) {
+          const currentInst = resolvedAccount.card_id ? `card:${resolvedAccount.card_id}` : (resolvedAccount.account_id ? `acc:${resolvedAccount.account_id}` : null);
+          const oppInst = opp.card_id ? `card:${opp.card_id}` : (opp.account_id ? `acc:${opp.account_id}` : null);
+          if (currentInst && oppInst && currentInst !== oppInst) {
+            isMatch = true;
+          }
+        }
+      }
+
+      if (isMatch) {
+        const isCard = Boolean(resolvedAccount.card_id || opp.card_id);
+        finalType = 'Transfer';
+        finalCategory = isCard ? 'Credit Card' : 'Transfer';
+        matchedRuleName = 'Reconciled transfer';
+        db.run("UPDATE transactions SET type = 'Transfer', category = ? WHERE id = ?", [finalCategory, opp.id]);
+        break;
       }
     }
   }
@@ -1315,6 +1371,35 @@ async function reviewAlerts(db, args) {
         matchIn.suggested_type = 'Transfer';
         matchIn.suggested_category = 'Transfer';
       }
+    }
+  }
+
+  // Pair pending items by same-day exact amount across distinct registered user accounts/cards
+  const pendingOuts = items.filter((i) => i.state === 'pending' && (i.suggested_type === 'Expense' || i.suggested_type === 'Investment') && (i.account_id || i.card_id));
+  const pendingIns = items.filter((i) => i.state === 'pending' && i.suggested_type === 'Income' && (i.account_id || i.card_id));
+  for (const o of pendingOuts) {
+    if (o.suggested_type === 'Transfer') continue;
+    const matchIn = pendingIns.find((i) => {
+      if (i.suggested_type === 'Transfer') return false;
+      if (Math.abs(i.amount - o.amount) >= 0.01) return false;
+      const oInst = o.card_id ? `card:${o.card_id}` : `acc:${o.account_id}`;
+      const iInst = i.card_id ? `card:${i.card_id}` : `acc:${i.account_id}`;
+      if (oInst === iInst) return false;
+      if (o.date && i.date) {
+        const d1 = new Date(o.date).getTime();
+        const d2 = new Date(i.date).getTime();
+        if (!isNaN(d1) && !isNaN(d2)) {
+          return Math.abs(d1 - d2) <= 86400000 * 2;
+        }
+      }
+      return false;
+    });
+    if (matchIn) {
+      const isCard = Boolean(o.card_id || matchIn.card_id);
+      o.suggested_type = 'Transfer';
+      o.suggested_category = isCard ? 'Credit Card' : 'Transfer';
+      matchIn.suggested_type = 'Transfer';
+      matchIn.suggested_category = isCard ? 'Credit Card' : 'Transfer';
     }
   }
 

@@ -768,6 +768,125 @@ describe('sms.js SMS classifier and dispatcher', () => {
 
     delete globalThis.window;
   });
+
+  it('identifies inter-account self-transfer when destination is a registered user account', async () => {
+    await handleDbAction({
+      action: 'save_record',
+      type: 'account',
+      record: { name: 'ICICI Bank', category: 'Bank', institution: 'ICICI Bank', account_number: '08386' },
+    });
+    await handleDbAction({
+      action: 'save_record',
+      type: 'account',
+      record: { name: 'StanChart', category: 'Bank', institution: 'Standard Chartered Bank', account_number: '2219' },
+    });
+
+    // 1. Prefix target pattern: "debited ... credited to a/c no.XXXXXXXX8386"
+    const sms1 = 'Your a/c no XXXXXXX2219 is debited for Rs. 1,458,977.00 and credited to a/c no.XXXXXXXX8386 on . (NEFT Ref no 2605-102304109300 ) - StanChart';
+    const res1 = await parseSmsText(sms1, 'SCB');
+    assert.equal(res1.type, 'Transfer');
+    assert.equal(res1.category, 'Transfer');
+    assert.equal(res1.amount, 1458977);
+
+    // 2. Suffix target pattern: "debited ... and a/c XX8386 credited"
+    const sms2 = 'Your a/c no. XX2219 is debited for INR 215,000.00 on  29-May-2026 and a/c XX8386 credited (IMPS Ref no  614916030037.). Call 18002586465 if not done by you - StanChart';
+    const res2 = await parseSmsText(sms2, 'SCB');
+    assert.equal(res2.type, 'Transfer');
+    assert.equal(res2.category, 'Transfer');
+    assert.equal(res2.amount, 215000);
+
+    // 3. Incoming transfer where source is user account: "credited ... debited from a/c no. XXXXXXX2219"
+    const sms3 = 'Your a/c no. XXXXXXX8386 is credited for Rs. 50,000.00 on 23-05-2026 and debited from a/c no. XXXXXXXXXXXXX2219';
+    const res3 = await parseSmsText(sms3, 'ICICI');
+    assert.equal(res3.type, 'Transfer');
+    assert.equal(res3.category, 'Transfer');
+  });
+
+  it('preserves genuine transfers to third-party accounts as Expense', async () => {
+    await handleDbAction({
+      action: 'save_record',
+      type: 'account',
+      record: { name: 'ICICI Bank', category: 'Bank', institution: 'ICICI Bank', account_number: '08386' },
+    });
+
+    // Destination XX875 does NOT belong to the user (e.g. paying landlord/vendor)
+    const sms = 'ICICI Bank Acct XX386 debited with Rs 150,000.00 on 30-May-26 & Acct XX875 credited.IMPS:615023284440. Call 18002662 for dispute or SMS BLOCK 386 to 9215676766';
+    const res = await parseSmsText(sms, 'ICICI');
+    assert.equal(res.type, 'Expense');
+    assert.equal(res.amount, 150000);
+    // Safety disclaimer must NOT become the merchant name
+    assert.notEqual(res.merchant, 'dispute or SMS BLOCK 386 to 9215676766');
+    assert.equal(res.merchant, '');
+  });
+
+  it('treats stock clearing and broker payouts credited to bank as Income, not Investment Outflow', async () => {
+    const sms = 'ICICI Bank Account XX386 credited:Rs. 1,65,915.61 on 27-May-26. Info NEFT-HDFCH01019050083-NSE CL. Available Balance is Rs. 2,32,113.33.';
+    const res = await parseSmsText(sms, 'ICICI');
+    assert.equal(res.type, 'Income');
+    assert.equal(res.category, 'Interest & Dividends');
+    assert.equal(res.amount, 165915.61);
+  });
+
+  it('classifies credit card payment receipts as Transfer', async () => {
+    const iciciReceipt = 'Dear Customer, Payment of INR 3,026.00 has been received on your ICICI Bank Credit Card Account 4xxx5004 on 10-MAY-26.Thank you.';
+    const iciciRes = await parseSmsText(iciciReceipt, 'ICICI');
+    assert.equal(iciciRes.type, 'Transfer');
+    assert.equal(iciciRes.category, 'Credit Card');
+    assert.equal(iciciRes.amount, 3026);
+
+    const yesReceipt = 'Dear Cardmember, payment of Rs.1,179.00 is received towards your YES BANK Credit Card ending 5340. It will reflect in your Credit Card within 1-2 working days';
+    const yesRes = await parseSmsText(yesReceipt, 'YESBNK');
+    assert.equal(yesRes.type, 'Transfer');
+    assert.equal(yesRes.category, 'Credit Card');
+    assert.equal(yesRes.amount, 1179);
+  });
+
+  it('extracts merchant accurately from ICICI UPI debit alerts', () => {
+    const sms1 = 'ICICI Bank Acct XX386 debited for Rs 10.00 on 01-May-26; MUMBAI METRO ON credited. UPI:270219466204. Call 18002662 for dispute. SMS BLOCK 386 to 9215676766.';
+    assert.equal(extractMerchant(sms1), 'MUMBAI METRO ON');
+
+    const sms2 = 'ICICI Bank Acct XX386 debited for Rs 129.00 on 01-May-26; RAVI KUMAR credited. UPI:763711277216. Call 18002662 for dispute. SMS BLOCK 386 to 9215676766.';
+    assert.equal(extractMerchant(sms2), 'RAVI KUMAR');
+  });
+
+  it('reconciles same-day transfer counterpart in database across distinct user accounts', async () => {
+    const acc1 = await handleDbAction({
+      action: 'save_record',
+      type: 'account',
+      record: { name: 'StanChart', category: 'Bank', institution: 'Standard Chartered Bank', account_number: '2219' },
+    });
+    const acc2 = await handleDbAction({
+      action: 'save_record',
+      type: 'account',
+      record: { name: 'ICICI Bank', category: 'Bank', institution: 'ICICI Bank', account_number: '08386' },
+    });
+
+    // First save the debit transaction on StanChart (raw SMS without destination account number)
+    const debitSms = 'Your a/c no XXXXXXX2219 is debited for Rs. 50,000.00 on 15-May-2026. Ref 123456';
+    await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-05-15',
+        amount: 50000,
+        type: 'Expense',
+        category: 'Shopping',
+        account_id: acc1.record_id,
+        raw_sms: debitSms,
+      },
+    });
+
+    // Now classify the incoming credit on ICICI for the exact same amount on the same day
+    const creditSms = 'ICICI Bank Account XX386 credited:Rs. 50,000.00 on 15-May-26. Info IMPS-987654. Available Balance is Rs. 1,00,000.00.';
+    const res = await parseSmsText(creditSms, 'ICICI');
+    assert.equal(res.type, 'Transfer');
+    assert.equal(res.category, 'Transfer');
+
+    // The counterpart transaction in the database must also be reconciled to Transfer
+    const rows = await handleDbAction({ action: 'get_transactions' });
+    const debitRow = rows.transactions.find((t) => t.account_id === acc1.record_id);
+    assert.equal(debitRow.type, 'Transfer');
+    assert.equal(debitRow.category, 'Transfer');
+  });
 });
 
 
