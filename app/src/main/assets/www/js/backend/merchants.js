@@ -710,5 +710,6 @@ export function categoryForMerchant(merchant, body = '') {
   if (/\b(?:dividend|dividends|interim dividend|final dividend)\b|[*:\s/-][a-z0-9_]*div\d*[*:\s/.-]/i.test(bodyText)) {
     return 'Interest & Dividends';
   }
-  return bodyText ? keywords().find(bodyText) : '';
+  const cleanBody = bodyText.replace(/(?:https?:\/\/|www\.)[^\s,;]+|[a-z0-9-]+\.(?:com|in|co\.in|org|net|io|app)\/[^\s,;]*/gi, ' ');
+  return cleanBody.trim() ? keywords().find(cleanBody) : '';
 }

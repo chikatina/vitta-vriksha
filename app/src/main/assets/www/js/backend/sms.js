@@ -501,9 +501,10 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
     const match = compile(rule.regex_pattern).exec(text);
     finalAmount = match ? toAmount(match[1]) : extractTransactionAmount(text);
     const isTransferRule = rule.transaction_type === 'Transfer';
+    const dictTransferOnSpend = !isTransferRule && rule.transaction_type === 'Expense' && known.type === 'Transfer' && known.source !== 'learned';
     finalType = (known.source === 'learned' && known.type)
       ? known.type
-      : (isTransferRule ? 'Transfer' : (known.type || (known.category === 'Investment Outflow' ? 'Investment' : rule.transaction_type)));
+      : (isTransferRule ? 'Transfer' : ((!dictTransferOnSpend && known.type) || (known.category === 'Investment Outflow' ? 'Investment' : rule.transaction_type)));
     finalCategory = (known.source === 'learned' && categoryFits(known.category, finalType))
       ? known.category
       : (isTransferRule ? rule.category_name : (usable(known, finalType) ? known.category : rule.category_name));

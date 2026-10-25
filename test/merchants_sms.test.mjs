@@ -455,6 +455,26 @@ describe('sms.js SMS classifier and dispatcher', () => {
     assert.equal(cardCredit.category, 'Credit Card');
   });
 
+  it('classifies card spends with dispute URLs as Expense rather than Transfer', async () => {
+    // 1. SBI Card spend containing https://sbicard.com/Dispute
+    const sbiSpend = await parseSmsText(
+      'Rs.556.55 spent on your SBI Credit Card ending 4106 at AmazonSellerServices on 07/09/26. Trxn. not done by you? Report at https://sbicard.com/Dispute',
+    );
+    assert.equal(sbiSpend.amount, 556.55);
+    assert.equal(sbiSpend.type, 'Expense');
+    assert.equal(sbiSpend.merchant, 'AmazonSellerServices');
+    assert.notEqual(sbiSpend.category, 'Credit Card');
+
+    // 2. BOB Card spend containing https://bobcard.co.in/dispute
+    const bobSpend = await parseSmsText(
+      'Rs.1,250.00 spent on your BOB Credit Card ending 9876 at STARBAZAAR on 20-09-26. If not you, visit https://bobcard.co.in/dispute',
+    );
+    assert.equal(bobSpend.amount, 1250);
+    assert.equal(bobSpend.type, 'Expense');
+    assert.equal(bobSpend.merchant, 'STARBAZAAR');
+    assert.notEqual(bobSpend.category, 'Credit Card');
+  });
+
   it('filters out spam, marketing, betting, telecom and security alerts as non-transactions', () => {
     // 1. Pre-approved loans and instant cash spam
     assert.equal(notATransaction('Get instant personal loan up to Rs 500000 at lowest interest rate. Apply now: http://bit.ly/xyz'), 'promo');
