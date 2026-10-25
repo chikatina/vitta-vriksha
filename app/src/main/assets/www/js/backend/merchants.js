@@ -576,6 +576,9 @@ const SELF_TRANSFER = [
   [/fastag.*credited|credited.*fastag|recharge successful/i, 'self-transfer'],
 ];
 
+const OUTWARD_DELIVERY_RECEIPT = /\b(?:neft|rtgs|imps|transaction)\b.*(?:has been credited to (?:the |your )?beneficiary|credited to (?:the )?beneficiary account)\b/i;
+const HAS_ACCOUNT_BALANCE = /\b(?:avl(?:able)?\s*bal|available\s*balance|balance\s*(?:is|:)|a\/c\s*bal)\b/i;
+
 /*
  * An amount sitting directly against a past tense verb, which is a movement that has
  * already happened. No incidental word elsewhere in the message may throw that away.
@@ -590,7 +593,7 @@ const COMPLETED_MOVEMENT = new RegExp(
   '(?:rs\\.?|inr|₹)\\s*\\.?\\s*[\\d,]+(?:\\.\\d+)?\\s*(?:has been\\s+|was\\s+)?'
   + '(?:spent|debited|credited|deducted|withdrawn|paid|deposited)\\b'
   + '|\\b(?:spent|debited|credited|deducted|withdrawn|paid|deposited)[\\s:]+'
-  + '(?:of\\s+|from\\s+|at\\s+|on\\s+|via\\s+|for\\s+|by\\s+|on\\s+\\d{1,2}[-/](?:[A-Za-z]{3}|\\d{1,2})[-/]\\d{2,4}\\s+(?:by|for|of|with)\\s+)?(?:rs\\.?|inr|₹)?\\s*\\.?\\s*[\\d,]',
+  + '(?:of\\s+|from\\s+|at\\s+|on\\s+|via\\s+|for\\s+|by\\s+|with\\s+|on\\s+\\d{1,2}[-/](?:[A-Za-z]{3}|\\d{1,2})[-/]\\d{2,4}\\s+(?:by|for|of|with)\\s+)?(?:rs\\.?|inr|₹)?\\s*\\.?\\s*[\\d,]',
   'i',
 );
 
@@ -617,6 +620,11 @@ export function notATransaction(text) {
   }
   for (const [pattern, reason] of SELF_TRANSFER) {
     if (pattern.test(text)) return reason;
+  }
+
+  // Outward transfer delivery receipts to beneficiary (e.g. RBI positive confirmations)
+  if (OUTWARD_DELIVERY_RECEIPT.test(text) && !HAS_ACCOUNT_BALANCE.test(text)) {
+    return 'transfer-receipt';
   }
 
   // Failed transactions should always report 'failed'
@@ -673,7 +681,7 @@ const NOT_A_MERCHANT = new RegExp(
   + '|^other services\\b|^customer care\\b|^helpline\\b|^toll[- ]free\\b'
   + '|^(?:your |the |a |my )?(?:a/c|ac|acct|account|card|credit card|debit card|bank|wallet'
   + '|upi|vpa|ref|txn|payment|amount|balance|limit'
-  + '|ach|nach|ecs|cms|mandate|standing instruction|si|neft|rtgs|imps|enach|e-nach)\\b'
+  + '|ach|nach|ecs|cms|mandate|standing instruction|si|neft|rtgs|imps|enach|e-nach|bil|bpay|biller)\\b'
   + '|^(?:rs|inr|usd|eur|gbp|₹)\\b'
   + '|^(?:hdfc|icici|sbi|axis|kotak|au bank|au credit|dcb|idfc|indusind|yes bank|pnb|canara|federal|rbl|bob|boi|union|iob|uco|scb|stanchart|standard chartered|citi|citibank|hsbc|dbs|deutsche|barclays|equitas|ujjivan|bandhan|sib|south indian|kvb|karur vysya|cub|city union|karnataka|psb|punjab & sind|bom|bank of maharashtra|cbi|central bank|indian bank|airtel payments|ippb|fino|jio payments)(?:\\s+bank)?(?:\\s+(?:a/c|ac|acct|account|card|credit card|debit card))?\\s*$',
   'i',

@@ -475,6 +475,31 @@ describe('sms.js SMS classifier and dispatcher', () => {
     assert.notEqual(bobSpend.category, 'Credit Card');
   });
 
+  it('filters out outward NEFT delivery receipts without balance while retaining real credits', async () => {
+    // 1. Outward NEFT delivery confirmation to beneficiary (RBI positive confirmation)
+    const receipt = await parseSmsText(
+      'ICICI BANK NEFT Transaction with reference number IN12613037076148 for Rs. 200000.00 has been credited to the beneficiary account on 10-05-2026 at 18:04:36',
+    );
+    assert.equal(receipt.not_a_transaction, 'transfer-receipt');
+    assert.equal(receipt.amount, 0);
+
+    // 2. Genuine inward credit mentioning beneficiary with account balance
+    const inward = await parseSmsText(
+      'A/c XX386 credited with Rs 5,000.00 on 10-May-26 by NEFT. Beneficiary name: Amit. Avl Bal: Rs 25,000.00.',
+    );
+    assert.equal(inward.amount, 5000);
+    assert.equal(inward.type, 'Income');
+    assert.equal(inward.not_a_transaction, undefined);
+
+    // 3. Bank debit with InfoBIL*NEFT should not extract BIL as merchant
+    const debit = await parseSmsText(
+      'ICICI Bank Acc XX386 debited Rs. 2,00,000.00 on 10-May-26 InfoBIL*NEFT*IN12.Avl Bal Rs. 2,85,804.31.To dispute call 18002662 or SMS BLOCK 386 to 9215676766',
+    );
+    assert.equal(debit.amount, 200000);
+    assert.equal(debit.type, 'Expense');
+    assert.notEqual(debit.merchant, 'BIL');
+  });
+
   it('filters out spam, marketing, betting, telecom and security alerts as non-transactions', () => {
     // 1. Pre-approved loans and instant cash spam
     assert.equal(notATransaction('Get instant personal loan up to Rs 500000 at lowest interest rate. Apply now: http://bit.ly/xyz'), 'promo');
