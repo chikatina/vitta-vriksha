@@ -12,7 +12,7 @@
 
 import {
   autoUpdateAccountFromSms, autoUpdateCreditCardFromSms, currentCurrency, getDatabase, initDb, learnMerchant,
-  parseAccountDetailsFromText, resolveAccountAndCardFromSms, resolveMemberId,
+  parseAccountDetailsFromText, reconcileExistingTransactions, resolveAccountAndCardFromSms, resolveMemberId,
 } from './database.js';
 import { memberClause } from './periods.js';
 import { readSmsInbox, takePendingAlerts } from './native.js';
@@ -866,6 +866,10 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
     }
   });
 
+  if (imported > 0) {
+    reconcileExistingTransactions(db);
+  }
+
   markSynced(db);
   await db.schedulePersist();
   return {
@@ -1076,6 +1080,10 @@ async function reimportInbox(db, args) {
       imported += 1;
     }
   });
+
+  if (imported > 0) {
+    reconcileExistingTransactions(db);
+  }
 
   // Only after the messages are safely filed. A sync that failed halfway must be able to
   // cover the same stretch again rather than skip it.

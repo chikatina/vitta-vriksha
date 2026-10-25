@@ -943,19 +943,8 @@ describe('sms.js SMS classifier and dispatcher', () => {
     assert.equal(acc.account_number, '8386');
   });
 
-  it('runs reconcile_transactions action to automatically pair unpaired transfers', async () => {
-    const scAcc = await handleDbAction({
-      action: 'save_record',
-      type: 'account',
-      record: { name: 'SCB', category: 'Bank', institution: 'Standard Chartered', account_number: '2219' },
-    });
-    const iciciAcc = await handleDbAction({
-      action: 'save_record',
-      type: 'account',
-      record: { name: 'ICICI', category: 'Bank', institution: 'ICICI Bank', account_number: '8386' },
-    });
-
-    // Save SCB debit as Shopping (Expense)
+  it('automatically links and reconciles transfers when discovered accounts are added after SMS import', async () => {
+    // 1. Fresh install: SMS import occurs when 0 accounts exist in database
     await handleDbAction({
       action: 'save_transaction',
       transaction: {
@@ -963,12 +952,11 @@ describe('sms.js SMS classifier and dispatcher', () => {
         amount: 1458977,
         type: 'Expense',
         category: 'Shopping',
-        account_id: scAcc.record_id,
+        account_id: null,
         raw_sms: 'Your a/c no XXXXXXX2219 is debited for Rs. 1,458,977.00 and credited to a/c no.XXXXXXXX8386 on  . (NEFT Ref no  2605-102304109300 ) - StanChart',
       },
     });
 
-    // Save ICICI credit as Income
     await handleDbAction({
       action: 'save_transaction',
       transaction: {
@@ -976,18 +964,32 @@ describe('sms.js SMS classifier and dispatcher', () => {
         amount: 1458977,
         type: 'Income',
         category: 'Other Income',
-        account_id: iciciAcc.record_id,
+        account_id: null,
         raw_sms: 'ICICI Bank Account XX386 credited:Rs. 14,58,977.00 on 10-May-26. Info NEFT-SCBLH13000550145-AMIT R. Available Balance is Rs. 17,31,828.31.',
       },
     });
 
-    // Trigger reconciliation
-    const recon = await handleDbAction({ action: 'reconcile_transactions' });
-    assert.equal(recon.status, 'success');
+    // 2. User discovers and adds accounts in UI
+    const addRes = await handleDbAction({
+      action: 'add_discovered_accounts',
+      accounts: [
+        { name: 'Standard Chartered', institution: 'Standard Chartered Bank', last_4: '2219', type: 'account' },
+        { name: 'ICICI Bank', institution: 'ICICI Bank', last_4: '8386', type: 'account' },
+      ],
+    });
+    assert.equal(addRes.status, 'success');
 
+    // 3. Transactions in Ledger must be automatically linked to accounts and reconciled to Transfer
     const txns = await handleDbAction({ action: 'get_transactions' });
-    const scTx = txns.transactions.find((t) => t.account_id === scAcc.record_id);
-    const iciciTx = txns.transactions.find((t) => t.account_id === iciciAcc.record_id);
+    const records = await handleDbAction({ action: 'list_records', type: 'account' });
+    const scAcc = records.records.find((a) => a.account_number === '2219');
+    const iciciAcc = records.records.find((a) => a.account_number === '8386');
+
+    const scTx = txns.transactions.find((t) => t.account_id === scAcc.id);
+    const iciciTx = txns.transactions.find((t) => t.account_id === iciciAcc.id);
+
+    assert.ok(scTx, 'StanChart transaction must be linked to StanChart account');
+    assert.ok(iciciTx, 'ICICI transaction must be linked to ICICI account');
     assert.equal(scTx.type, 'Transfer');
     assert.equal(scTx.category, 'Transfer');
     assert.equal(iciciTx.type, 'Transfer');

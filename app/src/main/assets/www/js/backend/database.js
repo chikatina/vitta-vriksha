@@ -1975,6 +1975,9 @@ function saveRecord(db, args) {
       }
     }
   }
+  if (table === 'asset_accounts' || table === 'credit_cards') {
+    reconcileExistingTransactions(db);
+  }
   return { record_id: recordId };
 }
 
@@ -3886,12 +3889,12 @@ export function resolveAccountAndCardFromSms(db, text = '', sender = '', { membe
       matchedAccount = existingAccounts.find((a) => a.debit_card_last_4 && a.debit_card_last_4.endsWith(dcLast4));
     }
     if (!matchedAccount && acctLast4) {
-      matchedAccount = existingAccounts.find((a) => a.account_number && a.account_number.endsWith(acctLast4));
+      matchedAccount = existingAccounts.find((a) => a.account_number && (a.account_number.endsWith(acctLast4) || acctLast4.endsWith(a.account_number)));
     }
     if (!matchedAccount && last4) {
       matchedAccount = existingAccounts.find((a) =>
-        (a.debit_card_last_4 && a.debit_card_last_4.endsWith(last4))
-        || (a.account_number && a.account_number.endsWith(last4))
+        (a.debit_card_last_4 && (a.debit_card_last_4.endsWith(last4) || last4.endsWith(a.debit_card_last_4)))
+        || (a.account_number && (a.account_number.endsWith(last4) || last4.endsWith(a.account_number)))
         || (a.name && a.name.includes(last4)));
     }
     if (!matchedAccount && issuer && issuer !== 'Bank') {
@@ -4409,6 +4412,8 @@ export function addDiscoveredAccounts(db, args = {}) {
     }
   });
 
+  reconcileExistingTransactions(db);
+
   return { status: 'success', added };
 }
 
@@ -4487,6 +4492,8 @@ export function combineDiscoveredAccount(db, args = {}) {
       );
     }
   });
+
+  reconcileExistingTransactions(db);
 
   return { status: 'success', combined: true };
 }
@@ -4633,6 +4640,8 @@ export function resyncAccountFromSms(db, args = {}) {
     }
   });
 
+  reconcileExistingTransactions(db);
+
   return {
     status: 'success',
     resynced: results.length,
@@ -4723,6 +4732,8 @@ export function mergeCards(db, args = {}) {
     // 6. Delete the source card
     db.run('DELETE FROM credit_cards WHERE id = ?', [sourceCardId]);
   });
+
+  reconcileExistingTransactions(db);
 
   return {
     status: 'success',
@@ -4891,7 +4902,7 @@ export function reconcileExistingTransactions(db) {
 
   // 4. Single-leg self-transfers where raw_sms explicitly specifies another registered user account/card
   const activeTx = db.all(
-    'SELECT id, date, amount, type, category, account_id, card_id, raw_sms FROM transactions WHERE amount > 0 AND COALESCE(is_ignored, 0) = 0',
+    'SELECT id, date, created_at, amount, type, category, account_id, card_id, raw_sms FROM transactions WHERE amount > 0 AND COALESCE(is_ignored, 0) = 0',
   );
 
   for (const t of activeTx) {
@@ -4925,8 +4936,8 @@ export function reconcileExistingTransactions(db) {
         const inst1 = t1.card_id ? `card:${t1.card_id}` : (t1.account_id ? `acc:${t1.account_id}` : null);
         const inst2 = t2.card_id ? `card:${t2.card_id}` : (t2.account_id ? `acc:${t2.account_id}` : null);
         if (inst1 && inst2 && inst1 !== inst2) {
-          const d1 = new Date(t1.date).getTime();
-          const d2 = new Date(t2.date).getTime();
+          const d1 = new Date(t1.date || t1.created_at).getTime();
+          const d2 = new Date(t2.date || t2.created_at).getTime();
           if (!isNaN(d1) && !isNaN(d2) && Math.abs(d1 - d2) <= 86400000 * 2) {
             const isT1Credit = t1.type === 'Income' ? true : (t1.type === 'Expense' ? false : isCreditAlert(t1.raw_sms));
             const isT2Credit = t2.type === 'Income' ? true : (t2.type === 'Expense' ? false : isCreditAlert(t2.raw_sms));
