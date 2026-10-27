@@ -63,6 +63,9 @@ scripts/sms_clean.csv
 scripts/sms_review.csv
 scripts/*.csv
 scripts/*.json
+scripts/custom-names.txt
+debug_ss/
 tools/screenshot_*.png
 tools/uidump.xml
 node_modules/
+messages-2026*

@@ -24,9 +24,11 @@ class SmsReceiver : BroadcastReceiver() {
         var queued = 0
 
         for (message in Telephony.Sms.Intents.getMessagesFromIntent(intent) ?: return) {
+            val sender = message.displayOriginatingAddress ?: ""
+            if (isPersonalSender(sender)) continue
             val body = message.messageBody ?: continue
             if (!looksFinancial(body)) continue
-            queue.add(message.displayOriginatingAddress ?: "", body, "sms")
+            queue.add(sender, body, "sms")
             queued += 1
         }
 
@@ -40,6 +42,16 @@ class SmsReceiver : BroadcastReceiver() {
 
         /** An amount: a currency token with a number after it. */
         private val AMOUNT = Regex("""(?:rs\.?|inr|₹)\s*\.?\s*\d""", RegexOption.IGNORE_CASE)
+
+        private val PERSONAL_SENDER_REGEX = Regex("""^\+?(?:91)?[6-9]\d{9}$""")
+        private val ALL_NUMERIC_LONG_REGEX = Regex("""^\+?\d{10,13}$""")
+
+        /** Checks if a sender address is a personal individual phone number rather than a DLT business header. */
+        fun isPersonalSender(sender: String?): Boolean {
+            if (sender.isNullOrBlank()) return false
+            val clean = sender.trim().replace(Regex("""[\s-]"""), "")
+            return PERSONAL_SENDER_REGEX.matches(clean) || ALL_NUMERIC_LONG_REGEX.matches(clean)
+        }
 
         /**
          * A first pass, so an ordinary message from a friend is never written down at

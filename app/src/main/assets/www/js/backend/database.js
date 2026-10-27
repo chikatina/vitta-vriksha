@@ -259,11 +259,12 @@ const DEFAULT_SMS_RULES = [
   ['Bonus credit', '', 'bonus credited', 'Income', 'Bonus & Grants', AMOUNT_PATTERN],
   ['Rental income', '', 'rent credited', 'Income', 'Rental Income', AMOUNT_PATTERN],
   ['Salary deposit', '', 'deposited in', 'Income', 'Salary', AMOUNT_PATTERN],
-  ['Account credit', '', 'credited to', 'Income', 'Salary', AMOUNT_PATTERN],
-  ['Account credit with', '', 'credited with', 'Income', 'Salary', AMOUNT_PATTERN],
-  ['Account credit by', '', 'credited by', 'Income', 'Salary', AMOUNT_PATTERN],
-  ['Credit alert', '', 'credit alert', 'Income', 'Salary', AMOUNT_PATTERN],
-  ['Money received', '', 'received rs', 'Income', 'Salary', AMOUNT_PATTERN],
+  ['Account credit', '', 'credited to', 'Income', 'Other Income', AMOUNT_PATTERN],
+  ['Account credit for', '', 'credited for', 'Income', 'Other Income', AMOUNT_PATTERN],
+  ['Account credit with', '', 'credited with', 'Income', 'Other Income', AMOUNT_PATTERN],
+  ['Account credit by', '', 'credited by', 'Income', 'Other Income', AMOUNT_PATTERN],
+  ['Credit alert', '', 'credit alert', 'Income', 'Other Income', AMOUNT_PATTERN],
+  ['Money received', '', 'received rs', 'Income', 'Other Income', AMOUNT_PATTERN],
   ['Refund', '', 'refunded', 'Income', 'Refunds & Cashback', AMOUNT_PATTERN],
   ['Cashback credit', '', 'cashback', 'Income', 'Refunds & Cashback', AMOUNT_PATTERN],
   ['Reversal credit', '', 'reversal', 'Income', 'Refunds & Cashback', AMOUNT_PATTERN],
@@ -284,7 +285,7 @@ const DEFAULT_SMS_RULES = [
   ['Dividend Credit', '', 'dividend', 'Income', 'Interest & Dividends', AMOUNT_PATTERN],
   ['Interest Credit', '', 'interest credited', 'Income', 'Interest & Dividends', AMOUNT_PATTERN],
   ['Deposit', '', 'deposited', 'Income', 'Salary', AMOUNT_PATTERN],
-  ['Credit', '', 'credited', 'Income', 'Salary', AMOUNT_PATTERN],
+  ['Credit', '', 'credited', 'Income', 'Other Income', AMOUNT_PATTERN],
   ['Debit', '', 'debited', 'Expense', 'Shopping', AMOUNT_PATTERN],
   ['Deduction', '', 'deducted', 'Expense', 'Shopping', AMOUNT_PATTERN],
   ['Payment', '', 'paid', 'Expense', 'Shopping', AMOUNT_PATTERN],
@@ -516,6 +517,7 @@ export function initDb(db, force = false) {
         description TEXT,
         is_investment_outflow INTEGER DEFAULT 0,
         raw_sms TEXT,
+        sender TEXT,
         is_ignored INTEGER DEFAULT 0,
         is_duplicate INTEGER DEFAULT 0,
         created_at TEXT,
@@ -1310,6 +1312,7 @@ function runAdditiveMigrations(db) {
   addColumnIfMissing(db, 'asset_accounts', 'linked_holding_type', "TEXT DEFAULT ''");
   addColumnIfMissing(db, 'asset_accounts', 'linked_pran', "TEXT DEFAULT ''");
   addColumnIfMissing(db, 'transactions', 'card_id', 'INTEGER');
+  addColumnIfMissing(db, 'transactions', 'sender', "TEXT DEFAULT ''");
   addColumnIfMissing(db, 'transactions', 'is_ignored', 'INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'transactions', 'is_duplicate', 'INTEGER DEFAULT 0');
   db.run('CREATE INDEX IF NOT EXISTS idx_tx_card ON transactions(card_id);');
@@ -2990,6 +2993,8 @@ function saveTransaction(db, args) {
     autoUpdateCreditCardFromSms(db, rawSms, transaction.sender || '', cardId);
   }
 
+  const sender = String(transaction.sender ?? '');
+
   const values = [
     resolveMemberId(db, transaction.member_id),
     accountId,
@@ -3003,6 +3008,7 @@ function saveTransaction(db, args) {
     transaction.description ?? '',
     isInvest,
     rawSms,
+    sender,
     isIgnored,
     isDuplicate,
   ];
@@ -3014,7 +3020,7 @@ function saveTransaction(db, args) {
     db.run(
       'UPDATE transactions SET member_id = ?, account_id = ?, card_id = ?, date = ?, amount = ?,'
       + ' currency = ?, type = ?, category = ?, merchant = ?,'
-      + ' description = ?, is_investment_outflow = ?, raw_sms = ?,'
+      + ' description = ?, is_investment_outflow = ?, raw_sms = ?, sender = ?,'
       + ' is_ignored = ?, is_duplicate = ? WHERE id = ?',
       [...values, transactionId],
     );
@@ -3023,8 +3029,8 @@ function saveTransaction(db, args) {
   } else {
     const result = db.run(
       'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type,'
-      + ' category, merchant, description, is_investment_outflow, raw_sms,'
-      + ' is_ignored, is_duplicate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      + ' category, merchant, description, is_investment_outflow, raw_sms, sender,'
+      + ' is_ignored, is_duplicate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [...values, new Date().toISOString()],
     );
     transactionId = result.lastInsertRowid;
@@ -3483,10 +3489,10 @@ export function extractAccountBalanceFromText(text) {
 }
 
 function isValid4Digits(d, text) {
-  if (!d || d.length !== 4 || !/^\d{4}$/.test(d)) return false;
+  if (!d || !/^\d{3,4}$/.test(d)) return false;
   const num = Number(d);
   // Exclude calendar years (2020-2035) when found in date context
-  if (num >= 2020 && num <= 2035) {
+  if (d.length === 4 && num >= 2020 && num <= 2035) {
     if (new RegExp(`(?:[-/]|\\b(?:on|dt|dated|in|year)\\s+)${d}\\b`, 'i').test(text)) {
       return false;
     }
@@ -3497,6 +3503,13 @@ function isValid4Digits(d, text) {
   }
   // Exclude reference / OTP / UTR / Auth numbers
   if (new RegExp(`\\b(?:otp|ref|utr|rrn|txn|id|code|pin|vpa)\\b[^.]*?${d}\\b`, 'i').test(text)) {
+    return false;
+  }
+  // Exclude folio / demat / boid / uan / pran / policy / application / pin code numbers
+  if (new RegExp(`\\b(?:folio|boid|uan|pran|policy|pincode|pin\\s*code|app(?:lication)?(?:\\s*no)?)\\b[^.]*?${d}\\b`, 'i').test(text)) {
+    return false;
+  }
+  if (new RegExp(`\\b${d}\\b[^.]*?\\b(?:folio|boid|uan|pran)\\b`, 'i').test(text)) {
     return false;
   }
   return true;
@@ -3581,7 +3594,7 @@ export function detectAccountIssuerWeighted(text = '', sender = '') {
   // 1. Direct Account / Card Anchor (+120 points)
   // E.g. "Your DCB A/c no XX1977", "HDFC Bank A/C *1234", "ICICI Bank Credit Card ending 9012"
   let directAnchorInst = null;
-  const anchorRegex = /(?:in|from|to|on|your|dear)?\s*\b([A-Za-z0-9\s&]+?)\s*(?:Bank)?\s*(?:A\/c|Account|Acct|Card|Debit\s*Card|Credit\s*Card|Meal\s*Card|Meal\s*Wallet|Wallet)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/gi;
+  const anchorRegex = /(?:in|from|to|on|your|dear)?\s*\b([A-Za-z0-9\s&]+?)\s*(?:Bank)?\s*(?:A\/c|Account|Acct|Card|Debit\s*Card|Credit\s*Card|Meal\s*Card|Meal\s*Wallet|Wallet)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{3,4})\b/gi;
   let m;
   while ((m = anchorRegex.exec(t)) !== null) {
     const anchoredText = m[1].toLowerCase();
@@ -3595,7 +3608,9 @@ export function detectAccountIssuerWeighted(text = '', sender = '') {
 
   // 2. Sender Header Match (+100 points)
   if (s) {
-    const isIntermediarySender = isIntermediaryContext || /itdept|cpc|epfo|pfms|dbt/i.test(s);
+    const isIntermediarySender = isIntermediaryContext
+      || /itdept|cpc|epfo|pfms|dbt/i.test(s)
+      || (/(?:mf|mutual|amc)\b|-(?:[a-z]{2,6}mf|camss|kfintech)/i.test(s) && /\b(?:investor|folio|sip|nav|redemption)\b/i.test(t));
     for (const inst of KNOWN_INSTITUTIONS) {
       if (inst.senderRe && inst.senderRe.test(s)) {
         if (!isIntermediarySender || directAnchorInst === inst) {
@@ -3730,26 +3745,37 @@ export function parseAccountDetailsFromText(text = '', sender = '') {
   let creditCardLast4 = '';
   let generalLast4 = '';
 
-  const acctMatch = /(?:a\/c|acct|account)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/i.exec(t);
+  const acctMatch = /(?:a\/c|acct|account)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{3,4})\b/i.exec(t);
   if (acctMatch && acctMatch[1] && isValid4Digits(acctMatch[1], t)) accountLast4 = acctMatch[1];
 
   const dcMatch = /(?:debit\s*card|dc)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/i.exec(t);
   if (dcMatch && dcMatch[1] && isValid4Digits(dcMatch[1], t)) debitCardLast4 = dcMatch[1];
 
-  const ccMatch = /(?:credit\s*card|cc)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/i.exec(t);
-  if (ccMatch && ccMatch[1] && isValid4Digits(ccMatch[1], t)) creditCardLast4 = ccMatch[1];
+  const fullMaskedCardMatch = /(?:card|acct|a\/c)?\s*(?:no\.?|number)?\s*[*Xx#\s.-]*\b(?:[0-9xX*]{4}[-\s]+[0-9xX*]{4}[-\s]+[0-9xX*]{4}[-\s]+([0-9]{4}))\b/i.exec(t);
+  if (fullMaskedCardMatch && fullMaskedCardMatch[1] && isValid4Digits(fullMaskedCardMatch[1], t)) {
+    if (isCreditCard) creditCardLast4 = fullMaskedCardMatch[1];
+    else if (isDebitCard) debitCardLast4 = fullMaskedCardMatch[1];
+    else generalLast4 = fullMaskedCardMatch[1];
+  }
 
-  const generalPatterns = [
-    /(?:card|wallet)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/i,
-    /\bending(?:\s*(?:in|with))?\s*[*Xx#\s.]*([0-9]{4})\b/i,
-    /(?:xx|[*#]{2,}|\.{2,})\s*([0-9]{4})\b/i,
-    /(?:card|a\/c)\s+([0-9]{4})\b/i,
-  ];
-  for (const pat of generalPatterns) {
-    const m = pat.exec(t);
-    if (m && m[1] && isValid4Digits(m[1], t)) {
-      generalLast4 = m[1];
-      break;
+  if (!creditCardLast4) {
+    const ccMatch = /(?:credit\s*card|cc)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/i.exec(t);
+    if (ccMatch && ccMatch[1] && isValid4Digits(ccMatch[1], t)) creditCardLast4 = ccMatch[1];
+  }
+
+  if (!generalLast4) {
+    const generalPatterns = [
+      /(?:card|wallet)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/i,
+      /\bending(?:\s*(?:in|with))?\s*[*Xx#\s.]*([0-9]{4})\b/i,
+      /(?:xx|[*#]{2,}|\.{2,})\s*([0-9]{4})\b/i,
+      /(?:card|a\/c)\s+([0-9]{4})\b/i,
+    ];
+    for (const pat of generalPatterns) {
+      const m = pat.exec(t);
+      if (m && m[1] && isValid4Digits(m[1], t)) {
+        generalLast4 = m[1];
+        break;
+      }
     }
   }
 
@@ -3963,7 +3989,7 @@ export function autoUpdateCreditCardFromSms(db, text = '', sender = '', matchedC
 }
 
 export function discoverAccountsFromSms(db) {
-  const transactions = db.all("SELECT raw_sms, type, amount, date, id FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' ORDER BY date DESC, id DESC");
+  const transactions = db.all("SELECT raw_sms, sender, type, amount, date, id FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' ORDER BY date DESC, id DESC");
   const existingAccounts = db.all('SELECT id, name, category, institution, account_number, debit_card_last_4 FROM asset_accounts');
   const existingCards = db.all('SELECT id, card_name, bank, last_4 FROM credit_cards');
 
@@ -4012,12 +4038,18 @@ export function discoverAccountsFromSms(db) {
 
   for (const m of transactions) {
     const text = m.raw_sms || '';
-    const info = parseAccountDetailsFromText(text);
+    const info = parseAccountDetailsFromText(text, m.sender || '');
     if (!info.last4 && !info.isFoodCard && !info.isWallet) continue;
 
     // Filter out invalid/generic issuers or payees
     if (info.issuer === 'Bank' && !info.last4) continue;
-    if ((info.issuer === 'Amazon Pay' || info.issuer === 'PhonePe' || info.issuer === 'Google Pay' || info.issuer === 'Paytm') && info.instrument_type === 'bank_account') {
+    const isIntermediary = info.issuer === 'Amazon Pay' || info.issuer === 'PhonePe' || info.issuer === 'Google Pay' || info.issuer === 'Paytm' || info.issuer === 'MobiKwik' || info.issuer === 'Freecharge';
+    if (isIntermediary && (info.instrument_type === 'bank_account' || info.instrument_type === 'credit_card' || info.instrument_type === 'debit_card')) {
+      continue;
+    }
+
+    // Filter out mutual fund / folio alerts from discovering as bank accounts
+    if (info.instrument_type === 'bank_account' && /\b(?:folio|nav|mutual\s*fund|redemption\s*request|elss|small\s*cap|large\s*cap|mid\s*cap|growth\s*fund|dividend\s*reinvestment)\b/i.test(text) && !/\b(?:a\/c|account|acct)\s*(?:no\.?|ending)?\s*[*xX#]*\s*\d{3,4}\b/i.test(text)) {
       continue;
     }
 
@@ -4068,14 +4100,34 @@ export function discoverAccountsFromSms(db) {
 
     entry.txn_count += 1;
     const amt = Math.abs(Number(m.amount) || 0);
-    if (m.type === 'expense' || m.type === 'debit') {
+    const txType = (m.type || '').toLowerCase();
+    if (txType === 'expense' || txType === 'debit') {
       entry.total_spent += amt;
-    } else if (m.type === 'income' || m.type === 'credit') {
+    } else if (txType === 'income' || txType === 'credit') {
       entry.total_received += amt;
     }
     if (m.date && (!entry.last_seen || m.date > entry.last_seen)) {
       entry.last_seen = m.date;
       entry.sample_sms = text.trim();
+    }
+  }
+
+  // Merge generic "Bank" fallback entries into known specific issuers if same instrument_type and last4 exist
+  for (const [key, entry] of [...map.entries()]) {
+    if (entry.info.issuer === 'Bank' && entry.last4 && entry.last4 !== 'Card' && entry.last4 !== 'Wallet') {
+      for (const [otherKey, otherEntry] of map.entries()) {
+        if (otherKey !== key && otherEntry.info.issuer !== 'Bank' && otherEntry.instrument_type === entry.instrument_type && otherEntry.last4 === entry.last4) {
+          otherEntry.txn_count += entry.txn_count;
+          otherEntry.total_spent += entry.total_spent;
+          otherEntry.total_received += entry.total_received;
+          if (!otherEntry.balance && entry.balance) otherEntry.balance = entry.balance;
+          if (entry.last_seen && (!otherEntry.last_seen || entry.last_seen > otherEntry.last_seen)) {
+            otherEntry.last_seen = entry.last_seen;
+          }
+          map.delete(key);
+          break;
+        }
+      }
     }
   }
 
@@ -4204,6 +4256,7 @@ export function discoverAccountsFromSms(db) {
         discovered.push({
           kind: 'card',
           bank: info.issuer,
+          name: `${displayName}${last4 !== 'Card' ? ` (${last4})` : ''}`,
           card_name: displayName,
           account_type: 'Credit Card',
           instrument_type: 'credit_card',
