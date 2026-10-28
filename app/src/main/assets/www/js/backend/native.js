@@ -29,7 +29,7 @@ function bridge() {
 
 /** The database file as bytes, or null when there is not one yet. */
 export async function readDatabase() {
-  if (isAndroid()) {
+  if (isAndroid() && typeof bridge()?.readDatabase === 'function') {
     const encoded = bridge().readDatabase();
     return encoded ? decodeBase64(encoded) : null;
   }
@@ -45,7 +45,7 @@ export async function readDatabase() {
  */
 export async function writeDatabase(bytes) {
   const encoded = encodeBase64(bytes);
-  if (isAndroid()) {
+  if (isAndroid() && typeof bridge()?.writeDatabase === 'function') {
     const ok = bridge().writeDatabase(encoded);
     if (!ok) throw new Error('The database could not be saved.');
     return;
@@ -116,7 +116,7 @@ export function deleteVaultKey() {
 
 /** Forgets the stored database. Used by the factory reset. */
 export async function deleteDatabase() {
-  if (isAndroid()) {
+  if (isAndroid() && typeof bridge()?.deleteDatabase === 'function') {
     bridge().deleteDatabase();
     return;
   }

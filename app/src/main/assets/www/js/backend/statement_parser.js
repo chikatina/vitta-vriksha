@@ -11,7 +11,7 @@ import { fail } from './errors.js';
 import {
   currentCurrency, getDatabase, initDb, resolveMemberId,
 } from './database.js';
-import { categoryForMerchant, extractMerchant } from './merchants.js';
+import { categoryForMerchant, extractMerchant, merchantKey } from './merchants.js';
 import { decodeBase64 } from './native.js';
 
 const PDFJS_URL = new URL('../../vendor/pdfjs/pdf.mjs', import.meta.url);
@@ -481,8 +481,9 @@ export async function importStatementTransactionsAction(args = {}) {
       const amount = cleanAmount(tx.amount);
       if (!(amount > 0)) continue;
 
+      const mKey = merchantKey(tx.merchant || '');
       db.run(
-        'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category, merchant, description, is_investment_outflow, is_duplicate, created_at, bucket_id) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
+        'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category, merchant, merchant_key, description, is_investment_outflow, is_duplicate, created_at, bucket_id) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
         [
           memberId,
           accountId,
@@ -492,6 +493,7 @@ export async function importStatementTransactionsAction(args = {}) {
           tx.type || 'Expense',
           tx.category || 'Other',
           tx.merchant || '',
+          mKey,
           tx.description || '',
           tx.is_duplicate ? 1 : 0,
           now,

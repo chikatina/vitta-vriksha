@@ -11,13 +11,13 @@
  */
 
 import {
-  autoUpdateAccountFromSms, autoUpdateCreditCardFromSms, currentCurrency, getDatabase, initDb, learnMerchant,
-  parseAccountDetailsFromText, resolveAccountAndCardFromSms, resolveMemberId,
+  autoUpdateAccountFromSms, autoUpdateCreditCardFromSms, autoUpdateLoanFromSms, currentCurrency, getDatabase, initDb, learnMerchant,
+  parseAccountDetailsFromText, reconcileExistingTransactions, resolveAccountAndCardFromSms, resolveMemberId,
 } from './database.js';
 import { memberClause } from './periods.js';
 import { readSmsInbox, takePendingAlerts } from './native.js';
 import {
-  categoryForMerchant, extractMerchant, merchantKey, notATransaction,
+  categoryForMerchant, extractMerchant, extractPrimaryClause, extractUtr, isCreditAlert, merchantKey, notATransaction,
 } from './merchants.js';
 import { fail } from './errors.js';
 
@@ -109,26 +109,7 @@ function extractDate(text) {
   return null;
 }
 
-const UTR_PATTERNS = [
-  /\bupi(?:\/|\s*(?:ref|txn|reference)?\s*(?:no\.?|id|num)?[:\s\/-]+)([A-Za-z0-9]{6,24})\b/i,
-  /\b(?:ref(?:\s*no\.?|\s*id|\s*num)?|rrn|utr(?:\s*no\.?)?|txn\s*id|transaction\s*id|reference\s*no\.?)[:\s\/-]+([A-Za-z0-9]{6,24})\b/i,
-  /\b(?:info|via)[:\s]+[A-Za-z0-9\s-]*\/\s*([0-9]{6,24})\b/i,
-  /\bupi\/\s*([0-9]{6,24})\b/i,
-];
-
-export function extractUtr(text) {
-  if (!text || typeof text !== 'string') return '';
-  for (const pattern of UTR_PATTERNS) {
-    const match = pattern.exec(text);
-    if (match && match[1]) {
-      const val = match[1].trim();
-      if (val.length >= 6 && /\d/.test(val) && !/^(success|pending|completed|declined|reversed)$/i.test(val)) {
-        return val;
-      }
-    }
-  }
-  return '';
-}
+export { extractUtr };
 
 export function isoFromMillis(millis) {
   if (!millis) return null;
@@ -265,6 +246,7 @@ export function buildClassificationContext(db, memberId = null) {
   const [clause, params] = memberClause(memberId, 'WHERE');
   const cachedAccounts = db.all(`SELECT id, name, category, institution, account_number, debit_card_last_4 FROM asset_accounts${clause}`, params);
   const cachedCards = db.all(`SELECT id, card_name, bank, last_4, total_limit, available_limit, current_balance FROM credit_cards${clause}`, params);
+  const cachedLoans = db.all(`SELECT id, name, lender, account_number, last_4, current_outstanding, monthly_emi, debit_day FROM loans${clause}`, params);
 
   return {
     db,
@@ -273,6 +255,7 @@ export function buildClassificationContext(db, memberId = null) {
     merchantMap,
     cachedAccounts,
     cachedCards,
+    cachedLoans,
   };
 }
 
@@ -288,20 +271,7 @@ export function extractDescription(text) {
 }
 
 /**
- * Isolates the primary clause describing what happened to the user's account.
- * Modern Indian banking alerts often mention both accounts (e.g. "Your a/c XX2219 is credited
- * for Rs. 2500 and debited from a/c 1528" or "Acct XX386 debited for Rs 10; MERCHANT credited").
- * Isolating the primary clause ensures counterparty clauses do not invert transaction direction.
- */
-export function extractPrimaryClause(text) {
-  if (!text) return '';
-  const counterpartyRe = /(?:[\s,;&]+(?:and|&)\s+(?:debited\s+from|credited\s+to)\b|;\s*[^;.]+?\s+(?:credited|debited)\b|[\s,;&]+(?:and|&)\s+[^;.]+?\s+(?:credited|debited)\b)/i;
-  const match = counterpartyRe.exec(text);
-  if (match) {
-    return text.slice(0, match.index).trim();
-  }
-  return text;
-}
+export { extractPrimaryClause };
 
 /** Classifies one message against the stored rules and everything known about the vendor. */
 export async function parseSmsText(text, sender = '', receivedAt = null, context = null) {
@@ -320,6 +290,7 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
     memberId: context?.memberId,
     cachedAccounts: context?.cachedAccounts,
     cachedCards: context?.cachedCards,
+    cachedLoans: context?.cachedLoans,
   });
   const accountMatch = ACCOUNT_RE.exec(text);
   const accountLast4 = accountInfo.last4 || (accountMatch ? accountMatch[1] : '');
@@ -408,15 +379,16 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
    */
   if (notMoney === 'card-payment' || notMoney === 'self-transfer') {
     const moved = extractTransactionAmount(text) || (FALLBACK_AMOUNT_RE.exec(text) ? toAmount(FALLBACK_AMOUNT_RE.exec(text)[1]) : 0);
+    const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(text || '');
     return {
       status: 'classified',
       matched_rule: notMoney === 'card-payment' ? 'Credit card payment' : 'Own transfer',
       amount: moved,
       type: 'Transfer',
-      category: notMoney === 'card-payment' ? 'Credit Card' : 'Transfer',
+      category: isLoanOrEmi ? 'Loans & EMI' : (notMoney === 'card-payment' ? 'Credit Card' : 'Transfer'),
       category_source: 'rule',
-      merchant: merchant || (notMoney === 'card-payment' ? 'Credit Card Payment' : ''),
-      merchant_key: key || (notMoney === 'card-payment' ? 'credit card payment' : ''),
+      merchant: merchant || (isLoanOrEmi ? 'Loan Repayment' : (notMoney === 'card-payment' ? 'Credit Card Payment' : '')),
+      merchant_key: key || (isLoanOrEmi ? 'loan repayment' : (notMoney === 'card-payment' ? 'credit card payment' : '')),
       account_last4: accountLast4,
       account_issuer: accountInfo.issuer,
       is_food_card: accountInfo.isFoodCard,
@@ -499,7 +471,7 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
   const isCredit = checkText.includes('credited') || checkText.includes('received') || checkText.includes('deposited');
   const hasSalarySignal = /\b(?:salary|payroll|stipend|wages|sal\s+for|monthly\s+pay)\b/i.test(checkText);
   const guess = isCredit ? (hasSalarySignal ? 'Salary' : 'Other Income') : 'Shopping';
-  const defaultType = known.type || (known.category === 'Investment Outflow' ? 'Investment' : (isCredit ? 'Income' : 'Expense'));
+  const defaultType = known.type || (!isCredit && known.category === 'Investment Outflow' ? 'Investment' : (isCredit ? 'Income' : 'Expense'));
 
   let matchedRuleName = 'Default Classifier';
   let finalAmount = fallbackAmount;
@@ -512,9 +484,11 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
     const match = compile(rule.regex_pattern).exec(text);
     finalAmount = match ? toAmount(match[1]) : extractTransactionAmount(text);
     const isTransferRule = rule.transaction_type === 'Transfer';
+    const dictTransferOnSpend = !isTransferRule && rule.transaction_type === 'Expense' && known.type === 'Transfer' && known.source !== 'learned';
+    const dictIncomeOnSpend = !isTransferRule && rule.transaction_type === 'Expense' && known.type === 'Income' && known.source !== 'learned';
     finalType = (known.source === 'learned' && known.type)
       ? known.type
-      : (isTransferRule ? 'Transfer' : (known.type || (known.category === 'Investment Outflow' ? 'Investment' : rule.transaction_type)));
+      : (isTransferRule ? 'Transfer' : ((!dictTransferOnSpend && !dictIncomeOnSpend && known.type) || (!isCredit && known.category === 'Investment Outflow' ? 'Investment' : (isCredit ? 'Income' : rule.transaction_type))));
     finalCategory = (known.source === 'learned' && categoryFits(known.category, finalType))
       ? known.category
       : (isTransferRule ? rule.category_name : (usable(known, finalType) ? known.category : rule.category_name));
@@ -522,23 +496,46 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
     categorySource = (known.source === 'learned' || (!isTransferRule && usable(known, finalType))) ? known.source : 'rule';
   }
 
+  // Direction invariant: A bank credit (Money In) can never be an Investment Outflow.
+  // Payouts from stock exchanges, brokers, clearing houses (e.g. NSE, Zerodha) credited to bank
+  // are inflows (Dividends, Capital Gains, or Investment Returns).
+  if (isCredit && (finalType === 'Investment' || finalCategory === 'Investment Outflow')) {
+    finalType = 'Income';
+    finalCategory = 'Interest & Dividends';
+    categorySource = 'rule';
+  }
+
   // Inter-account transfer check:
-  // 1. Destination is a known user account (e.g. "debited ... credited to a/c XX8386")
+  // 1. Destination is a known user account, card, or loan (e.g. "debited ... credited to a/c XX8386" or "and a/c XX8386 credited")
   if (finalType === 'Expense') {
-    const targetMatch = /(?:credited to|transferred to|sent to)\s+(?:a\/c|acct|account)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\b/i.exec(text);
-    if (targetMatch && targetMatch[1]) {
-      const targetSuffix = targetMatch[1].toLowerCase();
+    const targetMatch = /(?:(?:credited to|transferred to|sent to|to your)\s+(?:a\/c|acct|account|card|loan)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\b|(?:a\/c|acct|account|card|loan)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\s+(?:is\s+)?credited\b)/i.exec(text);
+    const targetSuffix = (targetMatch ? (targetMatch[1] || targetMatch[2]) : '').toLowerCase();
+    if (targetSuffix) {
       const originAcc = (accountLast4 || '').toLowerCase();
       if (targetSuffix !== originAcc) {
         const userAccounts = context?.cachedAccounts || db.all('SELECT account_number FROM asset_accounts');
+        const userCards = context?.cachedCards || db.all('SELECT last_4 FROM credit_cards');
+        const userLoans = context?.cachedLoans || db.all('SELECT id, last_4, account_number FROM loans');
         const isUserAcc = userAccounts.some((a) => {
           const num = String(a.account_number || '').toLowerCase();
           return num && (num.endsWith(targetSuffix) || targetSuffix.endsWith(num));
         });
-        if (isUserAcc) {
+        const isUserCard = userCards.some((c) => {
+          const num = String(c.last_4 || '').toLowerCase();
+          return num && (num.endsWith(targetSuffix) || targetSuffix.endsWith(num));
+        });
+        const matchedLoan = userLoans.find((l) => {
+          const num = String(l.last_4 || l.account_number || '').toLowerCase();
+          return num && (num.endsWith(targetSuffix) || targetSuffix.endsWith(num));
+        });
+        const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(text || '');
+        if (isUserAcc || isUserCard || matchedLoan || isLoanOrEmi) {
           finalType = 'Transfer';
-          finalCategory = 'Transfer';
+          finalCategory = (matchedLoan || isLoanOrEmi) ? 'Loans & EMI' : (isUserCard ? 'Credit Card' : 'Transfer');
           matchedRuleName = 'Target account transfer';
+          if (matchedLoan && !resolvedAccount.loan_id) {
+            resolvedAccount.loan_id = matchedLoan.id;
+          }
         }
       }
     }
@@ -552,24 +549,88 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
     matchedRuleName = 'ATM Cash Withdrawal';
   }
 
-  // 2. Exact UTR counterpart already in database
-  const incomingUtr = extractUtr(text);
-  if (incomingUtr && finalAmount > 0 && (finalType === 'Expense' || finalType === 'Income')) {
-    const isOut = finalType === 'Expense';
-    const opp = db.get(
-      "SELECT id, type, category, raw_sms FROM transactions WHERE amount = ? AND raw_sms IS NOT NULL AND raw_sms != ''",
-      [finalAmount],
-    );
-    if (opp && opp.type !== 'Transfer') {
-      const oppUtr = extractUtr(opp.raw_sms);
-      if (oppUtr && oppUtr === incomingUtr) {
-        const oppIsOut = opp.type === 'Expense' || opp.type === 'Investment';
-        if (oppIsOut !== isOut) {
+  // Check if incoming credit comes from a known user account (e.g. "credited ... debited from a/c XX2219")
+  if (finalType === 'Income') {
+    const sourceMatch = /(?:(?:debited from|transferred from|from your|from)\s+(?:a\/c|acct|account)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\b|(?:a\/c|acct|account)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\s+(?:is\s+)?debited\b)/i.exec(text);
+    const sourceSuffix = (sourceMatch ? (sourceMatch[1] || sourceMatch[2]) : '').toLowerCase();
+    if (sourceSuffix) {
+      const destAcc = (accountLast4 || '').toLowerCase();
+      if (sourceSuffix !== destAcc) {
+        const userAccounts = context?.cachedAccounts || db.all('SELECT account_number FROM asset_accounts');
+        const isUserAcc = userAccounts.some((a) => {
+          const num = String(a.account_number || '').toLowerCase();
+          return num && (num.endsWith(sourceSuffix) || sourceSuffix.endsWith(num));
+        });
+        if (isUserAcc) {
           finalType = 'Transfer';
           finalCategory = 'Transfer';
-          matchedRuleName = 'Reconciled transfer';
-          db.run("UPDATE transactions SET type = 'Transfer', category = 'Transfer' WHERE id = ?", [opp.id]);
+          matchedRuleName = 'Source account transfer';
         }
+      }
+    }
+  }
+
+  // Check if incoming credit is into a loan or overdraft (e.g. NACH mandate credit, OD credit)
+  if (isCreditAlert(text) && (accountInfo.isLoan || resolvedAccount.loan_id || /nach dr ow|star home|overdraft|home loan/i.test(text))) {
+    finalType = 'Transfer';
+    finalCategory = 'Loans & EMI';
+    matchedRuleName = 'Loan mandate credit';
+  }
+
+  // 2. Reconcile transfer counterpart in database (matching UTR, or same-day exact amount between distinct registered user accounts/cards/loans)
+  if (finalAmount > 0 && (finalType === 'Expense' || finalType === 'Income')) {
+    const isOut = finalType === 'Expense';
+    const incomingUtr = extractUtr(text);
+    const candidates = db.all(
+      "SELECT id, type, category, account_id, card_id, loan_id, date, raw_sms FROM transactions WHERE amount = ? AND COALESCE(is_ignored, 0) = 0",
+      [finalAmount],
+    );
+
+    for (const opp of candidates) {
+      let oppIsOut;
+      if (opp.type === 'Expense' || opp.type === 'Investment') {
+        oppIsOut = true;
+      } else if (opp.type === 'Income') {
+        oppIsOut = false;
+      } else if (opp.type === 'Transfer') {
+        oppIsOut = !isCreditAlert(opp.raw_sms);
+      } else {
+        continue;
+      }
+
+      if (oppIsOut === isOut) continue;
+
+      let isMatch = false;
+      if (incomingUtr) {
+        const oppUtr = extractUtr(opp.raw_sms);
+        if (oppUtr && oppUtr === incomingUtr) isMatch = true;
+      }
+
+      // Check same-day (or +/- 2 days) between distinct registered user accounts/cards/loans
+      if (!isMatch && dateFromSms && opp.date) {
+        const d1 = new Date(dateFromSms).getTime();
+        const d2 = new Date(opp.date).getTime();
+        if (!isNaN(d1) && !isNaN(d2) && Math.abs(d1 - d2) <= 86400000 * 2) {
+          const currentInst = resolvedAccount.loan_id ? `loan:${resolvedAccount.loan_id}` : (resolvedAccount.card_id ? `card:${resolvedAccount.card_id}` : (resolvedAccount.account_id ? `acc:${resolvedAccount.account_id}` : null));
+          const oppInst = opp.loan_id ? `loan:${opp.loan_id}` : (opp.card_id ? `card:${opp.card_id}` : (opp.account_id ? `acc:${opp.account_id}` : null));
+          if (currentInst && oppInst && currentInst !== oppInst) {
+            isMatch = true;
+          }
+        }
+      }
+
+      if (isMatch) {
+        const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(text || '')
+          || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(opp.raw_sms || '');
+        const hasLoan = Boolean(resolvedAccount.loan_id || opp.loan_id) || isLoanOrEmi;
+        const isCard = !isLoanOrEmi && Boolean(resolvedAccount.card_id || opp.card_id);
+        finalType = 'Transfer';
+        finalCategory = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
+        matchedRuleName = 'Reconciled transfer';
+        if (opp.type !== 'Transfer') {
+          db.run("UPDATE transactions SET type = 'Transfer', category = ? WHERE id = ?", [finalCategory, opp.id]);
+        }
+        break;
       }
     }
   }
@@ -587,6 +648,7 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
     account_issuer: accountInfo.issuer,
     is_food_card: accountInfo.isFoodCard,
     is_credit_card: accountInfo.isCreditCard,
+    is_loan: accountInfo.isLoan,
     card_variant: accountInfo.cardVariant,
     available_limit: accountInfo.available_limit,
     total_limit: accountInfo.total_limit,
@@ -595,6 +657,7 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
     account_balance: accountInfo.account_balance,
     account_id: resolvedAccount.account_id,
     card_id: resolvedAccount.card_id,
+    loan_id: resolvedAccount.loan_id,
     sender,
     description: descriptionFromSms,
     raw_sms: text,
@@ -646,13 +709,26 @@ export function reconcileTransfers(rows, db, { memberId = null, cachedAccounts =
         && Math.abs(inRow.classified.amount - outRow.classified.amount) < 0.01,
       );
       if (matchingIn) {
+        const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(outRow.body || outRow.raw_sms || '')
+          || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(matchingIn.body || matchingIn.raw_sms || '');
+        const hasLoan = Boolean(outRow.classified.loan_id || matchingIn.classified.loan_id || outRow.classified.is_loan || matchingIn.classified.is_loan) || isLoanOrEmi;
+        const isCard = !isLoanOrEmi && Boolean(outRow.classified.card_id || matchingIn.classified.card_id || outRow.classified.is_credit_card || matchingIn.classified.is_credit_card);
+        const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
+
         outRow.classified.type = 'Transfer';
-        outRow.classified.category = 'Transfer';
+        outRow.classified.category = cat;
         outRow.classified.matched_rule = 'Reconciled transfer';
         outRow.classified.merchant = outRow.classified.merchant || 'Transfer';
+        if (hasLoan) {
+          const loanId = outRow.classified.loan_id || matchingIn.classified.loan_id;
+          if (loanId) {
+            outRow.classified.loan_id = loanId;
+            matchingIn.classified.loan_id = loanId;
+          }
+        }
 
         matchingIn.classified.type = 'Transfer';
-        matchingIn.classified.category = 'Transfer';
+        matchingIn.classified.category = cat;
         matchingIn.classified.matched_rule = 'Reconciled transfer';
         matchingIn.classified.merchant = matchingIn.classified.merchant || 'Transfer';
       }
@@ -670,7 +746,7 @@ export function reconcileTransfers(rows, db, { memberId = null, cachedAccounts =
       const isOut = row.classified.type === 'Expense' || row.classified.type === 'Investment';
 
       const candidates = db.all(
-        "SELECT id, type, category, raw_sms FROM transactions WHERE amount = ? AND raw_sms IS NOT NULL AND raw_sms != ''",
+        "SELECT id, type, category, card_id, loan_id, raw_sms FROM transactions WHERE amount = ? AND raw_sms IS NOT NULL AND raw_sms != ''",
         [row.classified.amount],
       );
       for (const cand of candidates) {
@@ -678,12 +754,18 @@ export function reconcileTransfers(rows, db, { memberId = null, cachedAccounts =
         if (candUtr && candUtr === utr) {
           const candIsOut = cand.type === 'Expense' || cand.type === 'Investment';
           if (candIsOut !== isOut) {
+            const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(body)
+              || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(cand.raw_sms || '');
+            const hasLoan = Boolean(row.classified.loan_id || cand.loan_id || row.classified.is_loan) || isLoanOrEmi;
+            const isCard = !isLoanOrEmi && Boolean(row.classified.card_id || cand.card_id || row.classified.is_credit_card);
+            const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
+
             row.classified.type = 'Transfer';
-            row.classified.category = 'Transfer';
+            row.classified.category = cat;
             row.classified.matched_rule = 'Reconciled transfer';
             row.classified.merchant = row.classified.merchant || 'Transfer';
 
-            db.run("UPDATE transactions SET type = 'Transfer', category = 'Transfer' WHERE id = ?", [cand.id]);
+            db.run("UPDATE transactions SET type = 'Transfer', category = ? WHERE id = ?", [cat, cand.id]);
             break;
           }
         }
@@ -709,6 +791,17 @@ export function reconcileTransfers(rows, db, { memberId = null, cachedAccounts =
       }
     }
   }
+
+  // Pass 4: Loan mandate credits (e.g. NACH DR OW)
+  for (const row of rows) {
+    const body = row.body || row.raw_sms || '';
+    if (row.classified.is_loan || row.classified.loan_id || (/nach dr ow|star home|overdraft|home loan/i.test(body) && isCreditAlert(body))) {
+      row.classified.type = 'Transfer';
+      row.classified.category = 'Loans & EMI';
+      row.classified.matched_rule = 'Loan mandate credit';
+      row.classified.merchant = row.classified.merchant || 'Loan Account';
+    }
+  }
 }
 
 async function importInbox(db, { days = 0, memberId = 1 } = {}) {
@@ -722,14 +815,12 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
 
   const ctx = buildClassificationContext(db, memberId);
   const txByDateAmount = new Map();
-  for (const row of db.all(`
-    SELECT t.id, t.date, t.amount, t.type, t.raw_sms,
+  for (const row of db.all(`SELECT t.id, t.date, t.amount, t.type, t.raw_sms,
            COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
     FROM transactions t
     LEFT JOIN asset_accounts a ON t.account_id = a.id
     LEFT JOIN credit_cards c ON t.card_id = c.id
-    WHERE t.amount > 0 AND COALESCE(t.is_ignored, 0) = 0 AND COALESCE(t.is_duplicate, 0) = 0
-  `)) {
+    WHERE t.amount > 0 AND COALESCE(t.is_ignored, 0) = 0 AND COALESCE(t.is_duplicate, 0) = 0`)) {
     const key = `${row.date}:${row.amount}`;
     if (!txByDateAmount.has(key)) txByDateAmount.set(key, []);
     txByDateAmount.get(key).push({
@@ -801,14 +892,17 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
       const isInvest = classified.type === 'Investment' || classified.category === 'Investment Outflow' ? 1 : 0;
       let accountId = classified.account_id ?? null;
       let cardId = classified.card_id ?? null;
-      if (!accountId && !cardId) {
+      let loanId = classified.loan_id ?? null;
+      if (!accountId && !cardId && !loanId) {
         const resolved = resolveAccountAndCardFromSms(db, body, sender, {
           memberId,
           cachedAccounts: ctx.cachedAccounts,
           cachedCards: ctx.cachedCards,
+          cachedLoans: ctx.cachedLoans,
         });
         accountId = resolved.account_id;
         cardId = resolved.card_id;
+        loanId = resolved.loan_id;
       }
       if (accountId) {
         autoUpdateAccountFromSms(db, body, sender, accountId);
@@ -816,14 +910,18 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
       if (cardId) {
         autoUpdateCreditCardFromSms(db, body, sender, cardId);
       }
+      if (loanId) {
+        autoUpdateLoanFromSms(db, body, sender, loanId);
+      }
       db.run(
-        'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category,'
+        'INSERT INTO transactions (member_id, account_id, card_id, loan_id, date, amount, currency, type, category,'
         + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, sender, created_at)'
-        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           memberId,
           accountId,
           cardId,
+          loanId,
           isoFromMillis(receivedAt) || classified.date,
           classified.amount,
           currency,
@@ -841,6 +939,10 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
       imported += 1;
     }
   });
+
+  if (imported > 0) {
+    reconcileExistingTransactions(db);
+  }
 
   markSynced(db);
   await db.schedulePersist();
@@ -947,14 +1049,12 @@ async function reimportInbox(db, args) {
 
   const ctx = buildClassificationContext(db, memberId);
   const txByDateAmount = new Map();
-  for (const row of db.all(`
-    SELECT t.id, t.date, t.amount, t.type, t.raw_sms,
+  for (const row of db.all(`SELECT t.id, t.date, t.amount, t.type, t.raw_sms,
            COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
     FROM transactions t
     LEFT JOIN asset_accounts a ON t.account_id = a.id
     LEFT JOIN credit_cards c ON t.card_id = c.id
-    WHERE t.amount > 0 AND COALESCE(t.is_ignored, 0) = 0 AND COALESCE(t.is_duplicate, 0) = 0
-  `)) {
+    WHERE t.amount > 0 AND COALESCE(t.is_ignored, 0) = 0 AND COALESCE(t.is_duplicate, 0) = 0`)) {
     const key = `${row.date}:${row.amount}`;
     if (!txByDateAmount.has(key)) txByDateAmount.set(key, []);
     txByDateAmount.get(key).push({
@@ -1045,14 +1145,17 @@ async function reimportInbox(db, args) {
       const isInvest = classified.type === 'Investment' || classified.category === 'Investment Outflow' ? 1 : 0;
       let accountId = classified.account_id ?? null;
       let cardId = classified.card_id ?? null;
-      if (!accountId && !cardId) {
+      let loanId = classified.loan_id ?? null;
+      if (!accountId && !cardId && !loanId) {
         const resolved = resolveAccountAndCardFromSms(db, body, sender, {
           memberId,
           cachedAccounts: ctx.cachedAccounts,
           cachedCards: ctx.cachedCards,
+          cachedLoans: ctx.cachedLoans,
         });
         accountId = resolved.account_id;
         cardId = resolved.card_id;
+        loanId = resolved.loan_id;
       }
       if (accountId) {
         autoUpdateAccountFromSms(db, body, sender, accountId);
@@ -1060,14 +1163,18 @@ async function reimportInbox(db, args) {
       if (cardId) {
         autoUpdateCreditCardFromSms(db, body, sender, cardId);
       }
+      if (loanId) {
+        autoUpdateLoanFromSms(db, body, sender, loanId);
+      }
       db.run(
-        'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category,'
+        'INSERT INTO transactions (member_id, account_id, card_id, loan_id, date, amount, currency, type, category,'
         + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, sender, created_at)'
-        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         [
           memberId,
           accountId,
           cardId,
+          loanId,
           isoFromMillis(receivedAt) || classified.date,
           classified.amount,
           currency,
@@ -1085,6 +1192,10 @@ async function reimportInbox(db, args) {
       imported += 1;
     }
   });
+
+  if (imported > 0) {
+    reconcileExistingTransactions(db);
+  }
 
   // Only after the messages are safely filed. A sync that failed halfway must be able to
   // cover the same stretch again rather than skip it.
@@ -1476,6 +1587,39 @@ async function reviewAlerts(db, args) {
     }
   }
 
+  // Pair pending items by same-day exact amount across distinct registered user accounts/cards
+  const pendingOuts = items.filter((i) => i.state === 'pending' && (i.suggested_type === 'Expense' || i.suggested_type === 'Investment') && (i.account_id || i.card_id));
+  const pendingIns = items.filter((i) => i.state === 'pending' && i.suggested_type === 'Income' && (i.account_id || i.card_id));
+  for (const o of pendingOuts) {
+    if (o.suggested_type === 'Transfer') continue;
+    const matchIn = pendingIns.find((i) => {
+      if (i.suggested_type === 'Transfer') return false;
+      if (Math.abs(i.amount - o.amount) >= 0.01) return false;
+      const oInst = o.card_id ? `card:${o.card_id}` : `acc:${o.account_id}`;
+      const iInst = i.card_id ? `card:${i.card_id}` : `acc:${i.account_id}`;
+      if (oInst === iInst) return false;
+      if (o.date && i.date) {
+        const d1 = new Date(o.date).getTime();
+        const d2 = new Date(i.date).getTime();
+        if (!isNaN(d1) && !isNaN(d2)) {
+          return Math.abs(d1 - d2) <= 86400000 * 2;
+        }
+      }
+      return false;
+    });
+    if (matchIn) {
+      const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(o.raw_sms || '')
+        || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(matchIn.raw_sms || '');
+      const hasLoan = Boolean(o.loan_id || matchIn.loan_id || o.is_loan || matchIn.is_loan) || isLoanOrEmi;
+      const isCard = !isLoanOrEmi && Boolean(o.card_id || matchIn.card_id);
+      const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
+      o.suggested_type = 'Transfer';
+      o.suggested_category = cat;
+      matchIn.suggested_type = 'Transfer';
+      matchIn.suggested_category = cat;
+    }
+  }
+
   items.sort((a, b) => String(b.date).localeCompare(String(a.date)));
   return {
     status: 'success', items, read: messages.length, counts,
@@ -1637,15 +1781,17 @@ async function classifyAlert(db, args) {
   // Filing from the review screen is a deliberate act, so a twin is reported rather than
   // refused: only the user knows whether it is the bank repeating itself or a second
   // coffee.
-  const twin = duplicateOf(db, { date: args.date || today(), amount, body, type });
+  const twin = duplicateOf(db, { date: args.date || today(), amount, body, type, accountLast4: args.accountLast4 });
   let learned = { merchant_key: '', applied: 0 };
 
   let accountId = args.account_id !== undefined && args.account_id !== null ? Number(args.account_id) : null;
   let cardId = args.card_id !== undefined && args.card_id !== null ? Number(args.card_id) : null;
-  if (!accountId && !cardId && body) {
+  let loanId = args.loan_id !== undefined && args.loan_id !== null ? Number(args.loan_id) : null;
+  if (!accountId && !cardId && !loanId && body) {
     const resolved = resolveAccountAndCardFromSms(db, body, args.sender ?? '', { memberId });
     accountId = resolved.account_id;
     cardId = resolved.card_id;
+    loanId = resolved.loan_id;
   }
   if (accountId && body) {
     autoUpdateAccountFromSms(db, body, args.sender ?? '', accountId);
@@ -1653,15 +1799,18 @@ async function classifyAlert(db, args) {
   if (cardId && body) {
     autoUpdateCreditCardFromSms(db, body, args.sender ?? '', cardId);
   }
+  if (loanId && body) {
+    autoUpdateLoanFromSms(db, body, args.sender ?? '', loanId);
+  }
 
   const isInvest = type === 'Investment' || category === 'Investment Outflow' ? 1 : 0;
   const shouldApplyToAll = args.apply_to_all !== false && !args.override_single;
   db.transaction(() => {
     db.run(
-      'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category,'
+      'INSERT INTO transactions (member_id, account_id, card_id, loan_id, date, amount, currency, type, category,'
       + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, sender, created_at)'
-      + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [memberId, accountId, cardId, args.date || today(), amount, currency, type, category, merchant,
+      + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [memberId, accountId, cardId, loanId, args.date || today(), amount, currency, type, category, merchant,
         merchantKey(merchant), description, isInvest, body, args.sender || '', new Date().toISOString()],
     );
     if (merchant && shouldApplyToAll) learned = learnMerchant(db, merchant, category, type);
@@ -1699,15 +1848,18 @@ async function classifyBatch(db, args) {
       const isInvest = type === 'Investment' || category === 'Investment Outflow' ? 1 : 0;
       let accountId = item.account_id !== undefined && item.account_id !== null ? Number(item.account_id) : null;
       let cardId = item.card_id !== undefined && item.card_id !== null ? Number(item.card_id) : null;
+      let loanId = item.loan_id !== undefined && item.loan_id !== null ? Number(item.loan_id) : null;
 
-      if (!accountId && !cardId && body) {
+      if (!accountId && !cardId && !loanId && body) {
         const resolved = resolveAccountAndCardFromSms(db, body, item.sender ?? '', {
           memberId,
           cachedAccounts: ctx.cachedAccounts,
           cachedCards: ctx.cachedCards,
+          cachedLoans: ctx.cachedLoans,
         });
         accountId = resolved.account_id;
         cardId = resolved.card_id;
+        loanId = resolved.loan_id;
       }
       if (accountId && body) {
         autoUpdateAccountFromSms(db, body, item.sender ?? '', accountId);
@@ -1715,12 +1867,15 @@ async function classifyBatch(db, args) {
       if (cardId && body) {
         autoUpdateCreditCardFromSms(db, body, item.sender ?? '', cardId);
       }
+      if (loanId && body) {
+        autoUpdateLoanFromSms(db, body, item.sender ?? '', loanId);
+      }
 
       db.run(
-        'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type, category,'
+        'INSERT INTO transactions (member_id, account_id, card_id, loan_id, date, amount, currency, type, category,'
         + ' merchant, merchant_key, description, is_investment_outflow, raw_sms, sender, created_at)'
-        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [memberId, accountId, cardId, item.date || today(), amount, currency, type, category, merchant,
+        + ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [memberId, accountId, cardId, loanId, item.date || today(), amount, currency, type, category, merchant,
           merchantKey(merchant), String(item.description || '').trim(), isInvest, body, item.sender || '', new Date().toISOString()],
       );
       if (merchant && item.apply_to_all) {

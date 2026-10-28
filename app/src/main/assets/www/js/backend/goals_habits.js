@@ -89,7 +89,7 @@ export function getMonthlyFinanceWrapped(db, args = {}) {
 
   for (const r of db.all(
     'SELECT type, is_investment_outflow, SUM(amount) AS total FROM transactions'
-    + ` WHERE date >= ? AND date < ?${clause} GROUP BY type, is_investment_outflow`,
+    + ` WHERE date >= ? AND date < ? AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0${clause} GROUP BY type, is_investment_outflow`,
     [start, end, ...params],
   )) {
     const amt = number(r.total);

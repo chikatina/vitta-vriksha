@@ -10,7 +10,7 @@
 
 import { getDatabase, initDb, resolveMemberId } from './database.js';
 import {
-  isoDate, monthBounds, pad, parseISO, today,
+  isoDate, memberClause, monthBounds, pad, parseISO, today,
 } from './periods.js';
 import { formatCurrency } from '../formatters.js';
 
@@ -171,8 +171,9 @@ export async function executeNlqAction(args = {}) {
   }
 
   // 7. Assemble SQL query
-  let sql = 'SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total, MAX(amount) as max_amt, MIN(amount) as min_amt FROM transactions WHERE member_id = ? AND is_ignored = 0';
-  const params = [memberId];
+  const [mSql, mParams] = memberClause(args.member_id, 'AND');
+  let sql = `SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total, MAX(amount) as max_amt, MIN(amount) as min_amt FROM transactions WHERE COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0${mSql}`;
+  const params = [...mParams];
 
   if (type) {
     sql += ' AND type = ?';
@@ -209,8 +210,8 @@ export async function executeNlqAction(args = {}) {
   // Top counterparties for this query
   let topCounterparties = [];
   if (count > 0) {
-    let topSql = 'SELECT merchant, SUM(amount) as sum_amt, COUNT(*) as tx_cnt FROM transactions WHERE member_id = ? AND is_ignored = 0';
-    const topParams = [memberId];
+    let topSql = `SELECT merchant, SUM(amount) as sum_amt, COUNT(*) as tx_cnt FROM transactions WHERE COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0${mSql}`;
+    const topParams = [...mParams];
     if (type) { topSql += ' AND type = ?'; topParams.push(type); }
     if (time.from && time.to) { topSql += ' AND date >= ? AND date <= ?'; topParams.push(time.from, time.to); }
     if (matchedCategory) { topSql += ' AND category = ?'; topParams.push(matchedCategory); }

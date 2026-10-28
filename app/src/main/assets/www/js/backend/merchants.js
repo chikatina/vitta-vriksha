@@ -538,6 +538,7 @@ const REMINDER = new RegExp(
 
 const SPAM_AND_PROMO = new RegExp(
   '\\b(?:pre-?approved|instant|quick) (?:personal|business|gold|car|home|two[- ]wheeler)?\\s*loan(?:s)?\\b|\\bloan offer\\b|\\bloan approved\\b|\\bavail (?:instant )?loan\\b|\\bcheck loan eligibility\\b|\\bdisbursed in \\d+\\s*(?:min|minute|sec)\\b|\\bget instant cash\\b|\\bget up to rs\\.?\\s*[\\d,]+\\b|\\bloan up to\\b|\\bpre-?qualified\\b|\\bapply for (?:instant |personal )?loan\\b'
+  + '|\\b(?:confirm|select|choose) (?:your )?(?:emi )?(?:tenure|plan|amount)\\b|\\b(?:to )?process (?:for )?(?:the )?loan\\b|\\bloan (?:of [^.]+? )?on (?:[a-z0-9\\s]+)?credit card\\b|\\bavail loan on (?:credit )?card\\b'
   + '|\\b(?:pre-?approved|lifetime free|free|apply for|get your) (?:credit card|card)\\b|\\blimit (?:enhancement|increase|upgrade)\\b|\\bincrease your (?:credit )?limit\\b|\\bupgrade your (?:credit )?card\\b|\\bcredit limit (?:enhanced|increased) to\\b'
   + '|\\b(?:flat|upto|up to) \\d+%\\s*off\\b|\\buse code\\b|\\bpromo code\\b|\\bcoupon code\\b|\\bvoucher code\\b|\\bexclusive offer\\b|\\bspecial offer\\b|\\blimited (?:period )?offer\\b|\\bvalid till\\b|\\bflash sale\\b|\\bmega sale\\b|\\bgreat indian festival\\b|\\bbig billion days\\b|\\bshop now\\b|\\border now\\b|\\bbook now to get\\b|\\bwin (?:cash|rewards|gold|iphone|car|prizes)\\b|\\bscratch card\\b|\\breward points? (?:expiring|will expire|earned|credited)\\b|\\bredeem (?:points|cashback|coupon)\\b|\\bclaim your (?:reward|prize|cashback|bonus)\\b'
   + '|\\b(?:play )?rummy\\b|\\bwin real (?:cash|money)\\b|\\bjackpot\\b|\\bbetting\\b|\\bcasino\\b|\\bearn rs\\.?\\s*\\d+\\s*(?:daily|per day|from home)\\b|\\bpart[- ]time job\\b|\\bwork from home\\b|\\bguaranteed returns\\b|\\btrading calls\\b|\\bstock tips\\b|\\boption tips\\b|\\bsure shot\\b|\\bdouble your money\\b'
@@ -565,16 +566,23 @@ const NOT_A_TRANSACTION = [
  * wallet top up as income would book every rupee already spent as earnings.
  */
 const SELF_TRANSFER = [
-  [/credited to your (?:credit )?card|payment of .* was credited|card.*payment received|payment received towards .* card|payment received for your .* card|thank you for payment towards .* card/i, 'card-payment'],
+  [/credited to your (?:credit )?card|payment of .* was credited|\bpayment\b.*?\b(?:was credited|is received|has been received|received)\b.*?\bcard\b|card.*payment received|payment received towards .* card|payment received for your .* card|thank you for payment towards .* card/i, 'card-payment'],
   [/\b(?:paid|payment|debited)\b.*(?:towards|for|to)\s+(?:your\s+)?(?:credit\s+card|sbi\s+card|hdfc\s+card|icici\s+card|axis\s+card|cred|cheq|onecard|amex)\b/i, 'card-payment'],
   [/\b(?:credit\s+card|card\s+bill|cc\s+bill)\s+(?:payment|bill\s+payment|paid|debited)\b/i, 'card-payment'],
-  [/info[:\s]*(?:ach\s*d-?\s*|nach-?\s*|cms-?\s*)?(?:cred|cheq|sbi\s*card|cc\s*payment|autopay\s*cc)/i, 'card-payment'],
+  [/info[:\s]*(?:ach\s*d-?\s*|nach-?\s*|cms-?\s*)?(?:cred|cheq|sbi\s*card|cc\s*payment|autopay\s*cc|bil\*inft)/i, 'card-payment'],
   // A tag recharge is the user's own money moving from their account to their tag.
   // A meal wallet credit is not: the employer funds it, so it is money arriving. Treating
   // it as a transfer left every wallet spend as an expense with no inflow behind it, and
   // the ledger quietly lost the difference.
   [/fastag.*credited|credited.*fastag|recharge successful/i, 'self-transfer'],
+  [/\b(?:self[- ]transfer|transfer to self|trf to self|transfer to own account|own a\/c transfer)\b/i, 'self-transfer'],
 ];
+
+const OUTWARD_DELIVERY_RECEIPT = /\b(?:neft|rtgs|imps|transaction)\b.*(?:has been credited to (?:the |your )?beneficiary|credited to (?:the )?beneficiary account)\b/i;
+const HAS_ACCOUNT_BALANCE = /\b(?:avl(?:able)?\s*bal|available\s*balance|balance\s*(?:is|:)|a\/c\s*bal)\b/i;
+const PAYEE_SETUP = /\b(?:payee|beneficiary)\b.*?\b(?:added|activated|registered|approved|updated)\b|\b(?:adding|added)\b.*?\b(?:as payee|as beneficiary)\b|\bmanage beneficiary\b|\b(?:transfer funds|send up to|send upto)\b.*?\b(?:after \d+|in first \d+)\b/i;
+const AMC_RECEIPT = /\b(?:payment|contribution|sip)\b.*?\b(?:towards|for|in)\b.*?\b(?:sip|fund|scheme|folio|mutual fund)\b.*?\b(?:received|successful|processed)\b/i;
+const BALANCE_ALERT = /\b(?:passbook|account|ledger|available|total|current|outstanding|effective|clear)?\s*balance\s*(?:against|in|as on|enquiry|is|for|of|:)\b|\bavl bal\b/i;
 
 /*
  * An amount sitting directly against a past tense verb, which is a movement that has
@@ -590,7 +598,7 @@ const COMPLETED_MOVEMENT = new RegExp(
   '(?:rs\\.?|inr|₹)\\s*\\.?\\s*[\\d,]+(?:\\.\\d+)?\\s*(?:has been\\s+|was\\s+)?'
   + '(?:spent|debited|credited|deducted|withdrawn|paid|deposited)\\b'
   + '|\\b(?:spent|debited|credited|deducted|withdrawn|paid|deposited)[\\s:]+'
-  + '(?:of\\s+|from\\s+|at\\s+|on\\s+|via\\s+|for\\s+|by\\s+|on\\s+\\d{1,2}[-/](?:[A-Za-z]{3}|\\d{1,2})[-/]\\d{2,4}\\s+(?:by|for|of|with)\\s+)?(?:rs\\.?|inr|₹)?\\s*\\.?\\s*[\\d,]',
+  + '(?:of\\s+|from\\s+|at\\s+|on\\s+|via\\s+|for\\s+|by\\s+|with\\s+|on\\s+\\d{1,2}[-/](?:[A-Za-z]{3}|\\d{1,2})[-/]\\d{2,4}\\s+(?:by|for|of|with)\\s+)?(?:rs\\.?|inr|₹)?\\s*\\.?\\s*[\\d,]',
   'i',
 );
 
@@ -608,6 +616,39 @@ const HEDGED = new RegExp(
   'i',
 );
 
+/**
+ * Isolates the primary clause describing what happened to the user's account.
+ * Modern Indian banking alerts often mention both accounts (e.g. "Your a/c XX2219 is debited
+ * for Rs. 2500 and credited to a/c 1528" or "Acct XX386 debited for Rs 10; MERCHANT credited").
+ * Isolating the primary clause ensures counterparty clauses do not invert transaction direction.
+ */
+export function extractPrimaryClause(text) {
+  if (!text) return '';
+  const counterpartyRe = /(?:[\s,;&]+(?:and|&)\s+(?:debited\s+from|credited\s+to)\b|;\s*[^;.]+?\s+(?:credited|debited)\b|[\s,;&]+(?:and|&)\s+[^;.]+?\s+(?:credited|debited)\b)/i;
+  const match = counterpartyRe.exec(text);
+  if (match) {
+    return text.slice(0, match.index).trim();
+  }
+  return text;
+}
+
+/** Determines if text indicates an inward cashflow alert. */
+export function isCreditAlert(text) {
+  if (!text) return false;
+  const primary = extractPrimaryClause(text).toLowerCase();
+  if (/\b(?:debited|withdrawn|spent|sent|paid)\b/i.test(primary)) {
+    return false;
+  }
+  if (/\b(?:credited|received|deposited|refunded)\b/i.test(primary)) {
+    return true;
+  }
+  const full = String(text).toLowerCase();
+  if (/\b(?:debited|withdrawn|spent|sent|paid)\b/i.test(full) && !/\b(?:credited to your|deposited into your|refund credited)\b/i.test(full)) {
+    return false;
+  }
+  return /\b(?:credited|received|deposited|refunded)\b/i.test(full);
+}
+
 /** Why this message is not a transaction, or an empty string when it is one. */
 export function notATransaction(text) {
   // Ignore ANY SMS with OTP / verification code first (excluding safety notifications like "without PIN/OTP")
@@ -615,8 +656,17 @@ export function notATransaction(text) {
       && !(/\bwithout (?:pin\/)?otp\b|\bno (?:pin\/)?otp\b/i.test(text))) {
     return 'otp';
   }
+  if (PAYEE_SETUP.test(text)) return 'payee-setup';
+  if (AMC_RECEIPT.test(text)) return 'amc-receipt';
+  if (BALANCE_ALERT.test(text) && !COMPLETED_MOVEMENT.test(text)) return 'balance';
+
   for (const [pattern, reason] of SELF_TRANSFER) {
     if (pattern.test(text)) return reason;
+  }
+
+  // Outward transfer delivery receipts to beneficiary (e.g. RBI positive confirmations)
+  if (OUTWARD_DELIVERY_RECEIPT.test(text) && !HAS_ACCOUNT_BALANCE.test(text)) {
+    return 'transfer-receipt';
   }
 
   // Failed transactions should always report 'failed'
@@ -647,6 +697,7 @@ export function notATransaction(text) {
  */
 const MERCHANT_PATTERNS = [
   /\bat\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s+(?:on|dt\.?|avl|bal|using|via|ref|refno|rrn|txn|for|through)\b/i,
+  /[;&]\s*([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s+credited\b/i,
   /\bupi\/([\w .@\-]{2,30}?)\s+(?:on|ref|txn)\b/i,
   /\b(?:vpa|to vpa)\s+([^\s.,;]+)/i,
   /\bto\s+([A-Za-z0-9][\w .&*'()\-/]{1,44}?)\s+on\s+\d/i,
@@ -671,9 +722,10 @@ const NOT_A_MERCHANT = new RegExp(
   // talking about you, as in "towards your last month spends".
   '^(?:your|the|my)\\b'
   + '|^other services\\b|^customer care\\b|^helpline\\b|^toll[- ]free\\b'
+  + '|^dispute\\b|^sms block\\b|^block \\d+\\b|^call \\d+\\b'
   + '|^(?:your |the |a |my )?(?:a/c|ac|acct|account|card|credit card|debit card|bank|wallet'
   + '|upi|vpa|ref|txn|payment|amount|balance|limit'
-  + '|ach|nach|ecs|cms|mandate|standing instruction|si|neft|rtgs|imps|enach|e-nach)\\b'
+  + '|ach|nach|ecs|cms|mandate|standing instruction|si|neft|rtgs|imps|enach|e-nach|bil|bpay|biller)\\b'
   + '|^(?:rs|inr|usd|eur|gbp|₹)\\b'
   + '|^(?:hdfc|icici|sbi|axis|kotak|au bank|au credit|dcb|idfc|indusind|yes bank|pnb|canara|federal|rbl|bob|boi|union|iob|uco|scb|stanchart|standard chartered|citi|citibank|hsbc|dbs|deutsche|barclays|equitas|ujjivan|bandhan|sib|south indian|kvb|karur vysya|cub|city union|karnataka|psb|punjab & sind|bom|bank of maharashtra|cbi|central bank|indian bank|airtel payments|ippb|fino|jio payments)(?:\\s+bank)?(?:\\s+(?:a/c|ac|acct|account|card|credit card|debit card))?\\s*$',
   'i',
@@ -681,7 +733,9 @@ const NOT_A_MERCHANT = new RegExp(
 
 /** The counterparty named in a message, or an empty string when it names none. */
 export function extractMerchant(body) {
-  const text = String(body || '');
+  let text = String(body || '');
+  // Strip bank safety / dispute boilerplate before seeking counterparty name
+  text = text.replace(/\b(?:call\s+\d+|to dispute|for dispute|if not (?:done by |you|authorized)|report fraud|sms block\b).*/i, '').trim();
   for (const pattern of MERCHANT_PATTERNS) {
     const match = pattern.exec(text);
     if (!match) continue;
@@ -710,5 +764,27 @@ export function categoryForMerchant(merchant, body = '') {
   if (/\b(?:dividend|dividends|interim dividend|final dividend)\b|[*:\s/-][a-z0-9_]*div\d*[*:\s/.-]/i.test(bodyText)) {
     return 'Interest & Dividends';
   }
-  return bodyText ? keywords().find(bodyText) : '';
+  const cleanBody = bodyText.replace(/(?:https?:\/\/|www\.)[^\s,;]+|[a-z0-9-]+\.(?:com|in|co\.in|org|net|io|app)\/[^\s,;]*/gi, ' ');
+  return cleanBody.trim() ? keywords().find(cleanBody) : '';
+}
+
+const UTR_PATTERNS = [
+  /\bupi(?:\/|\s*(?:ref|txn|reference)?\s*(?:no\.?|id|num)?[:\s\/-]+)([A-Za-z0-9]{6,24})\b/i,
+  /\b(?:ref(?:\s*no\.?|\s*id|\s*num)?|rrn|utr(?:\s*no\.?)?|txn\s*id|transaction\s*id|reference\s*no\.?)[:\s\/-]+([A-Za-z0-9]{6,24})\b/i,
+  /\b(?:info|via)[:\s]+[A-Za-z0-9\s-]*\/\s*([0-9]{6,24})\b/i,
+  /\bupi\/\s*([0-9]{6,24})\b/i,
+];
+
+export function extractUtr(text) {
+  if (!text || typeof text !== 'string') return '';
+  for (const pattern of UTR_PATTERNS) {
+    const match = pattern.exec(text);
+    if (match && match[1]) {
+      const val = match[1].trim();
+      if (val.length >= 6 && /\d/.test(val) && !/^(success|pending|completed|declined|reversed)$/i.test(val)) {
+        return val;
+      }
+    }
+  }
+  return '';
 }

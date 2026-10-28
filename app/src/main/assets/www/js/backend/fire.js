@@ -107,7 +107,7 @@ export function getFireProfile(db, args = {}) {
 
   const txRows = db.all(
     'SELECT date, type, category, is_investment_outflow, amount FROM transactions'
-    + ` WHERE date >= ? AND date < ?${andClause}`,
+    + ` WHERE date >= ? AND date < ? AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0${andClause}`,
     [earliestStart, currentEnd, ...andParams],
   );
 

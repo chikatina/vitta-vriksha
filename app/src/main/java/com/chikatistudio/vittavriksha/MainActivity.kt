@@ -413,12 +413,14 @@ class MainActivity : AppCompatActivity() {
     private fun handleNotificationIntent(intent: Intent?) {
         val reminderId = intent?.getStringExtra(ReminderReceiver.EXTRA_ID)
             ?: intent?.getStringExtra("reminder_id")
+            ?: intent?.getStringExtra("action")
             ?: return
         if (::webView.isInitialized) {
             val escaped = reminderId.replace("'", "\\'")
             webView.evaluateJavascript("window.onNotificationClicked && window.onNotificationClicked('$escaped');", null)
             intent?.removeExtra(ReminderReceiver.EXTRA_ID)
             intent?.removeExtra("reminder_id")
+            intent?.removeExtra("action")
         }
     }
 

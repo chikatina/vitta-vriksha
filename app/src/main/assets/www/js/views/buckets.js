@@ -304,7 +304,7 @@ export async function openBucketSheet(app, existing = null, onSaved = null) {
 
           const payload = {
             id: existing?.id || null,
-            member_id: app.memberFilter,
+            member_id: existing?.member_id ?? app.memberFilter,
             name,
             target_budget: targetBudget,
             icon: selectedIcon,
