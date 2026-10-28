@@ -395,7 +395,7 @@ export async function renderLedger(container, app) {
           <div class="field">
             <label class="field-label">Choose a Bucket / Trip</label>
             <div class="list" style="margin-top:var(--gap-2)">
-              <button class="list-row" data-choose-bucket="">
+              <button class="list-row" data-choose-bucket="none">
                 <span class="avatar avatar-sm" style="background:var(--surface-container-high);color:var(--on-surface-variant)">${icon('close')}</span>
                 <span class="list-row-main"><span class="list-row-title">None (Remove from Bucket)</span></span>
                 ${icon('chevron_right', 'icon-sm')}
@@ -413,15 +413,16 @@ export async function renderLedger(container, app) {
           </div>`, {
           onMount(node, close) {
             node.querySelectorAll('[data-choose-bucket]').forEach((btn) => {
-              btn.addEventListener('click', () => close(btn.dataset.chooseBucket ? Number(btn.dataset.chooseBucket) : null));
+              btn.addEventListener('click', () => close(btn.dataset.chooseBucket === 'none' ? 'none' : (btn.dataset.chooseBucket ? Number(btn.dataset.chooseBucket) : null)));
             });
           },
         });
 
-        if (picked !== undefined) {
+        if (picked !== null && picked !== undefined) {
+          const bucketId = picked === 'none' ? null : Number(picked);
           await Bridge.db('assign_transactions_bucket', {
             ids: [...selectedIds],
-            bucket_id: picked,
+            bucket_id: bucketId,
           });
           toast(`Updated ${selectedIds.size} transactions.`, 'success');
           selectedIds.clear();
