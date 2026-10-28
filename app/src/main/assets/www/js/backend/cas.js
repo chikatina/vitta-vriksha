@@ -16,6 +16,8 @@ import { fail } from './errors.js';
 import { getDatabase, initDb, resolveMemberId } from './database.js';
 import { decodeBase64 } from './native.js';
 import { isinDatabaseVersion, loadIsinDatabase, nameForIsin } from './isin.js';
+import { isStampDutyTransaction, linkStampDutyFolioTransactions, reconcileSips } from './sips.js';
+import { isoDate, parseISO } from './periods.js';
 // The parser's own name matcher. Reused rather than reinvented: it already knows that a
 // registrar reorders a scheme's modifiers freely.
 import { defaultProcess, tokenSortRatio } from '../../vendor/casparser/isin-db.js';
@@ -465,6 +467,12 @@ export function importRegistrarStatement(db, data, memberId, stamp) {
   // A registrar statement is the whole of what is held with the AMCs, so anything in that
   // scope it did not mention has been sold.
   pruneScopes(db, ['with-amc'], kept, stamp);
+
+  // Link individual stamp duty lines to their corresponding purchase lines
+  try {
+    linkStampDutyFolioTransactions(db, memberId);
+  } catch {}
+
   return {
     folio_count: data.folios.length, scheme_count: schemes, transaction_count: movements,
   };
@@ -645,6 +653,10 @@ export function importDepositoryStatement(db, data, memberId, stamp) {
   // nothing about a folio held directly with an AMC, so it must not clear one.
   pruneScopes(db, scopes, keptIds, stamp);
 
+  try {
+    linkStampDutyFolioTransactions(db, memberId);
+  } catch {}
+
   return {
     account_count: data.accounts.length,
     scheme_count: schemes,
@@ -728,6 +740,13 @@ export async function parseCasBase64(payload, password = '', memberId = 1) {
 
   db.run("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('last_cas_upload_date', ?)",
     [stamp]);
+
+  try {
+    reconcileSips(db);
+  } catch {
+    // Non-fatal if SIP reconciliation encounters an issue
+  }
+
   await db.persistNow();
 
   return {

@@ -45,6 +45,11 @@ export const ERROR_CODES = {
   MERCHANT_UNKNOWN: 'The message names no counterparty to learn a rule from.',
   MERCHANT_CATEGORY_REQUIRED: 'A category is needed to teach the app anything.',
 
+  // SIPs and Mandates
+  MANDATE_NOT_FOUND: 'The specified SIP mandate could not be found.',
+  SIP_NOT_FOUND: 'The specified SIP could not be found.',
+  SPLIT_TOTAL_MISMATCH: 'The sum of child SIP splits must equal the mandate total amount.',
+
   // Backup
   BACKUP_PASSWORD_WEAK: 'The export password was shorter than eight characters.',
   BACKUP_PASSWORD_MISSING: 'No password was supplied.',

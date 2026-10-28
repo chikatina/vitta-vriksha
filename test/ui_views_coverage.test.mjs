@@ -188,6 +188,7 @@ before(async () => {
   Views.security = await import('../app/src/main/assets/www/js/views/security.js');
   Views.settings = await import('../app/src/main/assets/www/js/views/settings.js');
   Views.shared = await import('../app/src/main/assets/www/js/views/shared.js');
+  Views.sips = await import('../app/src/main/assets/www/js/views/sips.js');
   Views.smsIngest = await import('../app/src/main/assets/www/js/views/sms-ingest.js');
   Views.support = await import('../app/src/main/assets/www/js/views/support.js');
   Views.transactionSheet = await import('../app/src/main/assets/www/js/views/transaction-sheet.js');
@@ -279,6 +280,8 @@ describe('UI & Functions Coverage: 2. Bridge & Native Interfaces', () => {
 
     assert.equal(NativeMod.checkPermission('SMS'), false);
     assert.equal(NativeMod.permissionIsBlocked('SMS'), false);
+    assert.equal(NativeMod.shouldShowRationale('SMS'), false);
+    assert.equal(BridgeMod.Bridge.shouldShowRationale('SMS'), false);
     NativeMod.openAppSettings();
 
     const reqRes = await NativeMod.requestPermission('SMS');
@@ -421,6 +424,9 @@ describe('UI & Functions Coverage: 3. View Renderers Smoke & Event Binding', () 
 
     // 24. Wealth
     await Views.wealth.renderWealth(container, mockApp);
+
+    // 24b. SIP Tracker
+    await Views.sips.renderSipTracker(container, mockApp);
 
     // 25. Lock & Startup Failure
     Views.lock.renderStartupFailure(mockApp, { code: 'DATABASE_CORRUPT', message: 'DB Error' });

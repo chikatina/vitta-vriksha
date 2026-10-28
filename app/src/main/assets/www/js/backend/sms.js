@@ -749,7 +749,13 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
   const rows = [];
   const staged = new Set();
 
+  let processed = 0;
   for (const message of messages) {
+    processed += 1;
+    if (processed % 40 === 0) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
     const body = message.body ?? '';
     if (seen.has(body)) {
       skipped += 1;
@@ -967,8 +973,15 @@ async function reimportInbox(db, args) {
   // transaction would hold it open for the length of the whole inbox.
   const rows = [];
   const staged = new Set();
+  const duplicateItems = [];
+  let processed = 0;
 
   for (const message of messages) {
+    processed += 1;
+    if (processed % 40 === 0) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
     const body = message.body ?? '';
     if (seen.has(body)) {
       skipped += 1;
@@ -991,14 +1004,32 @@ async function reimportInbox(db, args) {
     const accKey = classified.account_last4 || '';
     const stageKey = utr ? `${date}:${classified.amount}:${flowDir}:${utr}` : `${date}:${classified.amount}:${flowDir}:${accKey}`;
 
-    if (duplicateOfFast(txByDateAmount, {
+    const twin = duplicateOfFast(txByDateAmount, {
       date,
       amount: classified.amount,
       body,
       type: classified.type,
       accountLast4: classified.account_last4,
-    }) || staged.has(stageKey)) {
+    });
+    if (twin || staged.has(stageKey)) {
       duplicates += 1;
+      duplicateItems.push({
+        state: 'pending',
+        body,
+        sender: message.sender ?? '',
+        date,
+        duplicate_of: twin ? twin.id : 0,
+        duplicate_twin: twin || null,
+        reason: 'possible-duplicate',
+        amount: classified.amount,
+        merchant: classified.merchant || '',
+        merchant_key: classified.merchant_key || '',
+        description: classified.description || '',
+        suggested_type: classified.type || 'Expense',
+        suggested_category: classified.category || '',
+        account_id: classified.account_id ?? null,
+        card_id: classified.card_id ?? null,
+      });
       continue;
     }
 
@@ -1060,7 +1091,8 @@ async function reimportInbox(db, args) {
   markSynced(db);
   await db.schedulePersist();
   return {
-    status: 'success', read: messages.length, imported, skipped, unmatched, duplicates, days,
+    status: 'success', read: messages.length, imported, skipped, unmatched, duplicates,
+    duplicate_items: duplicateItems, days,
   };
 }
 
@@ -1200,8 +1232,13 @@ async function reviewAlerts(db, args) {
   const isAll = args.days === 'all' || args.days === 0 || args.days === '0';
   const days = isAll ? 0 : Number.parseInt(args.days ?? 0, 10);
   const want = String(args.filter ?? 'pending');
+  const onBatch = typeof args.onBatch === 'function' ? args.onBatch : null;
   const messages = readSmsInbox(days);
-  if (!messages.length) return { status: 'success', items: [], read: 0, counts: {} };
+  if (!messages.length) {
+    const emptyCounts = { filed: 0, pending: 0, ignored: 0 };
+    if (onBatch) onBatch({ items: [], counts: emptyCounts, done: true, read: 0, total: 0 });
+    return { status: 'success', items: [], read: 0, counts: emptyCounts };
+  }
 
   const ctx = buildClassificationContext(db, args.member_id);
 
@@ -1241,10 +1278,17 @@ async function reviewAlerts(db, args) {
   }
 
   const items = [];
+  const batchBuffer = [];
   const counts = { filed: 0, pending: 0, ignored: 0 };
   const seen = new Set();
+  let processed = 0;
 
   for (const message of messages) {
+    processed += 1;
+    if (processed % 40 === 0) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
     const body = message.body ?? '';
     const trimmedBody = body.trim();
     if (!body || seen.has(body) || (trimmedBody && seen.has(trimmedBody))) continue;
@@ -1257,7 +1301,7 @@ async function reviewAlerts(db, args) {
     if (already) {
       counts.filed += 1;
       if (want === 'filed' || want === 'all') {
-        items.push({
+        const item = {
           state: 'filed',
           transaction_id: already.id,
           body,
@@ -1269,7 +1313,19 @@ async function reviewAlerts(db, args) {
           merchant: already.merchant || '',
           description: already.description || '',
           reason: '',
+        };
+        items.push(item);
+        batchBuffer.push(item);
+      }
+      if (onBatch && batchBuffer.length >= 25) {
+        onBatch({
+          items: batchBuffer.slice(),
+          counts: { ...counts },
+          done: false,
+          read: processed,
+          total: messages.length,
         });
+        batchBuffer.length = 0;
       }
       continue;
     }
@@ -1277,9 +1333,21 @@ async function reviewAlerts(db, args) {
     if (ignored.has(body) || (trimmedBody && ignored.has(trimmedBody))) {
       counts.ignored += 1;
       if (want === 'all' || want === 'ignored') {
-        items.push({
+        const item = {
           state: 'ignored', body, sender: message.sender ?? '', date, amount: 0, reason: 'ignored',
+        };
+        items.push(item);
+        batchBuffer.push(item);
+      }
+      if (onBatch && batchBuffer.length >= 25) {
+        onBatch({
+          items: batchBuffer.slice(),
+          counts: { ...counts },
+          done: false,
+          read: processed,
+          total: messages.length,
         });
+        batchBuffer.length = 0;
       }
       continue;
     }
@@ -1298,14 +1366,26 @@ async function reviewAlerts(db, args) {
     if (isIgnored) {
       counts.ignored += 1;
       if (want === 'ignored' || want === 'all') {
-        items.push({
+        const item = {
           state: 'ignored',
           body,
           sender: message.sender ?? '',
           date: date || classified.date,
           amount: classified.amount || 0,
           reason: classified.not_a_transaction || (!classified.amount ? 'amount-missing' : 'ignored'),
+        };
+        items.push(item);
+        batchBuffer.push(item);
+      }
+      if (onBatch && batchBuffer.length >= 25) {
+        onBatch({
+          items: batchBuffer.slice(),
+          counts: { ...counts },
+          done: false,
+          read: processed,
+          total: messages.length,
         });
+        batchBuffer.length = 0;
       }
       continue;
     }
@@ -1327,7 +1407,7 @@ async function reviewAlerts(db, args) {
           accountLast4: classified.account_last4,
         })
         : null;
-      items.push({
+      const item = {
         state: 'pending',
         body,
         sender: message.sender ?? '',
@@ -1346,8 +1426,31 @@ async function reviewAlerts(db, args) {
         suggested_category: classified.category || '',
         account_id: classified.account_id ?? null,
         card_id: classified.card_id ?? null,
-      });
+      };
+      items.push(item);
+      batchBuffer.push(item);
     }
+
+    if (onBatch && batchBuffer.length >= 25) {
+      onBatch({
+        items: batchBuffer.slice(),
+        counts: { ...counts },
+        done: false,
+        read: processed,
+        total: messages.length,
+      });
+      batchBuffer.length = 0;
+    }
+  }
+
+  if (onBatch) {
+    onBatch({
+      items: batchBuffer.slice(),
+      counts: { ...counts },
+      done: true,
+      read: messages.length,
+      total: messages.length,
+    });
   }
 
   // Pair pending items by UTR

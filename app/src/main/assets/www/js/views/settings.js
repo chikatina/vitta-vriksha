@@ -280,6 +280,14 @@ export async function renderSettings(container, app) {
         if (open) Bridge.openAppSettings();
         return;
       }
+      if (Bridge.shouldShowRationale('SMS')) {
+        const proceed = await confirmDialog(
+          'Why SMS Access is Needed',
+          'Vitta Vriksha reads bank alerts on-device to track expenses and recurring payments. Your messages never leave this device.',
+          { confirmLabel: 'Continue' },
+        );
+        if (!proceed) return;
+      }
       quickEnableSmsBtn.disabled = true;
       const granted = await Bridge.requestPermission('SMS');
       if (granted) {

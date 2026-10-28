@@ -30,6 +30,12 @@ export function h(value) {
  * otherwise render as a blank box, which is easy to miss, so it warns instead.
  */
 export function icon(name, className = '') {
+  if (name === 'check_box') {
+    return `<span class="icon ${className} icon-checkbox checked" aria-hidden="true"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" style="display:block"><rect x="3" y="3" width="18" height="18" rx="3" fill="currentColor"/><path d="M7 12.5l3.5 3.5 6.5-7" stroke="var(--on-accent, #fff)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+  }
+  if (name === 'check_box_outline_blank') {
+    return `<span class="icon ${className} icon-checkbox" aria-hidden="true"><svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" style="display:block"><rect x="3.5" y="3.5" width="17" height="17" rx="3" stroke="currentColor" stroke-width="2"/></svg></span>`;
+  }
   const glyph = ICON_CODEPOINTS[name];
   if (!glyph) {
     console.warn(`Icon "${name}" is not in the font subset. Add it to tools/subset-material-symbols.py.`);
@@ -885,32 +891,61 @@ export function emptyState(glyph, title, body, actionHtml = '') {
 }
 
 /**
- * Prominent, bold and unmissable disclaimer card for tax calculations and capital gains.
+ * Prominent disclaimer card for tax calculations and capital gains.
+ * Can be dismissed permanently by the user.
  */
 export function taxDisclaimerCard({ compact = false, customText = '' } = {}) {
+  try {
+    if (localStorage.getItem('dismiss_productivity_disclaimer') === '1') {
+      return '';
+    }
+  } catch {}
+
   const defaultText = 'Vitta Vriksha is an offline personal productivity tool and NOT a financial institution, SEBI-registered advisor, or Chartered Accountant. All capital gains, holding periods, grandfathering values, and tax projections are estimates generated strictly for personal tracking based on user-provided data and statutory formulas. Always verify calculations with a certified Chartered Accountant (CA) or broker statements before filing Income Tax Returns.';
   const text = customText || defaultText;
 
   if (compact) {
     return `
-      <div class="tax-disclaimer-compact" role="note">
+      <div class="tax-disclaimer-compact" role="note" data-tax-disclaimer>
         <span style="color:var(--warning);display:flex;flex-shrink:0;margin-top:1px">${icon('warning', 'icon-sm')}</span>
-        <div class="tax-disclaimer-content">
+        <div class="tax-disclaimer-content" style="flex:1">
           <strong class="banner-title">Productivity Tool Only · No Financial or Tax Advice:</strong>
           <span>${h(text)}</span>
         </div>
+        <button type="button" class="icon-button" data-dismiss-tax-disclaimer aria-label="Dismiss notice" title="Dismiss permanently" style="flex-shrink:0;padding:2px;margin:-4px -4px 0 0;color:var(--on-warning-container)">
+          ${icon('close', 'icon-sm')}
+        </button>
       </div>`;
   }
 
   return `
-    <div class="card tax-disclaimer-card" style="margin-top:16px">
-      <div class="row" style="gap:10px;align-items:flex-start">
-        ${icon('info', 'icon-sm')}
-        <span class="tax-disclaimer-title">Notice: Estimator & Productivity Tool Only · No Tax Advice</span>
+    <div class="tax-disclaimer" style="margin-top:16px" data-tax-disclaimer>
+      <div class="tax-disclaimer-header" style="display:flex;justify-content:space-between;align-items:center">
+        <div class="row" style="gap:6px">
+          ${icon('info', 'icon-sm')}
+          <span class="tax-disclaimer-title">Notice: Estimator & Productivity Tool Only · No Tax Advice</span>
+        </div>
+        <button type="button" class="icon-button" data-dismiss-tax-disclaimer aria-label="Dismiss notice" title="Dismiss permanently" style="color:var(--on-warning-container)">
+          ${icon('close', 'icon-sm')}
+        </button>
       </div>
       <div class="tax-disclaimer-text">
         ${h(text)}
       </div>
     </div>`;
 }
+
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('click', (e) => {
+    const dismissBtn = e.target?.closest?.('[data-dismiss-tax-disclaimer]');
+    if (dismissBtn) {
+      try {
+        localStorage.setItem('dismiss_productivity_disclaimer', '1');
+      } catch {}
+      const card = dismissBtn.closest?.('[data-tax-disclaimer]');
+      if (card?.remove) card.remove();
+    }
+  });
+}
+
 

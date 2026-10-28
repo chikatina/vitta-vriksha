@@ -190,8 +190,22 @@ export async function renderSecurity(container, app) {
         return;
       }
 
+      if (Bridge.shouldShowRationale(name)) {
+        const proceed = await confirmDialog(
+          `Why ${name === 'SMS' ? 'SMS' : 'Notification'} Permission is Needed`,
+          name === 'SMS'
+            ? 'Vitta Vriksha reads bank SMS locally on your device to automate transaction tracking. No messages leave your phone.'
+            : 'Notifications keep you updated on upcoming bills, SIP debits, and budget alerts.',
+          { confirmLabel: 'Continue' },
+        );
+        if (!proceed) return;
+      }
+
       btn.disabled = true;
       await Bridge.requestPermission(name);
+      if (name === 'SMS' && Bridge.checkPermission('SMS')) {
+        Bridge.setSmsTrackingEnabled(true);
+      }
       Bridge.call('reminders', { action: 'sync' }).catch(() => {});
       app.refresh();
     });

@@ -56,6 +56,13 @@ import {
 import { parseBrokerCsv } from './broker_parser.js';
 import { getFireProfile, saveFireSettings } from './fire.js';
 import { navSearch } from '../../vendor/casparser/isin.js';
+import {
+  classifyAdditionalCost, confirmDiscoveredSips, deleteSip, deleteSipMandate, discoverSips,
+  findSipMatchingTransactions, getSipDetails, isCostOrTaxTransaction, isStampDutyTransaction,
+  linkCostAndTaxFolioTransactions, linkSipTransactions,
+  linkStampDutyFolioTransactions, listSips,
+  reconcileSips, saveSip, saveSipMandate, unlinkSipTransaction,
+} from './sips.js';
 
 /** Settings that must never be handed to the UI. */
 const PRIVATE_SETTINGS = new Set(['pin_hash', 'pin_code']);
@@ -298,8 +305,8 @@ const DEFAULT_SMS_RULES = [
 ];
 
 // Application and Database Schema Version tracking
-export const APP_VERSION_NAME = '1.0.7';
-export const APP_VERSION_CODE = 13;
+export const APP_VERSION_NAME = '1.0.8';
+export const APP_VERSION_CODE = 14;
 
 const DEFAULT_SETTINGS = {
   locale: 'en-IN',
@@ -336,7 +343,7 @@ const BACKUP_TABLES = [
   'family_members', 'asset_accounts', 'credit_cards', 'transaction_buckets', 'transactions', 'transaction_splits',
   'transaction_cashbacks', 'mf_folios', 'folio_transactions', 'demat_holdings',
   'nps_holdings', 'loans',
-  'subscriptions', 'sips', 'goals', 'custom_events', 'custom_categories',
+  'subscriptions', 'sip_mandates', 'sips', 'sip_executions', 'goals', 'custom_events', 'custom_categories',
   // What the household taught the app about who it pays, and which alerts it decided to
   // ignore. Both are things the user built up rather than anything derived, so they
   // belong in an export, and a reset that left them behind would not be a reset.
@@ -369,9 +376,14 @@ const RECORD_TYPES = {
       'category', 'auto_debit', 'annual_change_percent', 'price_since',
       'linked_merchant_key'],
     'next_billing_date'],
+  sip_mandate: ['sip_mandates',
+    ['member_id', 'name', 'mandate_type', 'bank_account_id', 'total_amount', 'debit_day',
+      'linked_merchant_key', 'is_active', 'notes', 'created_at'],
+    'debit_day'],
   sip: ['sips',
-    ['member_id', 'scheme_name', 'monthly_amount', 'debit_day', 'step_up_percent',
-      'is_active', 'start_date', 'step_up_month', 'linked_merchant_key'],
+    ['member_id', 'mandate_id', 'scheme_name', 'monthly_amount', 'debit_day', 'step_up_percent',
+      'is_active', 'start_date', 'step_up_month', 'linked_merchant_key', 'investment_type',
+      'isin', 'folio_number', 'symbol', 'broker', 'account_id', 'frequency', 'end_date'],
     'debit_day'],
   goal: ['goals',
     ['member_id', 'title', 'target_amount', 'current_amount', 'target_date',
@@ -418,6 +430,10 @@ const RECORD_TYPE_ALIASES = {
   subscription: 'subscription',
   sips: 'sip',
   sip: 'sip',
+  sip_mandates: 'sip_mandate',
+  sip_mandate: 'sip_mandate',
+  mandates: 'sip_mandate',
+  mandate: 'sip_mandate',
   goals: 'goal',
   goal: 'goal',
   custom_events: 'event',
@@ -539,6 +555,9 @@ export function initDb(db, force = false) {
         merchant_key TEXT,
         description TEXT,
         is_investment_outflow INTEGER DEFAULT 0,
+        sip_id INTEGER,
+        sip_mandate_id INTEGER,
+        is_sip_split INTEGER DEFAULT 0,
         raw_sms TEXT,
         sender TEXT,
         is_ignored INTEGER DEFAULT 0,
@@ -548,7 +567,9 @@ export function initDb(db, force = false) {
         FOREIGN KEY (member_id) REFERENCES family_members(id),
         FOREIGN KEY (account_id) REFERENCES asset_accounts(id),
         FOREIGN KEY (card_id) REFERENCES credit_cards(id),
-        FOREIGN KEY (bucket_id) REFERENCES transaction_buckets(id)
+        FOREIGN KEY (bucket_id) REFERENCES transaction_buckets(id),
+        FOREIGN KEY (sip_id) REFERENCES sips(id) ON DELETE SET NULL,
+        FOREIGN KEY (sip_mandate_id) REFERENCES sip_mandates(id) ON DELETE SET NULL
     );
     CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date DESC);
     CREATE INDEX IF NOT EXISTS idx_tx_member ON transactions(member_id);
@@ -610,6 +631,11 @@ export function initDb(db, force = false) {
         nav REAL DEFAULT 0.0,
         balance REAL DEFAULT 0.0,
         last_updated TEXT,
+        stamp_duty REAL DEFAULT 0.0,
+        stt REAL DEFAULT 0.0,
+        charges REAL DEFAULT 0.0,
+        linked_stamp_duty_id INTEGER,
+        parent_txn_id INTEGER,
         FOREIGN KEY (member_id) REFERENCES family_members(id)
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_folio_txn
@@ -668,9 +694,30 @@ export function initDb(db, force = false) {
         FOREIGN KEY (member_id) REFERENCES family_members(id)
     );
 
+    CREATE TABLE IF NOT EXISTS sip_mandates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        member_id INTEGER DEFAULT 1,
+        name TEXT NOT NULL,
+        mandate_type TEXT DEFAULT 'nach',
+        bank_account_id INTEGER,
+        total_amount REAL NOT NULL,
+        debit_day INTEGER NOT NULL,
+        linked_merchant_key TEXT,
+        is_active INTEGER DEFAULT 1,
+        notes TEXT,
+        created_at TEXT,
+        FOREIGN KEY (member_id) REFERENCES family_members(id),
+        FOREIGN KEY (bank_account_id) REFERENCES asset_accounts(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_mandate_member ON sip_mandates(member_id);
+    CREATE INDEX IF NOT EXISTS idx_mandate_merchant ON sip_mandates(linked_merchant_key);
+
     CREATE TABLE IF NOT EXISTS sips (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         member_id INTEGER DEFAULT 1,
+        mandate_id INTEGER,
+        name TEXT DEFAULT '',
+        amount REAL DEFAULT 0.0,
         scheme_name TEXT NOT NULL,
         monthly_amount REAL NOT NULL,
         debit_day INTEGER NOT NULL,
@@ -679,8 +726,45 @@ export function initDb(db, force = false) {
         start_date TEXT,
         step_up_month INTEGER DEFAULT 0,
         linked_merchant_key TEXT,
-        FOREIGN KEY (member_id) REFERENCES family_members(id)
+        investment_type TEXT DEFAULT 'mf',
+        isin TEXT DEFAULT '',
+        folio_number TEXT DEFAULT '',
+        symbol TEXT DEFAULT '',
+        broker TEXT DEFAULT '',
+        account_id INTEGER,
+        frequency TEXT DEFAULT 'monthly',
+        end_date TEXT DEFAULT '',
+        FOREIGN KEY (member_id) REFERENCES family_members(id),
+        FOREIGN KEY (mandate_id) REFERENCES sip_mandates(id) ON DELETE SET NULL,
+        FOREIGN KEY (account_id) REFERENCES asset_accounts(id) ON DELETE SET NULL
     );
+    CREATE INDEX IF NOT EXISTS idx_sip_member ON sips(member_id);
+
+    CREATE TABLE IF NOT EXISTS sip_executions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sip_id INTEGER NOT NULL,
+        mandate_id INTEGER,
+        month_key TEXT NOT NULL,
+        expected_amount REAL NOT NULL,
+        status TEXT NOT NULL,
+        transaction_id INTEGER,
+        folio_transaction_id INTEGER,
+        stock_transaction_id INTEGER,
+        debit_date TEXT,
+        debit_amount REAL,
+        allotment_date TEXT,
+        allotment_units REAL,
+        allotment_nav REAL,
+        notes TEXT,
+        created_at TEXT,
+        FOREIGN KEY (sip_id) REFERENCES sips(id) ON DELETE CASCADE,
+        FOREIGN KEY (mandate_id) REFERENCES sip_mandates(id) ON DELETE SET NULL,
+        FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL,
+        FOREIGN KEY (folio_transaction_id) REFERENCES folio_transactions(id) ON DELETE SET NULL,
+        FOREIGN KEY (stock_transaction_id) REFERENCES stock_transactions(id) ON DELETE SET NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sip_exec_month ON sip_executions(sip_id, month_key);
+    CREATE INDEX IF NOT EXISTS idx_sip_exec_status ON sip_executions(status);
 
     CREATE TABLE IF NOT EXISTS goals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -850,8 +934,10 @@ export function initDb(db, force = false) {
         trade_date TEXT NOT NULL,
         quantity REAL NOT NULL,
         price REAL NOT NULL,
+        stamp_duty REAL DEFAULT 0.0,
         stt REAL DEFAULT 0.0,
         charges REAL DEFAULT 0.0,
+        parent_txn_id INTEGER,
         order_id TEXT,
         trade_id TEXT,
         notes TEXT,
@@ -1005,13 +1091,15 @@ export const MIGRATIONS = [
     description: 'Add merchant_key index, SIP start date & step-up, subscription pricing',
     up(db) {
       addColumnIfMissing(db, 'transactions', 'merchant_key', 'TEXT');
-      db.run('CREATE INDEX IF NOT EXISTS idx_tx_merchant_key ON transactions(merchant_key)');
-      const unkeyed = db.all(
-        "SELECT id, merchant FROM transactions WHERE merchant_key IS NULL AND merchant IS NOT NULL AND merchant != ''",
-      );
-      if (unkeyed.length) {
-        for (const row of unkeyed) {
-          db.run('UPDATE transactions SET merchant_key = ? WHERE id = ?', [merchantKey(row.merchant), row.id]);
+      if (tableExists(db, 'transactions')) {
+        db.run('CREATE INDEX IF NOT EXISTS idx_tx_merchant_key ON transactions(merchant_key)');
+        const unkeyed = db.all(
+          "SELECT id, merchant FROM transactions WHERE merchant_key IS NULL AND merchant IS NOT NULL AND merchant != ''",
+        );
+        if (unkeyed.length) {
+          for (const row of unkeyed) {
+            db.run('UPDATE transactions SET merchant_key = ? WHERE id = ?', [merchantKey(row.merchant), row.id]);
+          }
         }
       }
       addColumnIfMissing(db, 'sips', 'start_date', 'TEXT');
@@ -1020,17 +1108,21 @@ export const MIGRATIONS = [
       addColumnIfMissing(db, 'subscriptions', 'annual_change_percent', 'REAL DEFAULT 0.0');
       addColumnIfMissing(db, 'subscriptions', 'price_since', 'TEXT');
       addColumnIfMissing(db, 'subscriptions', 'linked_merchant_key', 'TEXT');
-      db.run(
-        "UPDATE sips SET start_date = COALESCE((SELECT MIN(date) FROM transactions"
-        + ' WHERE transactions.merchant_key = sips.linked_merchant_key), ?)'
-        + " WHERE start_date IS NULL OR start_date = ''",
-        [today()],
-      );
-      db.run(
-        "UPDATE subscriptions SET price_since = COALESCE(NULLIF(next_billing_date, ''), ?)"
-        + " WHERE price_since IS NULL OR price_since = ''",
-        [today()],
-      );
+      if (tableExists(db, 'sips') && tableExists(db, 'transactions')) {
+        db.run(
+          "UPDATE sips SET start_date = COALESCE((SELECT MIN(date) FROM transactions"
+          + ' WHERE transactions.merchant_key = sips.linked_merchant_key), ?)'
+          + " WHERE start_date IS NULL OR start_date = ''",
+          [today()],
+        );
+      }
+      if (tableExists(db, 'subscriptions')) {
+        db.run(
+          "UPDATE subscriptions SET price_since = COALESCE(NULLIF(next_billing_date, ''), ?)"
+          + " WHERE price_since IS NULL OR price_since = ''",
+          [today()],
+        );
+      }
     },
   },
   {
@@ -1059,8 +1151,10 @@ export const MIGRATIONS = [
           trade_date TEXT NOT NULL,
           quantity REAL NOT NULL,
           price REAL NOT NULL,
+          stamp_duty REAL DEFAULT 0.0,
           stt REAL DEFAULT 0.0,
           charges REAL DEFAULT 0.0,
+          parent_txn_id INTEGER,
           order_id TEXT,
           trade_id TEXT,
           notes TEXT,
@@ -1179,6 +1273,138 @@ export const MIGRATIONS = [
       seedDefaultRules(db);
     },
   },
+  {
+    versionCode: 14,
+    versionName: '1.0.8',
+    description: 'SIP tracker overhaul, mandates, child SIP allocations, and statutory charges linking',
+    up(db) {
+      seedDefaultRules(db);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS sip_mandates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          member_id INTEGER DEFAULT 1,
+          name TEXT NOT NULL,
+          mandate_type TEXT DEFAULT 'nach',
+          bank_account_id INTEGER,
+          total_amount REAL NOT NULL,
+          debit_day INTEGER NOT NULL,
+          linked_merchant_key TEXT,
+          is_active INTEGER DEFAULT 1,
+          notes TEXT,
+          created_at TEXT,
+          FOREIGN KEY (member_id) REFERENCES family_members(id),
+          FOREIGN KEY (bank_account_id) REFERENCES asset_accounts(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_mandate_member ON sip_mandates(member_id);
+        CREATE INDEX IF NOT EXISTS idx_mandate_merchant ON sip_mandates(linked_merchant_key);
+
+        CREATE TABLE IF NOT EXISTS sip_executions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          sip_id INTEGER NOT NULL,
+          mandate_id INTEGER,
+          month_key TEXT NOT NULL,
+          expected_amount REAL NOT NULL,
+          status TEXT NOT NULL,
+          transaction_id INTEGER,
+          folio_transaction_id INTEGER,
+          stock_transaction_id INTEGER,
+          debit_date TEXT,
+          debit_amount REAL,
+          allotment_date TEXT,
+          allotment_units REAL,
+          allotment_nav REAL,
+          notes TEXT,
+          created_at TEXT,
+          FOREIGN KEY (sip_id) REFERENCES sips(id) ON DELETE CASCADE,
+          FOREIGN KEY (mandate_id) REFERENCES sip_mandates(id) ON DELETE SET NULL,
+          FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL,
+          FOREIGN KEY (folio_transaction_id) REFERENCES folio_transactions(id) ON DELETE SET NULL,
+          FOREIGN KEY (stock_transaction_id) REFERENCES stock_transactions(id) ON DELETE SET NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sip_exec_month ON sip_executions(sip_id, month_key);
+        CREATE INDEX IF NOT EXISTS idx_sip_exec_status ON sip_executions(status);
+      `);
+
+      addColumnIfMissing(db, 'sips', 'name', "TEXT DEFAULT ''");
+      addColumnIfMissing(db, 'sips', 'amount', 'REAL DEFAULT 0.0');
+      addColumnIfMissing(db, 'sips', 'mandate_id', 'INTEGER');
+      addColumnIfMissing(db, 'sips', 'scheme_name', "TEXT DEFAULT ''");
+      addColumnIfMissing(db, 'sips', 'monthly_amount', 'REAL DEFAULT 0.0');
+      addColumnIfMissing(db, 'sips', 'step_up_percent', 'REAL DEFAULT 0.0');
+      addColumnIfMissing(db, 'sips', 'step_up_month', 'INTEGER DEFAULT 0');
+      addColumnIfMissing(db, 'sips', 'investment_type', "TEXT DEFAULT 'mf'");
+      addColumnIfMissing(db, 'sips', 'isin', "TEXT DEFAULT ''");
+      addColumnIfMissing(db, 'sips', 'folio_number', "TEXT DEFAULT ''");
+      addColumnIfMissing(db, 'sips', 'symbol', "TEXT DEFAULT ''");
+      addColumnIfMissing(db, 'sips', 'broker', "TEXT DEFAULT ''");
+      addColumnIfMissing(db, 'sips', 'account_id', 'INTEGER');
+      addColumnIfMissing(db, 'sips', 'frequency', "TEXT DEFAULT 'monthly'");
+      addColumnIfMissing(db, 'sips', 'end_date', "TEXT DEFAULT ''");
+
+      try {
+        db.run("UPDATE sips SET scheme_name = name WHERE (scheme_name IS NULL OR scheme_name = '') AND name IS NOT NULL AND name != ''");
+        db.run("UPDATE sips SET name = scheme_name WHERE (name IS NULL OR name = '') AND scheme_name IS NOT NULL AND scheme_name != ''");
+      } catch {}
+      try {
+        db.run("UPDATE sips SET monthly_amount = amount WHERE (monthly_amount IS NULL OR monthly_amount = 0) AND amount IS NOT NULL AND amount > 0");
+        db.run("UPDATE sips SET amount = monthly_amount WHERE (amount IS NULL OR amount = 0) AND monthly_amount IS NOT NULL AND monthly_amount > 0");
+      } catch {}
+
+      addColumnIfMissing(db, 'transactions', 'sip_id', 'INTEGER');
+      addColumnIfMissing(db, 'transactions', 'sip_mandate_id', 'INTEGER');
+      addColumnIfMissing(db, 'transactions', 'is_sip_split', 'INTEGER DEFAULT 0');
+
+      db.run('CREATE INDEX IF NOT EXISTS idx_sip_mandate ON sips(mandate_id);');
+      db.run('CREATE INDEX IF NOT EXISTS idx_sip_isin ON sips(isin);');
+      db.run('CREATE INDEX IF NOT EXISTS idx_sip_folio ON sips(folio_number);');
+      db.run('CREATE INDEX IF NOT EXISTS idx_tx_sip ON transactions(sip_id);');
+      db.run('CREATE INDEX IF NOT EXISTS idx_tx_sip_mandate ON transactions(sip_mandate_id);');
+
+      addColumnIfMissing(db, 'folio_transactions', 'stamp_duty', 'REAL DEFAULT 0.0');
+      addColumnIfMissing(db, 'folio_transactions', 'stt', 'REAL DEFAULT 0.0');
+      addColumnIfMissing(db, 'folio_transactions', 'charges', 'REAL DEFAULT 0.0');
+      addColumnIfMissing(db, 'folio_transactions', 'linked_stamp_duty_id', 'INTEGER');
+      addColumnIfMissing(db, 'folio_transactions', 'parent_txn_id', 'INTEGER');
+      db.run('CREATE INDEX IF NOT EXISTS idx_folio_txn_parent ON folio_transactions(parent_txn_id);');
+
+      addColumnIfMissing(db, 'stock_transactions', 'stamp_duty', 'REAL DEFAULT 0.0');
+      addColumnIfMissing(db, 'stock_transactions', 'parent_txn_id', 'INTEGER');
+      db.run('CREATE INDEX IF NOT EXISTS idx_stock_txn_parent ON stock_transactions(parent_txn_id);');
+
+      try {
+        linkCostAndTaxFolioTransactions(db);
+      } catch {}
+
+      try {
+        db.run(
+          'UPDATE sip_executions'
+          + ' SET folio_transaction_id = NULL, allotment_date = NULL, allotment_units = NULL, allotment_nav = NULL,'
+          + " status = CASE WHEN transaction_id IS NOT NULL THEN 'debited' ELSE 'due' END"
+          + ' WHERE folio_transaction_id IN ('
+          + '   SELECT id FROM folio_transactions'
+          + "   WHERE kind = 'STAMP_DUTY_TAX' OR kind LIKE '%stamp%' OR kind LIKE '%stt%' OR kind LIKE '%tax%' OR kind LIKE '%charge%' OR kind LIKE '%fee%'"
+          + "      OR description LIKE '%stamp%' OR description LIKE '%stt%' OR description LIKE '%tax%' OR description LIKE '%charge%' OR description LIKE '%fee%'"
+          + ' )',
+        );
+        db.run(
+          'UPDATE sip_executions'
+          + ' SET transaction_id = NULL, debit_date = NULL, debit_amount = NULL,'
+          + " status = CASE WHEN folio_transaction_id IS NOT NULL THEN 'allotted' ELSE 'due' END"
+          + ' WHERE transaction_id IN ('
+          + '   SELECT id FROM transactions'
+          + "   WHERE merchant LIKE '%stamp duty%' OR merchant LIKE '%stamp%' OR merchant LIKE '%stt%' OR merchant LIKE '%tax%' OR merchant LIKE '%charge%' OR merchant LIKE '%fee%'"
+          + "      OR description LIKE '%stamp duty%' OR description LIKE '%stamp%' OR description LIKE '%stt%' OR description LIKE '%tax%' OR description LIKE '%charge%' OR description LIKE '%fee%'"
+          + ' )',
+        );
+        db.run(
+          'UPDATE transactions SET sip_id = NULL, sip_mandate_id = NULL'
+          + " WHERE (merchant LIKE '%stamp duty%' OR merchant LIKE '%stamp%' OR merchant LIKE '%stt%' OR merchant LIKE '%tax%' OR merchant LIKE '%charge%' OR merchant LIKE '%fee%'"
+          + "     OR description LIKE '%stamp duty%' OR description LIKE '%stamp%' OR description LIKE '%stt%' OR description LIKE '%tax%' OR description LIKE '%charge%' OR description LIKE '%fee%')"
+          + ' AND (sip_id IS NOT NULL OR sip_mandate_id IS NOT NULL)',
+        );
+      } catch {}
+    },
+  },
 ];
 
 export function getDatabaseVersion(db) {
@@ -1267,61 +1493,88 @@ function runAdditiveMigrations(db) {
   for (const table of memberTables) {
     addColumnIfMissing(db, table, 'member_id', 'INTEGER DEFAULT 1');
   }
-  addColumnIfMissing(db, 'custom_categories', 'monthly_budget', 'REAL DEFAULT 0.0');
-  // Rename legacy "Transport & Fuel" category to "Transport"
-  db.run("UPDATE custom_categories SET name = 'Transport' WHERE name = 'Transport & Fuel'");
-  db.run("UPDATE sms_rules SET category_name = 'Transport' WHERE category_name = 'Transport & Fuel'");
-  db.run("UPDATE merchant_rules SET category_name = 'Transport' WHERE category_name = 'Transport & Fuel'");
-  db.run("UPDATE transactions SET category = 'Transport' WHERE category = 'Transport & Fuel'");
-  // Loans used to be borrowing only. Everything already recorded is money owed.
-  addColumnIfMissing(db, 'loans', 'direction', "TEXT DEFAULT 'borrowed'");
-  db.run("UPDATE loans SET direction = 'borrowed' WHERE direction IS NULL OR direction = ''");
 
-  // Earlier builds kept the unlock PIN in plain text.
-  const legacy = db.get("SELECT value FROM app_settings WHERE key = 'pin_code'");
-  if (legacy) {
-    db.run("DELETE FROM app_settings WHERE key = 'pin_code'");
+  // Folio transactions cost/tax schema
+  addColumnIfMissing(db, 'folio_transactions', 'stamp_duty', 'REAL DEFAULT 0.0');
+  addColumnIfMissing(db, 'folio_transactions', 'stt', 'REAL DEFAULT 0.0');
+  addColumnIfMissing(db, 'folio_transactions', 'charges', 'REAL DEFAULT 0.0');
+  addColumnIfMissing(db, 'folio_transactions', 'linked_stamp_duty_id', 'INTEGER');
+  addColumnIfMissing(db, 'folio_transactions', 'parent_txn_id', 'INTEGER');
+
+  // Stock transactions additional cost schema
+  addColumnIfMissing(db, 'stock_transactions', 'stamp_duty', 'REAL DEFAULT 0.0');
+  addColumnIfMissing(db, 'stock_transactions', 'parent_txn_id', 'INTEGER');
+
+  if (tableExists(db, 'custom_categories')) {
+    addColumnIfMissing(db, 'custom_categories', 'monthly_budget', 'REAL DEFAULT 0.0');
+    db.run("UPDATE custom_categories SET name = 'Transport' WHERE name = 'Transport & Fuel'");
+  }
+  if (tableExists(db, 'sms_rules')) {
+    db.run("UPDATE sms_rules SET category_name = 'Transport' WHERE category_name = 'Transport & Fuel'");
+  }
+  if (tableExists(db, 'merchant_rules')) {
+    db.run("UPDATE merchant_rules SET category_name = 'Transport' WHERE category_name = 'Transport & Fuel'");
+  }
+  if (tableExists(db, 'transactions')) {
+    db.run("UPDATE transactions SET category = 'Transport' WHERE category = 'Transport & Fuel'");
+  }
+  // Loans used to be borrowing only. Everything already recorded is money owed.
+  if (tableExists(db, 'loans')) {
+    addColumnIfMissing(db, 'loans', 'direction', "TEXT DEFAULT 'borrowed'");
+    db.run("UPDATE loans SET direction = 'borrowed' WHERE direction IS NULL OR direction = ''");
   }
 
-  db.run("UPDATE mf_folios SET isin = '' WHERE isin IS NULL");
-  db.run('DROP INDEX IF EXISTS idx_folio_scheme');
-  addColumnIfMissing(db, 'mf_folios', 'source', "TEXT DEFAULT ''");
-  addColumnIfMissing(db, 'mf_folios', 'scope', "TEXT DEFAULT ''");
-  db.run('CREATE INDEX IF NOT EXISTS idx_folio_scope ON mf_folios(scope)');
+  // Earlier builds kept the unlock PIN in plain text.
+  if (tableExists(db, 'app_settings')) {
+    const legacy = db.get("SELECT value FROM app_settings WHERE key = 'pin_code'");
+    if (legacy) {
+      db.run("DELETE FROM app_settings WHERE key = 'pin_code'");
+    }
+  }
+
+  if (tableExists(db, 'mf_folios')) {
+    db.run("UPDATE mf_folios SET isin = '' WHERE isin IS NULL");
+    db.run('DROP INDEX IF EXISTS idx_folio_scheme');
+    addColumnIfMissing(db, 'mf_folios', 'source', "TEXT DEFAULT ''");
+    addColumnIfMissing(db, 'mf_folios', 'scope', "TEXT DEFAULT ''");
+    db.run('CREATE INDEX IF NOT EXISTS idx_folio_scope ON mf_folios(scope)');
+  }
 
   // Clean up duplicate folio transactions
-  db.run("UPDATE folio_transactions SET isin = '' WHERE isin IS NULL");
-  db.run("UPDATE folio_transactions SET folio_number = '' WHERE folio_number IS NULL");
-  const dupRows = db.all(`
-    SELECT t1.id AS del_id, t2.id AS keep_id, t1.isin AS isin1, t2.isin AS isin2
-    FROM folio_transactions t1
-    JOIN folio_transactions t2 ON t1.id > t2.id
-      AND t1.member_id = t2.member_id
-      AND t1.date = t2.date
-      AND ABS(t1.amount - t2.amount) < 0.01
-      AND ABS(t1.units - t2.units) < 0.0001
-      AND (
-        (t1.isin != '' AND t2.isin != '' AND t1.isin = t2.isin)
-        OR (t1.isin = '' OR t2.isin = '')
-      )
-      AND (
-        t1.scheme_name = t2.scheme_name
-        OR t1.folio_number = t2.folio_number
-        OR (t1.isin != '' AND t2.isin != '' AND t1.isin = t2.isin)
-      )
-  `);
-  if (dupRows.length) {
-    const deleted = new Set();
-    db.transaction(() => {
-      for (const d of dupRows) {
-        if (deleted.has(d.del_id)) continue;
-        if (!d.isin2 && d.isin1) {
-          db.run('UPDATE folio_transactions SET isin = ? WHERE id = ?', [d.isin1, d.keep_id]);
+  if (tableExists(db, 'folio_transactions')) {
+    db.run("UPDATE folio_transactions SET isin = '' WHERE isin IS NULL");
+    db.run("UPDATE folio_transactions SET folio_number = '' WHERE folio_number IS NULL");
+    const dupRows = db.all(`
+      SELECT t1.id AS del_id, t2.id AS keep_id, t1.isin AS isin1, t2.isin AS isin2
+      FROM folio_transactions t1
+      JOIN folio_transactions t2 ON t1.id > t2.id
+        AND t1.member_id = t2.member_id
+        AND t1.date = t2.date
+        AND ABS(t1.amount - t2.amount) < 0.01
+        AND ABS(t1.units - t2.units) < 0.0001
+        AND (
+          (t1.isin != '' AND t2.isin != '' AND t1.isin = t2.isin)
+          OR (t1.isin = '' OR t2.isin = '')
+        )
+        AND (
+          t1.scheme_name = t2.scheme_name
+          OR t1.folio_number = t2.folio_number
+          OR (t1.isin != '' AND t2.isin != '' AND t1.isin = t2.isin)
+        )
+    `);
+    if (dupRows.length) {
+      const deleted = new Set();
+      db.transaction(() => {
+        for (const d of dupRows) {
+          if (deleted.has(d.del_id)) continue;
+          if (!d.isin2 && d.isin1) {
+            db.run('UPDATE folio_transactions SET isin = ? WHERE id = ?', [d.isin1, d.keep_id]);
+          }
+          db.run('DELETE FROM folio_transactions WHERE id = ?', [d.del_id]);
+          deleted.add(d.del_id);
         }
-        db.run('DELETE FROM folio_transactions WHERE id = ?', [d.del_id]);
-        deleted.add(d.del_id);
-      }
-    });
+      });
+    }
   }
 
   addColumnIfMissing(db, 'demat_holdings', 'invested_value', 'REAL DEFAULT 0.0');
@@ -1329,17 +1582,19 @@ function runAdditiveMigrations(db) {
   addColumnIfMissing(db, 'asset_accounts', 'debit_card_last_4', "TEXT DEFAULT ''");
   addColumnIfMissing(db, 'asset_accounts', 'account_type', "TEXT DEFAULT ''");
 
-  addColumnIfMissing(db, 'transactions', 'merchant_key', 'TEXT');
-  db.run('CREATE INDEX IF NOT EXISTS idx_tx_merchant_key ON transactions(merchant_key)');
-  const unkeyed = db.all(
-    "SELECT id, merchant FROM transactions WHERE merchant_key IS NULL AND merchant IS NOT NULL AND merchant != ''",
-  );
-  if (unkeyed.length) {
-    db.transaction(() => {
-      for (const row of unkeyed) {
-        db.run('UPDATE transactions SET merchant_key = ? WHERE id = ?', [merchantKey(row.merchant), row.id]);
-      }
-    });
+  if (tableExists(db, 'transactions')) {
+    addColumnIfMissing(db, 'transactions', 'merchant_key', 'TEXT');
+    db.run('CREATE INDEX IF NOT EXISTS idx_tx_merchant_key ON transactions(merchant_key)');
+    const unkeyed = db.all(
+      "SELECT id, merchant FROM transactions WHERE merchant_key IS NULL AND merchant IS NOT NULL AND merchant != ''",
+    );
+    if (unkeyed.length) {
+      db.transaction(() => {
+        for (const row of unkeyed) {
+          db.run('UPDATE transactions SET merchant_key = ? WHERE id = ?', [merchantKey(row.merchant), row.id]);
+        }
+      });
+    }
   }
 
   addColumnIfMissing(db, 'sips', 'start_date', 'TEXT');
@@ -1361,24 +1616,112 @@ function runAdditiveMigrations(db) {
   addColumnIfMissing(db, 'transactions', 'sender', "TEXT DEFAULT ''");
   addColumnIfMissing(db, 'transactions', 'is_ignored', 'INTEGER DEFAULT 0');
   addColumnIfMissing(db, 'transactions', 'is_duplicate', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'transactions', 'sip_id', 'INTEGER');
+  addColumnIfMissing(db, 'transactions', 'sip_mandate_id', 'INTEGER');
+  addColumnIfMissing(db, 'transactions', 'is_sip_split', 'INTEGER DEFAULT 0');
   db.run('CREATE INDEX IF NOT EXISTS idx_tx_card ON transactions(card_id);');
+  db.run('CREATE INDEX IF NOT EXISTS idx_tx_sip ON transactions(sip_id);');
+  db.run('CREATE INDEX IF NOT EXISTS idx_tx_sip_mandate ON transactions(sip_mandate_id);');
 
-  db.run(
-    "UPDATE sips SET start_date = COALESCE((SELECT MIN(date) FROM transactions"
-    + ' WHERE transactions.merchant_key = sips.linked_merchant_key), ?)'
-    + " WHERE start_date IS NULL OR start_date = ''",
-    [today()],
-  );
-  db.run(
-    "UPDATE subscriptions SET price_since = COALESCE(NULLIF(next_billing_date, ''), ?)"
-    + " WHERE price_since IS NULL OR price_since = ''",
-    [today()],
-  );
+  // SIP Tracker & Mandates Schema Migration
+  addColumnIfMissing(db, 'sips', 'name', "TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'sips', 'amount', 'REAL DEFAULT 0.0');
+  addColumnIfMissing(db, 'sips', 'mandate_id', 'INTEGER');
+  addColumnIfMissing(db, 'sips', 'scheme_name', "TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'sips', 'monthly_amount', 'REAL DEFAULT 0.0');
+  addColumnIfMissing(db, 'sips', 'step_up_percent', 'REAL DEFAULT 0.0');
+  addColumnIfMissing(db, 'sips', 'step_up_month', 'INTEGER DEFAULT 0');
+  addColumnIfMissing(db, 'sips', 'investment_type', "TEXT DEFAULT 'mf'");
+  addColumnIfMissing(db, 'sips', 'isin', "TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'sips', 'folio_number', "TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'sips', 'symbol', "TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'sips', 'broker', "TEXT DEFAULT ''");
 
-  for (const category of db.all('SELECT id, icon FROM custom_categories')) {
-    const icon = category.icon || '';
-    if (!/^[a-z0-9_]+$/.test(icon)) {
-      db.run("UPDATE custom_categories SET icon = 'sell' WHERE id = ?", [category.id]);
+  try {
+    db.run("UPDATE sips SET scheme_name = name WHERE (scheme_name IS NULL OR scheme_name = '') AND name IS NOT NULL AND name != ''");
+    db.run("UPDATE sips SET name = scheme_name WHERE (name IS NULL OR name = '') AND scheme_name IS NOT NULL AND scheme_name != ''");
+  } catch {}
+  try {
+    db.run("UPDATE sips SET monthly_amount = amount WHERE (monthly_amount IS NULL OR monthly_amount = 0) AND amount IS NOT NULL AND amount > 0");
+    db.run("UPDATE sips SET amount = monthly_amount WHERE (amount IS NULL OR amount = 0) AND monthly_amount IS NOT NULL AND monthly_amount > 0");
+  } catch {}
+
+  db.run('CREATE INDEX IF NOT EXISTS idx_sips_mandate ON sips(mandate_id);');
+  db.run('CREATE INDEX IF NOT EXISTS idx_sips_isin ON sips(isin);');
+  db.run('CREATE INDEX IF NOT EXISTS idx_sips_folio ON sips(folio_number);');
+
+  // Folio transactions cost/tax schema & correlation
+  addColumnIfMissing(db, 'folio_transactions', 'stamp_duty', 'REAL DEFAULT 0.0');
+  addColumnIfMissing(db, 'folio_transactions', 'stt', 'REAL DEFAULT 0.0');
+  addColumnIfMissing(db, 'folio_transactions', 'charges', 'REAL DEFAULT 0.0');
+  addColumnIfMissing(db, 'folio_transactions', 'linked_stamp_duty_id', 'INTEGER');
+  try {
+    db.run('CREATE INDEX IF NOT EXISTS idx_folio_txn_parent ON folio_transactions(parent_txn_id);');
+  } catch {}
+
+  // Stock transactions additional cost schema & correlation
+  addColumnIfMissing(db, 'stock_transactions', 'stamp_duty', 'REAL DEFAULT 0.0');
+  addColumnIfMissing(db, 'stock_transactions', 'parent_txn_id', 'INTEGER');
+  try {
+    db.run('CREATE INDEX IF NOT EXISTS idx_stock_txn_parent ON stock_transactions(parent_txn_id);');
+  } catch {}
+
+  try {
+    linkCostAndTaxFolioTransactions(db);
+  } catch {}
+
+  // Purge any historical SIP links to cost and tax transactions
+  try {
+    db.run(
+      'UPDATE sip_executions'
+      + ' SET folio_transaction_id = NULL, allotment_date = NULL, allotment_units = NULL, allotment_nav = NULL,'
+      + " status = CASE WHEN transaction_id IS NOT NULL THEN 'debited' ELSE 'due' END"
+      + ' WHERE folio_transaction_id IN ('
+      + '   SELECT id FROM folio_transactions'
+      + "   WHERE kind = 'STAMP_DUTY_TAX' OR kind LIKE '%stamp%' OR kind LIKE '%stt%' OR kind LIKE '%tax%' OR kind LIKE '%charge%' OR kind LIKE '%fee%'"
+      + "      OR description LIKE '%stamp%' OR description LIKE '%stt%' OR description LIKE '%tax%' OR description LIKE '%charge%' OR description LIKE '%fee%'"
+      + ' )',
+    );
+    db.run(
+      'UPDATE sip_executions'
+      + ' SET transaction_id = NULL, debit_date = NULL, debit_amount = NULL,'
+      + " status = CASE WHEN folio_transaction_id IS NOT NULL THEN 'allotted' ELSE 'due' END"
+      + ' WHERE transaction_id IN ('
+      + '   SELECT id FROM transactions'
+      + "   WHERE merchant LIKE '%stamp duty%' OR merchant LIKE '%stamp%' OR merchant LIKE '%stt%' OR merchant LIKE '%tax%' OR merchant LIKE '%charge%' OR merchant LIKE '%fee%'"
+      + "      OR description LIKE '%stamp duty%' OR description LIKE '%stamp%' OR description LIKE '%stt%' OR description LIKE '%tax%' OR description LIKE '%charge%' OR description LIKE '%fee%'"
+      + ' )',
+    );
+    db.run(
+      'UPDATE transactions SET sip_id = NULL, sip_mandate_id = NULL'
+      + " WHERE (merchant LIKE '%stamp duty%' OR merchant LIKE '%stamp%' OR merchant LIKE '%stt%' OR merchant LIKE '%tax%' OR merchant LIKE '%charge%' OR merchant LIKE '%fee%'"
+      + "     OR description LIKE '%stamp duty%' OR description LIKE '%stamp%' OR description LIKE '%stt%' OR description LIKE '%tax%' OR description LIKE '%charge%' OR description LIKE '%fee%')"
+      + ' AND (sip_id IS NOT NULL OR sip_mandate_id IS NOT NULL)',
+    );
+  } catch {}
+
+  if (tableExists(db, 'sips') && tableExists(db, 'transactions')) {
+    db.run(
+      "UPDATE sips SET start_date = COALESCE((SELECT MIN(date) FROM transactions"
+      + ' WHERE transactions.merchant_key = sips.linked_merchant_key), ?)'
+      + " WHERE start_date IS NULL OR start_date = ''",
+      [today()],
+    );
+  }
+  if (tableExists(db, 'subscriptions')) {
+    db.run(
+      "UPDATE subscriptions SET price_since = COALESCE(NULLIF(next_billing_date, ''), ?)"
+      + " WHERE price_since IS NULL OR price_since = ''",
+      [today()],
+    );
+  }
+
+  if (tableExists(db, 'custom_categories')) {
+    for (const category of db.all('SELECT id, icon FROM custom_categories')) {
+      const icon = category.icon || '';
+      if (!/^[a-z0-9_]+$/.test(icon)) {
+        db.run("UPDATE custom_categories SET icon = 'sell' WHERE id = ?", [category.id]);
+      }
     }
   }
 }
@@ -2324,14 +2667,17 @@ function getHoldingDetail(db, args) {
   const [clause, params] = memberClause(args.member_id, 'AND');
   const folioLines = db.all(
     `SELECT * FROM folio_transactions WHERE (isin = ? OR folio_number = ?)${clause}`
+    + ' AND (parent_txn_id IS NULL OR parent_txn_id = 0)'
     + ' ORDER BY date DESC, id DESC',
     [isin, folio, ...params],
-  );
+  ).filter((l) => !isCostOrTaxTransaction(l) && (!l.parent_txn_id || l.parent_txn_id === 0));
 
   const stockLines = db.all(
-    `SELECT id, member_id, isin, symbol, trade_date AS date, trade_type AS kind, quantity AS units, price, (quantity * price) AS amount, stt, charges, notes AS description, 'equity' AS asset_class FROM stock_transactions WHERE (isin = ? OR symbol = ?)${clause} ORDER BY trade_date DESC, id DESC`,
+    `SELECT id, member_id, isin, symbol, trade_date AS date, trade_type AS kind, quantity AS units, price, (quantity * price) AS amount, stamp_duty, stt, charges, notes AS description, 'equity' AS asset_class FROM stock_transactions WHERE (isin = ? OR symbol = ?)${clause}`
+    + ' AND (parent_txn_id IS NULL OR parent_txn_id = 0)'
+    + ' ORDER BY trade_date DESC, id DESC',
     [isin, symbol || folio || isin, ...params],
-  );
+  ).filter((l) => !isCostOrTaxTransaction(l) && (!l.parent_txn_id || l.parent_txn_id === 0));
 
   const lines = folioLines.length ? folioLines : stockLines;
 
@@ -2340,12 +2686,17 @@ function getHoldingDetail(db, args) {
   let unitsBought = 0;
   for (const line of lines) {
     const amount = number(line.amount);
+    const stampAmt = number(line.stamp_duty);
+    const chargesAmt = number(line.charges);
     const kind = String(line.kind || '').toUpperCase();
     const isSell = kind.includes('SELL') || kind.includes('REDEMPTION') || amount < 0;
     // A registrar writes a purchase positive and a redemption negative, and a dividend
     // payout carries money without units. Only what bought units counts as invested.
     if (!isSell && number(line.units) > 0 && amount > 0) {
-      invested += amount;
+      const isNetCost = line.units > 0 && line.nav > 0 && Math.abs(amount - (number(line.units) * number(line.nav))) < 0.02;
+      const totalAddCosts = stampAmt + chargesAmt;
+      const effectiveCost = (isNetCost && totalAddCosts > 0) ? amount + totalAddCosts : amount;
+      invested += effectiveCost;
       unitsBought += number(line.units);
     } else if (isSell) {
       redeemed += Math.abs(amount);
@@ -2417,22 +2768,33 @@ function getFolioTransactions(db, args) {
   if (args.direction === 'bought') filters.push('amount > 0');
   if (args.direction === 'sold') filters.push('amount < 0');
 
+  // Exclude standalone and child cost/tax transactions
+  filters.push('(parent_txn_id IS NULL OR parent_txn_id = 0)');
+  filters.push("(kind IS NULL OR (kind != 'STAMP_DUTY_TAX' AND kind NOT LIKE '%stamp%' AND kind NOT LIKE '%stt%' AND kind NOT LIKE '%tax%' AND kind NOT LIKE '%charge%' AND kind NOT LIKE '%fee%'))");
+  filters.push("(description IS NULL OR (description NOT LIKE '%stamp%' AND description NOT LIKE '%stt%' AND description NOT LIKE '%tax%' AND description NOT LIKE '%charge%' AND description NOT LIKE '%fee%'))");
+
   const where = filters.length ? ` WHERE ${filters.join(' AND ')}` : '';
   const limit = Math.max(1, Math.min(1000, Number.parseInt(args.limit ?? 250, 10) || 250));
-  const lines = db.all(
+  const rawLines = db.all(
     `SELECT * FROM folio_transactions${where} ORDER BY date DESC, id DESC LIMIT ?`,
     [...params, limit],
   );
+  const lines = rawLines.filter((line) => !isCostOrTaxTransaction(line) && (!line.parent_txn_id || line.parent_txn_id === 0));
 
   let bought = 0;
   let sold = 0;
   const schemes = new Map();
   for (const line of lines) {
-    const amount = number(line.amount);
-    if (amount >= 0) bought += amount;
-    else sold += Math.abs(amount);
+    const baseAmt = number(line.amount);
+    const stampAmt = number(line.stamp_duty);
+    const chargesAmt = number(line.charges);
+    const isNetCost = line.units > 0 && line.nav > 0 && Math.abs(baseAmt - (number(line.units) * number(line.nav))) < 0.02;
+    const effectiveAmt = (isNetCost && (stampAmt + chargesAmt) > 0) ? baseAmt + stampAmt + chargesAmt : baseAmt;
+
+    if (effectiveAmt >= 0) bought += effectiveAmt;
+    else sold += Math.abs(effectiveAmt);
     const name = line.scheme_name || line.isin || 'Unnamed scheme';
-    schemes.set(name, (schemes.get(name) || 0) + amount);
+    schemes.set(name, (schemes.get(name) || 0) + effectiveAmt);
   }
 
   return {
@@ -2582,9 +2944,12 @@ function listStockTransactions(db, args = {}) {
     sqlParams.push(String(args.to).slice(0, 10));
   }
 
+  filters.push('(parent_txn_id IS NULL OR parent_txn_id = 0)');
+
   const where = [clause.replace(/^\s*WHERE\s*/i, ''), ...filters].filter(Boolean);
   const whereClause = where.length ? ` WHERE ${where.join(' AND ')}` : '';
-  const rows = db.all(`SELECT * FROM stock_transactions${whereClause} ORDER BY trade_date DESC, id DESC`, sqlParams);
+  const rows = db.all(`SELECT * FROM stock_transactions${whereClause} ORDER BY trade_date DESC, id DESC`, sqlParams)
+    .filter((r) => !isCostOrTaxTransaction(r) && (!r.parent_txn_id || r.parent_txn_id === 0));
   return { transactions: rows, count: rows.length };
 }
 
@@ -2646,15 +3011,15 @@ function importStockTransactions(db, args = {}) {
 }
 
 function getCapitalGainsReport(db, args = {}) {
-  const [clause, params] = memberClause(args.member_id);
+  const [clause, params] = memberClause(args.member_id, 'AND');
   const folioTxns = db.all(
-    `SELECT id, member_id, folio_number, isin, scheme_name AS name, date, kind, amount, units, nav AS price, 'equity' AS asset_class FROM folio_transactions${clause}`,
+    `SELECT id, member_id, folio_number, isin, scheme_name AS name, date, kind, amount, units, nav AS price, stamp_duty, stt, charges, 'equity' AS asset_class FROM folio_transactions WHERE (parent_txn_id IS NULL OR parent_txn_id = 0)${clause}`,
     params,
-  );
+  ).filter((l) => !isCostOrTaxTransaction(l));
   const stockTxns = db.all(
-    `SELECT id, member_id, isin, symbol, symbol AS name, trade_date AS date, trade_type AS kind, (quantity * price) AS amount, quantity AS units, price, stt, charges, 'equity' AS asset_class FROM stock_transactions${clause}`,
+    `SELECT id, member_id, isin, symbol, symbol AS name, trade_date AS date, trade_type AS kind, (quantity * price) AS amount, quantity AS units, price, stamp_duty, stt, charges, 'equity' AS asset_class FROM stock_transactions WHERE (parent_txn_id IS NULL OR parent_txn_id = 0)${clause}`,
     params,
-  );
+  ).filter((l) => !isCostOrTaxTransaction(l));
 
   const combined = [...folioTxns, ...stockTxns];
   const report = processFifoCapitalGains(combined, {
@@ -2680,13 +3045,13 @@ function getHoldingTaxLots(db, args = {}) {
 
   const [clause, params] = memberClause(args.member_id, 'AND');
   const folioTxns = db.all(
-    `SELECT id, member_id, folio_number, isin, scheme_name AS name, date, kind, amount, units, nav AS price, 'equity' AS asset_class FROM folio_transactions WHERE (isin = ? OR folio_number = ?)${clause}`,
+    `SELECT id, member_id, folio_number, isin, scheme_name AS name, date, kind, amount, units, nav AS price, stamp_duty, stt, charges, 'equity' AS asset_class FROM folio_transactions WHERE (isin = ? OR folio_number = ?) AND (parent_txn_id IS NULL OR parent_txn_id = 0)${clause}`,
     [isin, folio, ...params],
-  );
+  ).filter((l) => !isCostOrTaxTransaction(l));
   const stockTxns = db.all(
-    `SELECT id, member_id, isin, symbol, symbol AS name, trade_date AS date, trade_type AS kind, (quantity * price) AS amount, quantity AS units, price, stt, charges, 'equity' AS asset_class FROM stock_transactions WHERE (isin = ? OR symbol = ?)${clause}`,
+    `SELECT id, member_id, isin, symbol, symbol AS name, trade_date AS date, trade_type AS kind, (quantity * price) AS amount, quantity AS units, price, stamp_duty, stt, charges, 'equity' AS asset_class FROM stock_transactions WHERE (isin = ? OR symbol = ?) AND (parent_txn_id IS NULL OR parent_txn_id = 0)${clause}`,
     [isin, symbol || isin, ...params],
-  );
+  ).filter((l) => !isCostOrTaxTransaction(l));
 
   const combined = [...folioTxns, ...stockTxns];
   const processed = processFifoCapitalGains(combined, {
@@ -3017,6 +3382,7 @@ function saveTransaction(db, args) {
   if (!(amount > 0)) return fail('AMOUNT_INVALID', 'Enter an amount greater than zero.');
 
   const merchant = String(transaction.merchant ?? '').trim();
+  const mKey = String(transaction.merchant_key ?? '').trim() || merchantKey(merchant);
   const isInvest = transaction.is_investment_outflow || transaction.type === 'Investment' || transaction.category === 'Investment Outflow' || INVESTMENT_CATEGORIES.has(transaction.category) ? 1 : 0;
   const isIgnored = transaction.is_ignored || transaction.type === 'Ignore' || transaction.category === 'Ignore' ? 1 : 0;
   const isDuplicate = transaction.is_duplicate ? 1 : 0;
@@ -3060,6 +3426,7 @@ function saveTransaction(db, args) {
     txType,
     transaction.category ?? 'Groceries',
     merchant,
+    mKey,
     transaction.description ?? '',
     isInvest,
     rawSms,
@@ -3075,7 +3442,7 @@ function saveTransaction(db, args) {
     oldTx = db.get('SELECT id, account_id, card_id, amount, type FROM transactions WHERE id = ?', [transactionId]);
     db.run(
       'UPDATE transactions SET member_id = ?, account_id = ?, card_id = ?, date = ?, amount = ?,'
-      + ' currency = ?, type = ?, category = ?, merchant = ?,'
+      + ' currency = ?, type = ?, category = ?, merchant = ?, merchant_key = ?,'
       + ' description = ?, is_investment_outflow = ?, raw_sms = ?, sender = ?,'
       + ' is_ignored = ?, is_duplicate = ?, bucket_id = ? WHERE id = ?',
       [...values, transactionId],
@@ -3085,8 +3452,8 @@ function saveTransaction(db, args) {
   } else {
     const result = db.run(
       'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type,'
-      + ' category, merchant, description, is_investment_outflow, raw_sms, sender,'
-      + ' is_ignored, is_duplicate, bucket_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      + ' category, merchant, merchant_key, description, is_investment_outflow, raw_sms, sender,'
+      + ' is_ignored, is_duplicate, bucket_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [...values, new Date().toISOString()],
     );
     transactionId = result.lastInsertRowid;
@@ -3165,6 +3532,14 @@ function saveTransaction(db, args) {
       [transactionId, cashback.source_name, number(cashback.cashback_amount)],
     );
   }
+
+  // Reconcile SIPs and mandates if this transaction matches an active commitment
+  try {
+    reconcileSips(db);
+  } catch {
+    // Non-fatal if SIP reconciliation encounters an issue
+  }
+
   // `also_categorised` counts the other rows this save brought into line, so a screen can
   // say what it did rather than silently rewriting the user's history.
   return {
@@ -4045,7 +4420,7 @@ export function autoUpdateCreditCardFromSms(db, text = '', sender = '', matchedC
 }
 
 export function discoverAccountsFromSms(db) {
-  const transactions = db.all("SELECT raw_sms, sender, type, amount, date, id FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' ORDER BY date DESC, id DESC");
+  const transactions = db.all("SELECT raw_sms, sender, type, amount, date, id FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' ORDER BY date DESC, id DESC LIMIT 1500");
   const existingAccounts = db.all('SELECT id, name, category, institution, account_number, debit_card_last_4 FROM asset_accounts');
   const existingCards = db.all('SELECT id, card_name, bank, last_4 FROM credit_cards');
 
@@ -5224,7 +5599,7 @@ const CLEARABLE = {
   // The price history goes with the plan it describes: rows left behind would point at a
   // record that no longer exists and turn up in the next projection.
   subscriptions: ['subscriptions'],
-  sips: ['sips'],
+  sips: ['sip_executions', 'sips', 'sip_mandates'],
   recurring: ['recurring_dismissed'],
   events: ['custom_events'],
   holdings: [
@@ -5616,6 +5991,18 @@ const ACTIONS = {
   apply_price_change: applyPriceChange,
   get_price_history: getPriceHistory,
   project_commitments: projectCommitments,
+  list_sips: listSips,
+  get_sip_details: getSipDetails,
+  save_sip_mandate: saveSipMandate,
+  delete_sip_mandate: deleteSipMandate,
+  save_sip: saveSip,
+  delete_sip: deleteSip,
+  find_sip_matching_transactions: findSipMatchingTransactions,
+  link_sip_transactions: linkSipTransactions,
+  unlink_sip_transaction: unlinkSipTransaction,
+  discover_sips: discoverSips,
+  confirm_discovered_sips: confirmDiscoveredSips,
+  reconcile_sips: reconcileSips,
   list_records: listRecords,
   save_record: saveRecord,
   delete_record: deleteRecord,

@@ -23,6 +23,8 @@ export const ICON_CODEPOINTS = {
   calendar_month: '\uebcc',
   celebration: '\uea65',
   check: '\ue5ca',
+  check_box: 'check_box',
+  check_box_outline_blank: 'check_box_outline_blank',
   check_circle: '\ue86c',
   checkroom: '\uf19e',
   chevron_left: '\ue408',

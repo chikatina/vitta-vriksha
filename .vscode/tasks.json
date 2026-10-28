@@ -1,0 +1,90 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "npm",
+      "script": "test",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "label": "npm: test",
+      "detail": "node tools/check-style-guidelines.mjs && node --test test/*.test.mjs"
+    },
+    {
+      "type": "npm",
+      "script": "test:unit",
+      "problemMatcher": [],
+      "label": "npm: test:unit",
+      "detail": "node --test test/*.test.mjs"
+    },
+    {
+      "type": "npm",
+      "script": "lint",
+      "problemMatcher": [],
+      "label": "npm: lint",
+      "detail": "node tools/check-style-guidelines.mjs"
+    },
+    {
+      "type": "npm",
+      "script": "clean-sms",
+      "problemMatcher": [],
+      "label": "npm: clean-sms",
+      "detail": "node scripts/clean-sms.mjs"
+    },
+    {
+      "type": "npm",
+      "script": "verify:import",
+      "problemMatcher": [],
+      "label": "npm: verify:import",
+      "detail": "node scripts/verify-import.mjs"
+    },
+    {
+      "type": "npm",
+      "script": "verify:overlap",
+      "problemMatcher": [],
+      "label": "npm: verify:overlap",
+      "detail": "node scripts/verify-overlap.mjs"
+    },
+    {
+      "type": "npm",
+      "script": "vendor:casparser",
+      "problemMatcher": [],
+      "label": "npm: vendor:casparser",
+      "detail": "python tools/vendor-casparser.py"
+    },
+    {
+      "type": "npm",
+      "script": "vendor:libs",
+      "problemMatcher": [],
+      "label": "npm: vendor:libs",
+      "detail": "python tools/vendor-libs.py"
+    },
+    {
+      "type": "npm",
+      "script": "build:android",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "label": "npm: build:android",
+      "detail": "cmd.exe /c gradlew.bat assembleDebug"
+    },
+    {
+      "type": "npm",
+      "script": "build:release",
+      "problemMatcher": [],
+      "label": "npm: build:release",
+      "detail": "powershell -ExecutionPolicy Bypass -File ./tools/build-release.ps1"
+    },
+    {
+      "type": "npm",
+      "script": "deploy:release",
+      "problemMatcher": [],
+      "label": "npm: deploy:release",
+      "detail": "powershell -ExecutionPolicy Bypass -File ./tools/deploy-release.ps1"
+    }
+  ]
+}

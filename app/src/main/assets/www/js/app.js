@@ -17,6 +17,7 @@ import { renderLedger } from './views/ledger.js';
 import { renderBudgets } from './views/budgets.js';
 import { renderWealth } from './views/wealth.js';
 import { renderInvestments } from './views/investments.js';
+import { renderSipTracker } from './views/sips.js';
 import { renderMore } from './views/more.js';
 import { renderBuckets } from './views/buckets.js';
 import { renderRecordPage } from './views/records.js';
@@ -62,7 +63,7 @@ const PAGES = {
   recurring: { parent: 'wealth', title: 'Recurring payments', render: renderRecurring },
   investments: { parent: 'wealth', title: 'Investments', render: renderInvestments },
   accounts: { parent: 'wealth', title: 'Accounts', render: (c, a) => renderRecordPage(c, a, 'account') },
-  sips: { parent: 'wealth', title: 'SIPs', render: (c, a) => renderRecordPage(c, a, 'sip') },
+  sips: { parent: 'wealth', title: 'SIP Tracker', render: renderSipTracker },
   loans: { parent: 'wealth', title: 'Loans', render: (c, a) => renderRecordPage(c, a, 'loan') },
   cards: { parent: 'wealth', title: 'Credit cards', render: (c, a) => renderRecordPage(c, a, 'card') },
   subscriptions: { parent: 'wealth', title: 'Subscriptions', render: (c, a) => renderRecordPage(c, a, 'subscription') },

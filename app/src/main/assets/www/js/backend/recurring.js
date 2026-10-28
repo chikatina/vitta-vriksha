@@ -20,6 +20,7 @@ import { merchantKey } from './merchants.js';
 import {
   addMonths, daysBetween, isoDate, memberClause, number, parseISO, today,
 } from './periods.js';
+import { isStampDutyTransaction } from './sips.js';
 
 /**
  * The rhythms worth recognising, with the window of gaps that counts as each one.
@@ -195,6 +196,7 @@ export function findRecurring(db, args = {}) {
 
   const groups = new Map();
   for (const row of rows) {
+    if (isStampDutyTransaction(row)) continue;
     let name = String(row.merchant || '').trim();
     if (!name && row.description) {
       name = cleanDescriptionToMerchant(row.description);
@@ -216,13 +218,16 @@ export function findRecurring(db, args = {}) {
 
   // Also scan folio_transactions for mutual fund SIP investments from CAS/CAMS/KFintech imports
   const folioRows = db.all(
-    'SELECT id, date, amount, scheme_name, isin, member_id FROM folio_transactions'
+    'SELECT id, date, amount, scheme_name, isin, member_id, description, kind FROM folio_transactions'
     + ` WHERE date >= ? AND amount > 0${clause}`
+    + " AND (kind IS NULL OR (kind != 'STAMP_DUTY_TAX' AND kind NOT LIKE '%stamp%' AND kind NOT LIKE '%stt%' AND kind NOT LIKE '%tax%' AND kind NOT LIKE '%charge%' AND kind NOT LIKE '%fee%'))"
+    + " AND (description IS NULL OR (description NOT LIKE '%stamp%' AND description NOT LIKE '%stt%' AND description NOT LIKE '%tax%' AND description NOT LIKE '%charge%' AND description NOT LIKE '%fee%'))"
     + ' ORDER BY date ASC, id ASC',
     [from, ...params],
   );
 
   for (const row of folioRows) {
+    if (isStampDutyTransaction(row)) continue;
     const rawName = String(row.scheme_name || '').trim();
     if (!rawName) continue;
     const cleanName = rawName.replace(/\s*-\s*(Direct|Regular)?\s*(Plan)?\s*-\s*(Growth|IDCW|Dividend|Bonus).*$/i, '').trim() || rawName;

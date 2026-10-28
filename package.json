@@ -1,11 +1,18 @@
 {
   "name": "vitta-vriksha",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "type": "module",
   "private": true,
   "scripts": {
     "lint": "node tools/check-style-guidelines.mjs",
     "test": "node tools/check-style-guidelines.mjs && node --test test/*.test.mjs",
+    "test:unit": "node --test test/*.test.mjs",
+    "clean-sms": "node scripts/clean-sms.mjs",
+    "verify:import": "node scripts/verify-import.mjs",
+    "verify:overlap": "node scripts/verify-overlap.mjs",
+    "vendor:casparser": "python tools/vendor-casparser.py",
+    "vendor:libs": "python tools/vendor-libs.py",
+    "build:android": "cmd.exe /c gradlew.bat assembleDebug",
     "build:release": "powershell -ExecutionPolicy Bypass -File ./tools/build-release.ps1",
     "deploy:release": "powershell -ExecutionPolicy Bypass -File ./tools/deploy-release.ps1"
   },

@@ -618,8 +618,25 @@ export function renderSetup(app) {
           btn.addEventListener('click', async () => {
             const key = btn.dataset.grant;
             if (Bridge.permissionIsBlocked(key)) {
-              Bridge.openAppSettings();
+              const goSettings = await confirmDialog(
+                `${key} Permission Blocked`,
+                key === 'SMS'
+                  ? 'SMS permission was permanently denied. Please allow it in App Settings to enable automatic bank SMS tracking.'
+                  : 'Notification permission was permanently denied. Please allow it in App Settings to receive alerts.',
+                { confirmLabel: 'Open Settings' },
+              );
+              if (goSettings) Bridge.openAppSettings();
               return;
+            }
+            if (Bridge.shouldShowRationale(key)) {
+              const proceed = await confirmDialog(
+                `Why ${key} is Needed`,
+                key === 'SMS'
+                  ? 'Vitta Vriksha reads bank SMS locally on your device to automate transaction tracking. No messages leave your phone.'
+                  : 'Notifications keep you updated on upcoming bills, SIP debits, and budget alerts.',
+                { confirmLabel: 'Continue' },
+              );
+              if (!proceed) return;
             }
             btn.disabled = true;
             await Bridge.requestPermission(key);

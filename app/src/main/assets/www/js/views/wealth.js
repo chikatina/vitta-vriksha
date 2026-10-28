@@ -116,7 +116,7 @@ export async function renderWealth(container, app) {
       <div class="list">
         ${navRow('investments', 'stacked_bar_chart', 'Investments', 'Portfolio, profit & loss')}
         ${navRow('accounts', 'account_balance', 'Accounts', 'Bank balances & deposits', counts.account)}
-        ${navRow('sips', 'trending_up', 'SIPs', 'Recurring investments', counts.sip)}
+        ${navRow('sips', 'trending_up', 'SIP Tracker', 'Mandates, MF & Stock SIPs', counts.sip)}
         ${navRow('cas', 'picture_as_pdf', 'Account statement', 'Import CAS statement')}
       </div>
     </div>

@@ -51,7 +51,7 @@ NAMES = """
 dashboard receipt_long donut_small savings more_horiz
 
 lock lock_open fingerprint close arrow_back arrow_forward search filter_list more_vert
-check check_circle add edit delete chevron_right chevron_left expand_more expand_less
+check check_circle check_box check_box_outline_blank add edit delete chevron_right chevron_left expand_more expand_less
 calendar_month upload_file download refresh visibility visibility_off warning error info
 dark_mode light_mode contrast notifications sms security backup group person
 person_add description picture_as_pdf palette tune verified_user cloud_off key rule label

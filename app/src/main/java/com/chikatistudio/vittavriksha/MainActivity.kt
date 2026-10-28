@@ -70,6 +70,23 @@ class MainActivity : AppCompatActivity() {
         filePathCallback = null
     }
 
+    private var pendingPermissionName: String? = null
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val name = pendingPermissionName ?: return@registerForActivityResult
+        pendingPermissionName = null
+        val granted = results.isNotEmpty() && results.values.all { it }
+        webAppInterface.reportPermissionResult(name, granted)
+    }
+
+    fun requestRuntimePermissions(name: String, permissions: Array<String>) {
+        pendingPermissionName = name
+        leftForAnotherApp = true
+        permissionLauncher.launch(permissions)
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
