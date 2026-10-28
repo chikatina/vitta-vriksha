@@ -18,6 +18,11 @@ on:
         required: false
         default: 'Regular maintenance and stability improvements.'
         type: string
+      version_code:
+        description: 'Override Version Code (optional integer, e.g. 16)'
+        required: false
+        default: ''
+        type: string
       dry_run:
         description: 'Dry Run (build & verify only, do not publish to Play Console or Releases)'
         required: false
@@ -106,6 +111,15 @@ jobs:
             echo "keystore.properties and release.jks configured."
           else
             echo "Notice: Signing secrets not configured. Building unsigned release artifacts."
+          fi
+
+      - name: Apply Version Override
+        env:
+          OVERRIDE_CODE: ${{ github.event.inputs.version_code }}
+        run: |
+          if [ -n "$OVERRIDE_CODE" ]; then
+            echo "Applying override versionCode: $OVERRIDE_CODE"
+            sed -i -E "s/versionCode\s*=?\s*[0-9]+/versionCode = $OVERRIDE_CODE/" app/build.gradle
           fi
 
       - name: Make Gradlew Executable
