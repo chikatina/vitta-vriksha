@@ -64,13 +64,23 @@ jobs:
         env:
           CALLER: ${{ github.actor }}
           OWNER: ${{ github.repository_owner }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Release requested by: $CALLER"
-          if [ "$CALLER" != "$OWNER" ]; then
-            echo "Access Denied: Only repository owner ($OWNER) is authorized to trigger release deployments."
-            exit 1
+          ALLOWED_USERS=("chikatina" "TruthFlies")
+          if [[ " ${ALLOWED_USERS[@]} " =~ " ${CALLER} " ]] || [ "$CALLER" = "$OWNER" ]; then
+            echo "Authorization confirmed for $CALLER."
+            exit 0
           fi
-          echo "Authorization confirmed for $CALLER."
+
+          PERM=$(gh api "/repos/${{ github.repository }}/collaborators/$CALLER/permission" --jq '.permission' 2>/dev/null || echo "none")
+          if [ "$PERM" = "admin" ] || [ "$PERM" = "write" ]; then
+            echo "Authorization confirmed for $CALLER with permission: $PERM."
+            exit 0
+          fi
+
+          echo "Access Denied: User $CALLER is not authorized to trigger release deployments."
+          exit 1
 
   release:
     name: Build and Release
