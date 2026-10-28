@@ -1,0 +1,236 @@
+name: Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      track:
+        description: 'Google Play track'
+        required: true
+        default: 'internal'
+        type: choice
+        options:
+          - internal
+          - alpha
+          - beta
+          - production
+      release_notes:
+        description: 'Release Notes / Changelog'
+        required: false
+        default: 'Regular maintenance and stability improvements.'
+        type: string
+      dry_run:
+        description: 'Dry Run (build & verify only, do not publish to Play Console or Releases)'
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release-action
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  authorize:
+    name: Verify Release Authorization
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate Release Operator
+        env:
+          CALLER: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          echo "Release requested by: $CALLER"
+          if [ "$CALLER" != "$OWNER" ]; then
+            echo "Access Denied: Only repository owner ($OWNER) is authorized to trigger release deployments."
+            exit 1
+          fi
+          echo "Authorization confirmed for $CALLER."
+
+  release:
+    name: Build and Release
+    needs: authorize
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Node Dependencies
+        run: npm ci || npm install
+
+      - name: Verify Styling and Code Guidelines
+        run: npm run lint
+
+      - name: Run Test Suite
+        run: npm test
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Configure Android Signing Keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "Signing credentials detected. Configuring release signing..."
+            echo "$KEYSTORE_BASE64" | base64 -d > release.jks
+            cat <<EOF > keystore.properties
+          storeFile=release.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+            echo "keystore.properties and release.jks configured."
+          else
+            echo "Notice: Signing secrets not configured. Building unsigned release artifacts."
+          fi
+
+      - name: Make Gradlew Executable
+        run: chmod +x gradlew
+
+      - name: Build Release APK and App Bundle
+        run: ./gradlew assembleRelease bundleRelease --stacktrace
+
+      - name: Extract Version Details
+        id: version_info
+        run: |
+          VERSION_NAME=$(node -e '
+            const fs = require("fs");
+            const content = fs.readFileSync("app/build.gradle", "utf8");
+            const match = content.match(/versionName\s*=?\s*"([^"]+)"/);
+            console.log(match ? match[1] : "latest");
+          ')
+          VERSION_CODE=$(node -e '
+            const fs = require("fs");
+            const content = fs.readFileSync("app/build.gradle", "utf8");
+            const match = content.match(/versionCode\s*=?\s*(\d+)/);
+            console.log(match ? match[1] : "1");
+          ')
+          echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "Resolved version: v$VERSION_NAME (build $VERSION_CODE)"
+
+      - name: Package Release Artifacts
+        run: |
+          mkdir -p release
+          VERSION="${{ steps.version_info.outputs.VERSION_NAME }}"
+
+          APK_SRC="app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "$APK_SRC" ]; then
+            APK_SRC="app/build/outputs/apk/release/app-release-unsigned.apk"
+          fi
+
+          AAB_SRC="app/build/outputs/bundle/release/app-release.aab"
+
+          if [ -f "$APK_SRC" ]; then
+            cp "$APK_SRC" "release/vittavriksha-v${VERSION}-release.apk"
+            echo "APK ready: release/vittavriksha-v${VERSION}-release.apk"
+          fi
+
+          if [ -f "$AAB_SRC" ]; then
+            cp "$AAB_SRC" "release/vittavriksha-v${VERSION}-release.aab"
+            echo "AAB ready: release/vittavriksha-v${VERSION}-release.aab"
+          fi
+
+      - name: Prepare Release Notes
+        id: notes_step
+        env:
+          USER_NOTES: ${{ github.event.inputs.release_notes }}
+          TRIGGER: ${{ github.event_name }}
+          OPERATOR: ${{ github.actor }}
+        run: |
+          NOTES_FILE="release_notes.txt"
+          VERSION="${{ steps.version_info.outputs.VERSION_NAME }}"
+          BUILD="${{ steps.version_info.outputs.VERSION_CODE }}"
+
+          echo "## Vitta Vriksha v${VERSION} (Build ${BUILD})" > "$NOTES_FILE"
+          echo "" >> "$NOTES_FILE"
+          echo "Released by: @${OPERATOR}" >> "$NOTES_FILE"
+          echo "" >> "$NOTES_FILE"
+          echo "### Changelog" >> "$NOTES_FILE"
+          if [ -n "$USER_NOTES" ]; then
+            echo "$USER_NOTES" >> "$NOTES_FILE"
+          else
+            echo "Regular maintenance and performance improvements." >> "$NOTES_FILE"
+          fi
+          echo "" >> "$NOTES_FILE"
+          echo "### Downloads" >> "$NOTES_FILE"
+          echo "- Universal APK: \`vittavriksha-v${VERSION}-release.apk\`" >> "$NOTES_FILE"
+          echo "- Play Store Bundle: \`vittavriksha-v${VERSION}-release.aab\`" >> "$NOTES_FILE"
+
+      - name: Determine Git Tag
+        id: tag_step
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            VERSION="${{ steps.version_info.outputs.VERSION_NAME }}"
+            TAG="v${VERSION}"
+            if git rev-parse "$TAG" >/dev/null 2>&1; then
+              TAG="v${VERSION}-build${{ github.run_number }}"
+            fi
+          fi
+          echo "TAG_NAME=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ steps.tag_step.outputs.TAG_NAME }}
+          VERSION: ${{ steps.version_info.outputs.VERSION_NAME }}
+        run: |
+          FILES=()
+          [ -f "release/vittavriksha-v${VERSION}-release.apk" ] && FILES+=("release/vittavriksha-v${VERSION}-release.apk")
+          [ -f "release/vittavriksha-v${VERSION}-release.aab" ] && FILES+=("release/vittavriksha-v${VERSION}-release.aab")
+
+          gh release create "$TAG_NAME" "${FILES[@]}" \
+            --title "Vitta Vriksha v${VERSION}" \
+            --notes-file release_notes.txt
+
+      - name: Upload to Google Play Console
+        if: ${{ github.event.inputs.dry_run != 'true' && env.PLAY_CONFIG_JSON != '' }}
+        env:
+          PLAY_CONFIG_JSON: ${{ secrets.PLAY_CONFIG_JSON }}
+          TARGET_TRACK: ${{ github.event.inputs.track || 'internal' }}
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_CONFIG_JSON }}
+          packageName: com.chikatistudio.vittavriksha
+          releaseFiles: release/vittavriksha-v${{ steps.version_info.outputs.VERSION_NAME }}-release.aab
+          track: ${{ env.TARGET_TRACK }}
+          status: completed
+
+      - name: Upload Build Artifacts to GitHub Run
+        uses: actions/upload-artifact@v4
+        with:
+          name: vittavriksha-release-v${{ steps.version_info.outputs.VERSION_NAME }}
+          path: release/*
+          retention-days: 90
+
+      - name: Cleanup Sensitive Build Files
+        if: always()
+        run: |
+          rm -f release.jks keystore.properties release_notes.txt
