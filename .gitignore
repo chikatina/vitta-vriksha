@@ -69,3 +69,10 @@ tools/screenshot_*.png
 tools/uidump.xml
 node_modules/
 messages-2026*
+
+# Google Cloud Service Account & API credentials
+*service-account*.json
+*play-config*.json
+*credentials*.json
+pc-api-*.json
+*-key-*.json
