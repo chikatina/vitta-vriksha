@@ -25,6 +25,17 @@ const DEFAULT_AMOUNT_RE = /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i;
 const FALLBACK_AMOUNT_RE = /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i;
 const ACCOUNT_RE = /(?:card|a\/c|acct|account|wallet|vpa)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s]*([0-9]{3,4})\b/i;
 
+export function candidateAccountDigits(r) {
+  if (!r) return '';
+  if (r.account_last4) return String(r.account_last4).trim().slice(-4);
+  if (r.instrument_digits) return String(r.instrument_digits).trim().slice(-4);
+  if (r.raw_sms) {
+    const m = ACCOUNT_RE.exec(r.raw_sms);
+    if (m && m[1]) return m[1].slice(-4);
+  }
+  return '';
+}
+
 export function extractTransactionAmount(text) {
   const t = String(text || '');
 
@@ -533,6 +544,14 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
     }
   }
 
+  // ATM Cash Withdrawal: moving bank balance to physical cash wallet
+  const isAtm = /\b(?:at\s+atm|from\s+atm|atm\s+(?:cash\s+)?w(?:ith)?d(?:rawa)?l|cash\s+withdrawal|withdrew\s+cash|withdrawn\s+at\s+atm)\b/i.test(text);
+  if (isAtm && finalType === 'Expense') {
+    finalType = 'Transfer';
+    finalCategory = 'Transfer';
+    matchedRuleName = 'ATM Cash Withdrawal';
+  }
+
   // 2. Exact UTR counterpart already in database
   const incomingUtr = extractUtr(text);
   if (incomingUtr && finalAmount > 0 && (finalType === 'Expense' || finalType === 'Income')) {
@@ -703,11 +722,19 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
 
   const ctx = buildClassificationContext(db, memberId);
   const txByDateAmount = new Map();
-  for (const row of db.all('SELECT id, date, amount, type, raw_sms FROM transactions WHERE amount > 0')) {
+  for (const row of db.all(`
+    SELECT t.id, t.date, t.amount, t.type, t.raw_sms,
+           COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
+    FROM transactions t
+    LEFT JOIN asset_accounts a ON t.account_id = a.id
+    LEFT JOIN credit_cards c ON t.card_id = c.id
+    WHERE t.amount > 0 AND COALESCE(t.is_ignored, 0) = 0 AND COALESCE(t.is_duplicate, 0) = 0
+  `)) {
     const key = `${row.date}:${row.amount}`;
     if (!txByDateAmount.has(key)) txByDateAmount.set(key, []);
     txByDateAmount.get(key).push({
       ...row,
+      account_last4: candidateAccountDigits(row),
       utr: extractUtr(row.raw_sms),
     });
   }
@@ -914,11 +941,19 @@ async function reimportInbox(db, args) {
 
   const ctx = buildClassificationContext(db, memberId);
   const txByDateAmount = new Map();
-  for (const row of db.all('SELECT id, date, amount, type, raw_sms FROM transactions WHERE amount > 0')) {
+  for (const row of db.all(`
+    SELECT t.id, t.date, t.amount, t.type, t.raw_sms,
+           COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
+    FROM transactions t
+    LEFT JOIN asset_accounts a ON t.account_id = a.id
+    LEFT JOIN credit_cards c ON t.card_id = c.id
+    WHERE t.amount > 0 AND COALESCE(t.is_ignored, 0) = 0 AND COALESCE(t.is_duplicate, 0) = 0
+  `)) {
     const key = `${row.date}:${row.amount}`;
     if (!txByDateAmount.has(key)) txByDateAmount.set(key, []);
     txByDateAmount.get(key).push({
       ...row,
+      account_last4: candidateAccountDigits(row),
       utr: extractUtr(row.raw_sms),
     });
   }
@@ -1055,7 +1090,8 @@ export function duplicateOf(db, { date, amount, body, type = null, accountLast4 
   const rows = db.all(
     `SELECT t.id, t.date, t.amount, t.merchant, t.category, t.type, t.description,
             t.account_id, t.card_id, t.raw_sms,
-            COALESCE(a.name, c.card_name) AS instrument_name
+            COALESCE(a.name, c.card_name) AS instrument_name,
+            COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
      FROM transactions t
      LEFT JOIN asset_accounts a ON t.account_id = a.id
      LEFT JOIN credit_cards c ON t.card_id = c.id
@@ -1074,6 +1110,15 @@ export function duplicateOf(db, { date, amount, body, type = null, accountLast4 
       if (!r.type) return true;
       const rOutflow = r.type === 'Expense' || r.type === 'Investment';
       return isOutflow === rOutflow;
+    });
+  }
+  if (!candidates.length) return null;
+
+  const incomingDigits = String(accountLast4 || '').trim().slice(-4);
+  if (incomingDigits) {
+    candidates = candidates.filter((r) => {
+      const candDigits = candidateAccountDigits(r);
+      return !candDigits || candDigits === incomingDigits;
     });
   }
   if (!candidates.length) return null;
@@ -1113,6 +1158,15 @@ export function duplicateOfFast(txByDateAmount, { date, amount, body, type = nul
       if (!r.type) return true;
       const rOutflow = r.type === 'Expense' || r.type === 'Investment';
       return isOutflow === rOutflow;
+    });
+  }
+  if (!candidates.length) return null;
+
+  const incomingDigits = String(accountLast4 || '').trim().slice(-4);
+  if (incomingDigits) {
+    candidates = candidates.filter((r) => {
+      const candDigits = candidateAccountDigits(r);
+      return !candDigits || candDigits === incomingDigits;
     });
   }
   if (!candidates.length) return null;
@@ -1170,7 +1224,8 @@ async function reviewAlerts(db, args) {
   for (const row of db.all(`
     SELECT t.id, t.date, t.amount, t.merchant, t.category, t.type, t.description,
            t.account_id, t.card_id, t.raw_sms,
-           COALESCE(a.name, c.card_name) AS instrument_name
+           COALESCE(a.name, c.card_name) AS instrument_name,
+           COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
     FROM transactions t
     LEFT JOIN asset_accounts a ON t.account_id = a.id
     LEFT JOIN credit_cards c ON t.card_id = c.id
@@ -1180,6 +1235,7 @@ async function reviewAlerts(db, args) {
     if (!txByDateAmount.has(key)) txByDateAmount.set(key, []);
     txByDateAmount.get(key).push({
       ...row,
+      account_last4: candidateAccountDigits(row),
       utr: extractUtr(row.raw_sms),
     });
   }

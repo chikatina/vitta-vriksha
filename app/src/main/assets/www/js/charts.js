@@ -566,6 +566,53 @@ const WEEKDAY_INITIALS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
  * Days are tappable through the same `data-bucket` contract as the bar charts, so tapping
  * the seventeenth and tapping the bar for the seventeenth land in the same place.
  */
+
+/**
+ * Multi-week rolling spending heatmap matrix (GitHub-style calendar grid).
+ *
+ * 7 rows representing Monday to Sunday, with columns representing weeks.
+ * Supports highlighting "No-Spend Days" where the user had zero discretionary spending.
+ */
+export function heatMatrix(cells, { format, selected = '', empty = 'No spending recorded.' } = {}) {
+  const days = (cells || []).filter((cell) => cell && cell.date);
+  if (!days.length) {
+    return `<div class="caption" style="text-align:center;padding:20px 0">${h(empty)}</div>`;
+  }
+
+  const max = Math.max(...days.map((cell) => Number(cell.value) || 0), 1);
+
+  const cellsHtml = days.map((cell) => {
+    const value = Number(cell.value) || 0;
+    const isNoSpend = cell.is_no_spend || value === 0;
+    const weight = value > 0 ? 0.15 + (value / max) * 0.65 : 0;
+    const title = `${cell.date}: ${value > 0 ? (format ? format(value) : Math.round(value)) : 'No spend'}`;
+    const cellClass = `heat-matrix-cell ${isNoSpend ? 'is-no-spend' : ''} ${cell.date === selected ? 'is-selected' : ''}`;
+
+    return `
+      <button type="button" class="${cellClass}"
+              data-bucket="${h(cell.date)}"
+              style="--heat:${weight.toFixed(3)}"
+              title="${h(title)}"
+              aria-label="${h(title)}"></button>`;
+  }).join('');
+
+  return `
+    <div class="heat-matrix-wrapper">
+      <div class="heat-matrix-grid">
+        ${cellsHtml}
+      </div>
+      <div class="heat-matrix-legend">
+        <span class="caption">No spend</span>
+        <span class="heat-matrix-cell is-no-spend" style="display:inline-block;vertical-align:middle;margin:0 4px"></span>
+        <span class="caption" style="margin-left:8px">Less</span>
+        <span class="heat-matrix-cell" style="display:inline-block;vertical-align:middle;--heat:0.15;margin:0 2px"></span>
+        <span class="heat-matrix-cell" style="display:inline-block;vertical-align:middle;--heat:0.45;margin:0 2px"></span>
+        <span class="heat-matrix-cell" style="display:inline-block;vertical-align:middle;--heat:0.8;margin:0 2px"></span>
+        <span class="caption">More</span>
+      </div>
+    </div>`;
+}
+
 export function heatCalendar(cells, { format, selected = '', empty = 'Nothing spent in this period.' } = {}) {
   const days = (cells || []).filter((cell) => cell && cell.date);
   if (!days.length) {

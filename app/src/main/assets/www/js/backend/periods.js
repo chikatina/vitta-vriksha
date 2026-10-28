@@ -203,3 +203,47 @@ export function spanDays(from, to) {
   const span = daysBetween(from, to);
   return span && span > 0 ? span : 1;
 }
+
+/**
+ * Calculates a custom financial month range starting on an anchor day of the month (e.g. 25th for salary).
+ */
+export function getFinancialPeriod(value, anchorDay = 1) {
+  const date = parseISO(value) || new Date();
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const day = date.getDate();
+  const anchor = Math.max(1, Math.min(28, Number(anchorDay) || 1));
+
+  if (anchor === 1) {
+    const nextMonth = month === 11 ? 0 : month + 1;
+    const nextYear = month === 11 ? year + 1 : year;
+    return {
+      from: `${year}-${pad(month + 1)}-01`,
+      to: `${nextYear}-${pad(nextMonth + 1)}-01`,
+    };
+  }
+
+  let startYear = year;
+  let startMonth = month;
+  let endYear = year;
+  let endMonth = month;
+
+  if (day >= anchor) {
+    if (month === 11) {
+      endYear += 1;
+      endMonth = 0;
+    } else {
+      endMonth += 1;
+    }
+  } else if (month === 0) {
+    startYear -= 1;
+    startMonth = 11;
+  } else {
+    startMonth -= 1;
+  }
+
+  return {
+    from: `${startYear}-${pad(startMonth + 1)}-${pad(anchor)}`,
+    to: `${endYear}-${pad(endMonth + 1)}-${pad(anchor)}`,
+  };
+}

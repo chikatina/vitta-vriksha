@@ -71,6 +71,15 @@ export const ERROR_CODES = {
   CSV_EMPTY: 'The CSV file contains no transaction rows.',
   CSV_UNKNOWN_HEADER: 'Could not identify tradebook headers in the CSV file.',
   CSV_MISSING_COLUMNS: 'CSV is missing essential trade columns.',
+
+  // Custom Buckets
+  BUCKET_NOT_FOUND: 'The specified transaction bucket was not found.',
+  BUCKET_NAME_REQUIRED: 'A name is required for the bucket.',
+
+  // UPI and Statement PDF import
+  STATEMENT_PARSE_FAILED: 'Could not extract valid transactions from this statement.',
+  STATEMENT_UNSUPPORTED: 'The statement format is not recognized or supported.',
+  IMPORT_EMPTY: 'No valid records to import were found.',
 };
 
 /** Builds an error reply. An unregistered code is surfaced rather than hidden. */

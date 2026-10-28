@@ -5,4 +5,9 @@
     <string name="biometric_prompt_title">Unlock Vitta Vriksha</string>
     <string name="biometric_prompt_subtitle">Confirm your identity to open your finances</string>
     <string name="biometric_prompt_cancel">Use PIN</string>
+    <string name="quick_add_tile_label">Add Expense</string>
+    <string name="shortcut_add_expense_short">Add Expense</string>
+    <string name="shortcut_add_expense_long">Record new transaction</string>
+    <string name="shortcut_review_alerts_short">Review SMS</string>
+    <string name="shortcut_review_alerts_long">Review pending bank alerts</string>
 </resources>

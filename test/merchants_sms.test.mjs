@@ -5,7 +5,7 @@ import {
   merchantKey, notATransaction, extractMerchant, categoryForMerchant,
 } from '../app/src/main/assets/www/js/backend/merchants.js';
 import {
-  parseSmsText, handleSmsAction,
+  parseSmsText, handleSmsAction, duplicateOf,
 } from '../app/src/main/assets/www/js/backend/sms.js';
 import { handleDbAction } from '../app/src/main/assets/www/js/backend/database.js';
 
@@ -723,7 +723,34 @@ describe('sms.js SMS classifier and dispatcher', () => {
 
     delete globalThis.window;
   });
+
+  it('does not treat identical amounts on same date on different cards as duplicates', async () => {
+    const originalSms = 'INR 500.00 spent on ICICI Bank Card XX1234 on 30-Jul-2026 at Petrol Pump.';
+    const incomingSms = 'INR 500.00 spent on HDFC Bank Card XX5678 on 30-Jul-2026 at Grocery Store.';
+
+    await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-07-30',
+        amount: 500,
+        merchant: 'Petrol Pump',
+        category: 'Fuel',
+        type: 'Expense',
+        raw_sms: originalSms,
+      },
+    });
+
+    const parsedIncoming = await parseSmsText(incomingSms, 'HDFCBK');
+    assert.equal(parsedIncoming.account_last4, '5678');
+
+    const isDup = duplicateOf(db, {
+      date: '2026-07-30',
+      amount: 500,
+      body: incomingSms,
+      type: 'Expense',
+      accountLast4: '5678',
+    });
+
+    assert.equal(isDup, null, 'Transactions on different cards must not be marked as duplicates');
+  });
 });
-
-
-

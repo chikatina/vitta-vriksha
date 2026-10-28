@@ -556,7 +556,7 @@ export async function renderSmsIngest(container, app) {
               instrument_type: item.instrument_type,
             });
             addedIndices.add(idx);
-            toast(`Added ${recordPayload.name || recordPayload.card_name}!`, 'success');
+            toast(`Added ${recordPayload.name || recordPayload.card_name}.`, 'success');
             renderSummaryAndSections();
           } else {
             toast(saveRes?.message || 'Could not add record.', 'error');
@@ -587,7 +587,7 @@ export async function renderSmsIngest(container, app) {
 
           if (addRes && addRes.status === 'success') {
             progress.complete(`Added ${addRes.added} accounts & cards!`, 350);
-            toast(`Added ${addRes.added} accounts and cards!`, 'success');
+            toast(`Added ${addRes.added} accounts and cards.`, 'success');
             discovered.forEach((_, i) => addedIndices.add(i));
             renderSummaryAndSections();
           } else {
@@ -665,7 +665,7 @@ export async function renderSmsIngest(container, app) {
     renderSummaryAndSections();
 
     if (res.imported > 0) {
-      toast(`Imported ${res.imported} transactions from bank messages!`, 'success');
+      toast(`Imported ${res.imported} transactions from bank messages.`, 'success');
     } else {
       toast(`Scan complete. ${res.read} messages reviewed.`, 'info');
     }

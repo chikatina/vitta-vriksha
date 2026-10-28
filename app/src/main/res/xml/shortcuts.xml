@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="shortcut_add_expense"
+        android:enabled="true"
+        android:icon="@drawable/ic_quick_add"
+        android:shortcutShortLabel="@string/shortcut_add_expense_short"
+        android:shortcutLongLabel="@string/shortcut_add_expense_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.chikatistudio.vittavriksha"
+            android:targetClass="com.chikatistudio.vittavriksha.MainActivity">
+            <extra android:name="action" android:value="quick_add" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="shortcut_review_alerts"
+        android:enabled="true"
+        android:icon="@drawable/ic_quick_add"
+        android:shortcutShortLabel="@string/shortcut_review_alerts_short"
+        android:shortcutLongLabel="@string/shortcut_review_alerts_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.chikatistudio.vittavriksha"
+            android:targetClass="com.chikatistudio.vittavriksha.MainActivity">
+            <extra android:name="action" android:value="review-alerts" />
+        </intent>
+    </shortcut>
+</shortcuts>

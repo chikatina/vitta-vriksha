@@ -871,7 +871,7 @@ export async function renderRecordPage(container, app, type) {
             last_4: last4,
             instrument_type: item.instrument_type,
           });
-          toast(`Added ${recordPayload.name || recordPayload.card_name}!`, 'success');
+          toast(`Added ${recordPayload.name || recordPayload.card_name}.`, 'success');
           app.refresh();
         } else {
           toast(res?.message || 'Could not add account.', 'error');
@@ -926,7 +926,7 @@ export async function renderRecordPage(container, app, type) {
           });
           if (res && res.status === 'success') {
             progress.complete(`Added ${res.added || discovered.length} accounts!`, 350);
-            toast(`Added ${res.added || discovered.length} accounts!`, 'success');
+            toast(`Added ${res.added || discovered.length} accounts.`, 'success');
             app.refresh();
           } else {
             progress.fail('Failed to add accounts.');
@@ -1262,7 +1262,7 @@ async function openRecordSheet(app, type, existing, preset = null) {
             if (type === 'account') {
               const balInput = node.querySelector('[data-field="balance"]');
               if (balInput && item.balance !== undefined) balInput.value = item.balance;
-              toast(`Resynced! Balance updated to ${formatCurrency(item.balance, app.currency, app.locale)} (${item.remapped_transactions} txns linked).`, 'success');
+              toast(`Balance updated to ${formatCurrency(item.balance, app.currency, app.locale)} (${item.remapped_transactions} txns linked).`, 'success');
             } else {
               const curBalInput = node.querySelector('[data-field="current_balance"]');
               const availInput = node.querySelector('[data-field="available_limit"]');
@@ -1270,7 +1270,7 @@ async function openRecordSheet(app, type, existing, preset = null) {
               if (curBalInput && item.current_balance !== undefined) curBalInput.value = item.current_balance;
               if (availInput && item.available_limit !== null && item.available_limit !== undefined) availInput.value = item.available_limit;
               if (totInput && item.total_limit) totInput.value = item.total_limit;
-              toast(`Resynced! Card updated (${item.remapped_transactions} txns linked).`, 'success');
+              toast(`Card updated (${item.remapped_transactions} txns linked).`, 'success');
             }
           } else {
             toast(res?.message || 'Could not resync from SMS.', 'error');
@@ -1295,7 +1295,7 @@ async function openRecordSheet(app, type, existing, preset = null) {
           });
 
           if (res && res.status === 'success') {
-            toast('Converted to Credit Card!', 'success');
+            toast('Converted to Credit Card.', 'success');
             close(true);
           } else {
             toast(res?.message || 'Could not convert account.', 'error');
@@ -1319,7 +1319,7 @@ async function openRecordSheet(app, type, existing, preset = null) {
           });
 
           if (res && res.status === 'success') {
-            toast('Converted to Bank Account with Debit Card!', 'success');
+            toast('Converted to Bank Account with Debit Card.', 'success');
             close(true);
           } else {
             toast(res?.message || 'Could not convert card.', 'error');
@@ -1424,7 +1424,7 @@ async function openRecordSheet(app, type, existing, preset = null) {
               balance_action: targetCardResult.balanceAction,
             });
             if (mergeRes.status === 'success') {
-              toast(`Merged card! (${mergeRes.moved_transactions || 0} transactions updated)`, 'success');
+              toast(`Merged card (${mergeRes.moved_transactions || 0} transactions updated).`, 'success');
               close(true);
               app.refresh();
             } else {
@@ -1548,7 +1548,7 @@ async function openRecordSheet(app, type, existing, preset = null) {
               balance_action: targetAccResult.balanceAction,
             });
             if (mergeRes.status === 'success') {
-              toast(`Merged account! (${mergeRes.moved_transactions || 0} transactions updated)`, 'success');
+              toast(`Merged account (${mergeRes.moved_transactions || 0} transactions updated).`, 'success');
               close(true);
               app.refresh();
             } else {

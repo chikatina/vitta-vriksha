@@ -26,7 +26,7 @@ import {
  * CRUD and the front door.
  */
 import {
-  memberClause, monthBounds, monthKeys, number, pad, today,
+  isoDate, memberClause, monthBounds, monthKeys, number, pad, parseISO, today,
 } from './periods.js';
 import {
   breakdownDimensions, getBreakdown, getPeriodSummary, getSeries, getSpendingAnomalies, seriesMetrics,
@@ -247,7 +247,7 @@ const DEFAULT_SMS_RULES = [
   ['Account debit', '', 'debited from', 'Expense', 'Shopping', AMOUNT_PATTERN],
   ['Account debit to', '', 'debited', 'Expense', 'Shopping', AMOUNT_PATTERN],
   ['Payment deducted', '', 'deducted from', 'Expense', 'Shopping', AMOUNT_PATTERN],
-  ['Cash withdrawal', '', 'withdrawn', 'Expense', 'Shopping', AMOUNT_PATTERN],
+  ['Cash withdrawal', '', 'withdrawn', 'Transfer', 'Transfer', AMOUNT_PATTERN],
   ['Transfer out', '', 'transferred to', 'Expense', 'Shopping', AMOUNT_PATTERN],
 
   // Money arriving. A card bill paid off and a wallet topped up also read as a credit,
@@ -322,6 +322,7 @@ const DEFAULT_SETTINGS = {
   home_widgets: '',
   daily_review_reminder_enabled: '1',
   daily_review_reminder_time: '21:00',
+  budget_cycle_start_day: '1',
 };
 
 /**
@@ -332,7 +333,7 @@ const DEFAULT_SETTINGS = {
  * and delete in reverse, and the foreign keys hold at every statement.
  */
 const BACKUP_TABLES = [
-  'family_members', 'asset_accounts', 'credit_cards', 'transactions', 'transaction_splits',
+  'family_members', 'asset_accounts', 'credit_cards', 'transaction_buckets', 'transactions', 'transaction_splits',
   'transaction_cashbacks', 'mf_folios', 'folio_transactions', 'demat_holdings',
   'nps_holdings', 'loans',
   'subscriptions', 'sips', 'goals', 'custom_events', 'custom_categories',
@@ -379,6 +380,9 @@ const RECORD_TYPES = {
   event: ['custom_events',
     ['member_id', 'title', 'event_date', 'event_type', 'notes', 'reminder_days_before'],
     'event_date'],
+  bucket: ['transaction_buckets',
+    ['member_id', 'name', 'icon', 'color', 'target_budget', 'start_date', 'end_date', 'status', 'notes', 'created_at'],
+    'name'],
   mf_folio: ['mf_folios',
     ['member_id', 'folio_number', 'amc', 'scheme_name', 'isin', 'units', 'nav',
       'current_value', 'invested_value', 'last_updated', 'source', 'scope'],
@@ -419,6 +423,9 @@ const RECORD_TYPE_ALIASES = {
   custom_events: 'event',
   events: 'event',
   event: 'event',
+  transaction_buckets: 'bucket',
+  buckets: 'bucket',
+  bucket: 'bucket',
   mf_folios: 'mf_folio',
   folios: 'mf_folio',
   mf_folio: 'mf_folio',
@@ -502,6 +509,22 @@ export function initDb(db, force = false) {
         FOREIGN KEY (member_id) REFERENCES family_members(id)
     );
 
+    CREATE TABLE IF NOT EXISTS transaction_buckets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        member_id INTEGER DEFAULT 1,
+        name TEXT NOT NULL,
+        icon TEXT DEFAULT 'folder',
+        color TEXT DEFAULT '#3B82F6',
+        target_budget REAL DEFAULT 0.0,
+        start_date TEXT,
+        end_date TEXT,
+        status TEXT DEFAULT 'active',
+        notes TEXT,
+        created_at TEXT,
+        FOREIGN KEY (member_id) REFERENCES family_members(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_buckets_member ON transaction_buckets(member_id);
+
     CREATE TABLE IF NOT EXISTS transactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         member_id INTEGER DEFAULT 1,
@@ -520,10 +543,12 @@ export function initDb(db, force = false) {
         sender TEXT,
         is_ignored INTEGER DEFAULT 0,
         is_duplicate INTEGER DEFAULT 0,
+        bucket_id INTEGER DEFAULT NULL,
         created_at TEXT,
         FOREIGN KEY (member_id) REFERENCES family_members(id),
         FOREIGN KEY (account_id) REFERENCES asset_accounts(id),
-        FOREIGN KEY (card_id) REFERENCES credit_cards(id)
+        FOREIGN KEY (card_id) REFERENCES credit_cards(id),
+        FOREIGN KEY (bucket_id) REFERENCES transaction_buckets(id)
     );
     CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date DESC);
     CREATE INDEX IF NOT EXISTS idx_tx_member ON transactions(member_id);
@@ -951,6 +976,27 @@ export const MIGRATIONS = [
       addColumnIfMissing(db, 'asset_accounts', 'debit_card_last_4', "TEXT DEFAULT ''");
       addColumnIfMissing(db, 'asset_accounts', 'account_type', "TEXT DEFAULT ''");
       addColumnIfMissing(db, 'custom_categories', 'monthly_budget', 'REAL DEFAULT 0.0');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS transaction_buckets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        member_id INTEGER DEFAULT 1,
+        name TEXT NOT NULL,
+        icon TEXT DEFAULT 'folder',
+        color TEXT DEFAULT '#3B82F6',
+        target_budget REAL DEFAULT 0.0,
+        start_date TEXT,
+        end_date TEXT,
+        status TEXT DEFAULT 'active',
+        notes TEXT,
+        created_at TEXT,
+        FOREIGN KEY (member_id) REFERENCES family_members(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_buckets_member ON transaction_buckets(member_id);
+  `);
+  addColumnIfMissing(db, 'transactions', 'bucket_id', 'INTEGER REFERENCES transaction_buckets(id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_tx_bucket ON transactions(bucket_id);');
+  db.run("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('budget_cycle_start_day', '1')");
+
     },
   },
   {
@@ -2814,6 +2860,10 @@ function getTransactions(db, args) {
     filters.push('t.card_id = ?');
     params.push(Number(args.card_id));
   }
+  if (args.bucket_id) {
+    filters.push('t.bucket_id = ?');
+    params.push(Number(args.bucket_id));
+  }
   if (args.weekday !== undefined && args.weekday !== null && args.weekday !== '') {
     // SQLite counts weekdays from Sunday, the same way JavaScript does.
     filters.push("CAST(strftime('%w', t.date) AS INTEGER) = ?");
@@ -2864,10 +2914,14 @@ function getTransactions(db, args) {
       a.institution AS account_institution,
       c.card_name AS card_name,
       c.bank AS card_bank,
-      c.last_4 AS card_last_4
+      c.last_4 AS card_last_4,
+      b.name AS bucket_name,
+      b.icon AS bucket_icon,
+      b.color AS bucket_color
     FROM transactions t
     LEFT JOIN asset_accounts a ON t.account_id = a.id
     LEFT JOIN credit_cards c ON t.card_id = c.id
+    LEFT JOIN transaction_buckets b ON t.bucket_id = b.id
     ${where} ORDER BY t.date DESC, t.id DESC LIMIT ?`,
     [...params, limit],
   );
@@ -2994,6 +3048,7 @@ function saveTransaction(db, args) {
   }
 
   const sender = String(transaction.sender ?? '');
+  const bucketId = transaction.bucket_id !== undefined && transaction.bucket_id !== null && transaction.bucket_id !== '' ? Number(transaction.bucket_id) : null;
 
   const values = [
     resolveMemberId(db, transaction.member_id),
@@ -3011,6 +3066,7 @@ function saveTransaction(db, args) {
     sender,
     isIgnored,
     isDuplicate,
+    bucketId,
   ];
 
   let oldTx = null;
@@ -3021,7 +3077,7 @@ function saveTransaction(db, args) {
       'UPDATE transactions SET member_id = ?, account_id = ?, card_id = ?, date = ?, amount = ?,'
       + ' currency = ?, type = ?, category = ?, merchant = ?,'
       + ' description = ?, is_investment_outflow = ?, raw_sms = ?, sender = ?,'
-      + ' is_ignored = ?, is_duplicate = ? WHERE id = ?',
+      + ' is_ignored = ?, is_duplicate = ?, bucket_id = ? WHERE id = ?',
       [...values, transactionId],
     );
     db.run('DELETE FROM transaction_splits WHERE transaction_id = ?', [transactionId]);
@@ -3030,7 +3086,7 @@ function saveTransaction(db, args) {
     const result = db.run(
       'INSERT INTO transactions (member_id, account_id, card_id, date, amount, currency, type,'
       + ' category, merchant, description, is_investment_outflow, raw_sms, sender,'
-      + ' is_ignored, is_duplicate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      + ' is_ignored, is_duplicate, bucket_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [...values, new Date().toISOString()],
     );
     transactionId = result.lastInsertRowid;
@@ -5288,7 +5344,226 @@ async function factoryReset() {
   return { reset: true };
 }
 
+
+/* ------------------------------------------------------------- custom buckets */
+
+function getTransactionBuckets(db, args) {
+  const memberId = resolveMemberId(db, args.member_id);
+  const rows = db.all(`
+    SELECT b.*,
+           COALESCE(SUM(CASE WHEN t.type IN ('Expense', 'debit') AND COALESCE(t.is_ignored, 0) = 0 THEN t.amount ELSE 0 END), 0) AS total_spent,
+           COALESCE(SUM(CASE WHEN t.type IN ('Income', 'credit') AND COALESCE(t.is_ignored, 0) = 0 THEN t.amount ELSE 0 END), 0) AS total_income,
+           COUNT(t.id) AS transaction_count
+    FROM transaction_buckets b
+    LEFT JOIN transactions t ON t.bucket_id = b.id
+    WHERE b.member_id = ?
+    GROUP BY b.id
+    ORDER BY CASE WHEN b.status = 'active' THEN 0 ELSE 1 END, b.created_at DESC
+  `, [memberId]);
+
+  for (const row of rows) {
+    const budget = Number(row.target_budget) || 0;
+    const spent = Number(row.total_spent) || 0;
+    row.progress_pct = budget > 0 ? Math.min(100, Math.round((spent / budget) * 100)) : 0;
+    row.is_over_budget = budget > 0 && spent > budget;
+  }
+
+  return { buckets: rows };
+}
+
+function getBucketDetails(db, args) {
+  const bucketId = Number(args.bucket_id || args.id);
+  if (!bucketId) return fail('BAD_REQUEST', 'Bucket ID is required.');
+
+  const bucket = db.get('SELECT * FROM transaction_buckets WHERE id = ?', [bucketId]);
+  if (!bucket) return fail('BUCKET_NOT_FOUND', 'Bucket not found.');
+
+  const summary = db.get(`
+    SELECT COALESCE(SUM(CASE WHEN type IN ('Expense', 'debit') AND COALESCE(is_ignored, 0) = 0 THEN amount ELSE 0 END), 0) AS total_spent,
+           COALESCE(SUM(CASE WHEN type IN ('Income', 'credit') AND COALESCE(is_ignored, 0) = 0 THEN amount ELSE 0 END), 0) AS total_income,
+           COUNT(*) AS transaction_count
+    FROM transactions
+    WHERE bucket_id = ?
+  `, [bucketId]);
+
+  const categories = db.all(`
+    SELECT category, SUM(amount) AS total, COUNT(*) AS count
+    FROM transactions
+    WHERE bucket_id = ? AND type IN ('Expense', 'debit') AND COALESCE(is_ignored, 0) = 0
+    GROUP BY category
+    ORDER BY total DESC
+  `, [bucketId]);
+
+  const transactions = db.all(`
+    SELECT t.*, a.name AS account_name, c.card_name, c.last_4 AS card_last_4
+    FROM transactions t
+    LEFT JOIN asset_accounts a ON t.account_id = a.id
+    LEFT JOIN credit_cards c ON t.card_id = c.id
+    WHERE t.bucket_id = ?
+    ORDER BY t.date DESC, t.id DESC
+  `, [bucketId]);
+
+  return {
+    bucket: {
+      ...bucket,
+      ...summary,
+      categories,
+    },
+    transactions,
+  };
+}
+
+function saveTransactionBucket(db, args) {
+  const bucket = args.bucket || args;
+  const name = String(bucket.name || '').trim();
+  if (!name) return fail('BUCKET_NAME_REQUIRED', 'Enter a name for the bucket.');
+
+  const memberId = resolveMemberId(db, bucket.member_id);
+  const budget = Number(bucket.target_budget) || 0;
+  const icon = String(bucket.icon || 'folder').trim();
+  const color = String(bucket.color || '#3B82F6').trim();
+  const startDate = bucket.start_date || null;
+  const endDate = bucket.end_date || null;
+  const status = bucket.status === 'archived' ? 'archived' : 'active';
+  const notes = String(bucket.notes || '').trim();
+
+  let id = bucket.id ? Number(bucket.id) : null;
+  if (id) {
+    db.run(`
+      UPDATE transaction_buckets
+      SET name = ?, icon = ?, color = ?, target_budget = ?, start_date = ?, end_date = ?, status = ?, notes = ?
+      WHERE id = ?
+    `, [name, icon, color, budget, startDate, endDate, status, notes, id]);
+  } else {
+    const res = db.run(`
+      INSERT INTO transaction_buckets (member_id, name, icon, color, target_budget, start_date, end_date, status, notes, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [memberId, name, icon, color, budget, startDate, endDate, status, notes, new Date().toISOString()]);
+    id = res.lastInsertRowid;
+  }
+
+  return { status: 'success', id, name };
+}
+
+function deleteTransactionBucket(db, args) {
+  const id = Number(args.bucket_id || args.id);
+  if (!id) return fail('BAD_REQUEST', 'Bucket ID is required.');
+  db.run('UPDATE transactions SET bucket_id = NULL WHERE bucket_id = ?', [id]);
+  db.run('DELETE FROM transaction_buckets WHERE id = ?', [id]);
+  return { status: 'success', deleted_id: id };
+}
+
+function assignTransactionsBucket(db, args) {
+  const bucketId = args.bucket_id ? Number(args.bucket_id) : null;
+  const ids = Array.isArray(args.ids) ? args.ids.map(Number).filter(Boolean) : [];
+  if (!ids.length) return fail('BAD_REQUEST', 'No transaction IDs specified.');
+
+  db.transaction(() => {
+    for (const id of ids) {
+      db.run('UPDATE transactions SET bucket_id = ? WHERE id = ?', [bucketId, id]);
+    }
+  });
+
+  return { status: 'success', updated_count: ids.length, bucket_id: bucketId };
+}
+
+function getSpendingHeatmapAction(db, args) {
+  const memberId = resolveMemberId(db, args.member_id);
+  const daysCount = Math.max(28, Math.min(365, Number(args.days) || 84));
+  const endDate = args.end_date || today();
+  const end = parseISO(endDate) || new Date();
+
+  const dayOfWeek = (end.getDay() + 6) % 7;
+  const alignedEnd = new Date(end.getTime() + (6 - dayOfWeek) * 86400000);
+  const start = new Date(alignedEnd.getTime() - (daysCount - 1) * 86400000);
+
+  const fromDate = isoDate(start);
+  const toDate = isoDate(alignedEnd);
+
+  const rows = db.all(`
+    SELECT date,
+           COALESCE(SUM(amount), 0) AS total_spent,
+           COUNT(*) AS count
+    FROM transactions
+    WHERE member_id = ?
+      AND date >= ? AND date <= ?
+      AND type IN ('Expense', 'debit')
+      AND COALESCE(is_ignored, 0) = 0
+    GROUP BY date
+  `, [memberId, fromDate, toDate]);
+
+  const spendMap = new Map();
+  for (const r of rows) {
+    spendMap.set(r.date, { total: Number(r.total_spent) || 0, count: Number(r.count) || 0 });
+  }
+
+  const cells = [];
+  let noSpendDays = 0;
+  let currentStreak = 0;
+  let maxStreak = 0;
+  let tempStreak = 0;
+  let totalSpent = 0;
+
+  const cur = new Date(start.getTime());
+  while (cur <= alignedEnd) {
+    const dStr = isoDate(cur);
+    const entry = spendMap.get(dStr) || { total: 0, count: 0 };
+    const isNoSpend = entry.total === 0;
+
+    if (isNoSpend) {
+      noSpendDays += 1;
+      tempStreak += 1;
+      if (tempStreak > maxStreak) maxStreak = tempStreak;
+    } else {
+      tempStreak = 0;
+    }
+
+    totalSpent += entry.total;
+
+    cells.push({
+      date: dStr,
+      value: entry.total,
+      count: entry.count,
+      is_no_spend: isNoSpend,
+    });
+
+    cur.setDate(cur.getDate() + 1);
+  }
+
+  const todayStr = today();
+  const todayIdx = cells.findIndex((c) => c.date === todayStr);
+  if (todayIdx !== -1) {
+    for (let i = todayIdx; i >= 0; i -= 1) {
+      if (cells[i].is_no_spend) {
+        currentStreak += 1;
+      } else {
+        break;
+      }
+    }
+  }
+
+  return {
+    status: 'success',
+    cells,
+    days_count: cells.length,
+    no_spend_days: noSpendDays,
+    current_no_spend_streak: currentStreak,
+    longest_no_spend_streak: maxStreak,
+    total_spent: totalSpent,
+    average_daily_spent: cells.length > 0 ? Math.round(totalSpent / cells.length) : 0,
+  };
+}
+
 const ACTIONS = {
+  get_transaction_buckets: getTransactionBuckets,
+  get_bucket_details: getBucketDetails,
+  save_transaction_bucket: saveTransactionBucket,
+  delete_transaction_bucket: deleteTransactionBucket,
+  assign_transactions_bucket: assignTransactionsBucket,
+  get_spending_heatmap: getSpendingHeatmapAction,
+  parse_statement: async (db, args) => { const { parseStatementAction } = await import('./statement_parser.js'); return parseStatementAction(args); },
+  import_statement_transactions: async (db, args) => { const { importStatementTransactionsAction } = await import('./statement_parser.js'); return importStatementTransactionsAction(args); },
+  nlq_query: async (db, args) => { const { executeNlqAction } = await import('./nlq.js'); return executeNlqAction(args); },
   get_settings: getSettings,
   update_setting: updateSetting,
   set_pin: setPin,

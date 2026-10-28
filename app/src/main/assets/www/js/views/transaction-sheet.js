@@ -20,12 +20,14 @@ const TYPES = [
  * Resolves true when something was written.
  */
 export async function openTransactionSheet(app, existing = null) {
-  const [categoryRes, memberRes, accountsRes, cardsRes] = await Promise.all([
+  const [categoryRes, memberRes, accountsRes, cardsRes, bucketsRes] = await Promise.all([
     Bridge.db('get_categories'),
     Bridge.db('get_family_members'),
     Bridge.db('list_records', { record_type: 'account' }),
     Bridge.db('list_records', { record_type: 'card' }),
+    Bridge.db('get_transaction_buckets', { member_id: app.memberFilter }),
   ]);
+  const buckets = bucketsRes.buckets || [];
 
   const categories = categoryRes.categories || [];
   const members = memberRes.members || [];
@@ -61,6 +63,15 @@ export async function openTransactionSheet(app, existing = null) {
     })),
   ];
 
+  const bucketOptions = [
+    { value: '', label: 'None (Standard)' },
+    ...buckets.map((b) => ({
+      value: String(b.id),
+      label: b.name,
+      sub: b.status === 'active' ? (b.target_budget ? `Budget: ${formatCurrency(b.target_budget)}` : 'Active') : 'Archived',
+    })),
+  ];
+
   const draft = {
     id: existing?.id || null,
     type: existing?.type || 'Expense',
@@ -77,6 +88,7 @@ export async function openTransactionSheet(app, existing = null) {
     splits: existing?.splits ? [...existing.splits] : [],
     cashbacks: existing?.cashbacks ? [...existing.cashbacks] : [],
     raw_sms: existing?.raw_sms || '',
+    bucket_id: existing?.bucket_id ? String(existing.bucket_id) : '',
   };
 
   if (draft.is_investment_outflow) draft.type = 'Investment';
@@ -181,6 +193,16 @@ export async function openTransactionSheet(app, existing = null) {
       </div>
     </details>
 
+    ${buckets.length ? `
+    <div class="field" style="margin-top:var(--gap-2)">
+      ${selectField({
+        key: 'bucket',
+        label: 'Bucket / Trip',
+        id: 'txBucket',
+        value: draft.bucket_id,
+        options: bucketOptions,
+      })}
+    </div>` : ''}
     <div class="field">
       <label class="field-label" for="txNote">Note</label>
       <textarea class="textarea" id="txNote" data-note rows="2"
@@ -370,6 +392,10 @@ export async function openTransactionSheet(app, existing = null) {
         if (instVal.startsWith('acc:')) accountId = Number(instVal.slice(4));
         else if (instVal.startsWith('card:')) cardId = Number(instVal.slice(5));
 
+        const bucketBtn = node.querySelector('#txBucket') || node.querySelector('[data-field="bucket"]');
+        const bucketVal = bucketBtn?.value || '';
+        const bucketId = bucketVal ? Number(bucketVal) : null;
+
         const payload = {
           id: draft.id,
           type: draft.type === 'Investment' ? 'Expense' : draft.type,
@@ -381,6 +407,7 @@ export async function openTransactionSheet(app, existing = null) {
           member_id: Number($('[data-member]')?.value || draft.member_id),
           account_id: accountId,
           card_id: cardId,
+          bucket_id: bucketId,
           description: $('[data-note]').value.trim(),
           raw_sms: draft.raw_sms,
           currency: app.currency,
