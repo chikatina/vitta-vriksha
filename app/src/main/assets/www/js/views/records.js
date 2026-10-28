@@ -237,6 +237,8 @@ export const RECORD_CONFIG = {
       { key: 'name', label: 'Name', type: 'text', required: true, placeholder: 'Home loan' },
       { key: 'direction', label: 'Direction', type: 'select', options: LOAN_DIRECTIONS, half: true, default: 'borrowed' },
       { key: 'loan_type', label: 'Kind', type: 'select', options: LOAN_TYPES, half: true },
+      { key: 'lender', label: 'Lender / Bank', type: 'text', half: true, placeholder: 'e.g. Bank of India' },
+      { key: 'account_number', label: 'A/c Number / Last 4', type: 'text', half: true, placeholder: 'e.g. 0039' },
       { key: 'principal_amount', label: 'Principal', type: 'number', required: true, half: true },
       { key: 'current_outstanding', label: 'Outstanding', type: 'number', required: true, half: true },
       { key: 'interest_rate', label: 'Rate %', type: 'number', required: true, half: true, default: 8.5 },
@@ -277,9 +279,11 @@ export const RECORD_CONFIG = {
         title: r.name,
         sub: [
           isLent(r) ? 'Lent' : 'Borrowed',
+          r.lender || '',
+          (r.last_4 || r.account_number) ? `ending ${r.last_4 || String(r.account_number).slice(-4)}` : '',
           r.loan_type,
-          `${r.interest_rate}%`,
-          `${Math.round(r.monthly_emi)}/mo`,
+          r.interest_rate ? `${r.interest_rate}%` : '',
+          r.monthly_emi ? `${Math.round(r.monthly_emi)}/mo` : '',
           emiLeftStr,
         ].filter(Boolean).join(' · '),
         amount: r.current_outstanding,
@@ -311,7 +315,7 @@ export const RECORD_CONFIG = {
       const bal = Number(r.current_balance) || 0;
       const avail = r.available_limit !== null && r.available_limit !== undefined ? Number(r.available_limit) : (limit > 0 ? Math.max(0, limit - bal) : 0);
       const used = limit > 0 ? (bal / limit) * 100 : 0;
-      const availSub = limit > 0 ? ` · Avl: ${money(avail)}` : '';
+      const availSub = limit > 0 ? ` · Avl: ${formatCurrency(avail)}` : '';
       return {
         glyph: 'credit_card',
         avatarClass: 'avatar-credit',
@@ -425,6 +429,7 @@ export async function renderRecordPage(container, app, type) {
   let discovered = [];
   let existingAccounts = [];
   let existingCards = [];
+  let existingLoans = [];
   let records = [];
 
   if (isAccountOrCard) {
@@ -438,6 +443,7 @@ export async function renderRecordPage(container, app, type) {
     discovered = discRes?.discovered || [];
     existingAccounts = discRes?.existing_accounts || accountsList;
     existingCards = discRes?.existing_cards || cardsList;
+    existingLoans = discRes?.existing_loans || [];
   } else {
     const res = await Bridge.db('list_records', { record_type: type, member_id: app.memberFilter });
     records = res.records || [];
@@ -669,6 +675,7 @@ export async function renderRecordPage(container, app, type) {
           </p>
           <div class="list" style="background:transparent;box-shadow:none;display:flex;flex-direction:column;gap:10px">
             ${discovered.map((d, i) => {
+              const isLoan = d.is_loan || d.kind === 'loan' || d.instrument_type === 'loan';
               const isCredit = d.instrument_type === 'credit_card';
               const isDebit = d.instrument_type === 'debit_card';
               const isMeal = d.instrument_type === 'meal_card' || d.category === 'Meal Card';
@@ -680,7 +687,12 @@ export async function renderRecordPage(container, app, type) {
               let badgeClass = 'badge-income';
               let label = 'Bank A/c';
 
-              if (isCredit) {
+              if (isLoan) {
+                glyph = 'home';
+                avatarClass = 'avatar-debit';
+                badgeClass = 'badge-expense';
+                label = 'Home Loan / OD';
+              } else if (isCredit) {
                 glyph = 'credit_card';
                 avatarClass = 'avatar-credit';
                 badgeClass = 'badge-gold';
@@ -725,9 +737,16 @@ export async function renderRecordPage(container, app, type) {
                     <div class="caption" style="font-size:11.5px;margin-top:2px;color:var(--on-surface-variant)">
                       ${h(d.bank || d.institution || 'Bank')} · ending ${h(d.last_4)}
                     </div>
-                    ${d.balance ? `
+                    ${isLoan && (d.current_outstanding || d.balance) ? `
+                      <div class="caption" style="color:var(--expense);font-size:11px;font-weight:600;margin-top:3px">
+                        Outstanding Debt: ${h(formatCurrency(d.current_outstanding || Math.abs(d.balance), app.currency, app.locale))}
+                      </div>` : (d.balance ? `
                       <div class="caption" style="color:var(--income);font-size:11px;font-weight:600;margin-top:3px">
                         Latest Balance: ${h(formatCurrency(d.balance, app.currency, app.locale))}
+                      </div>` : '')}
+                    ${isLoan && d.monthly_emi ? `
+                      <div class="caption" style="color:var(--expense);font-size:11px;font-weight:600;margin-top:3px">
+                        Monthly EMI: ${h(formatCurrency(d.monthly_emi, app.currency, app.locale))}${d.debit_day ? ` · Day ${d.debit_day}` : ''}
                       </div>` : ''}
                     ${isCredit && (d.total_limit || d.current_balance) ? `
                       <div class="caption" style="color:var(--expense);font-size:11px;font-weight:600;margin-top:3px">
@@ -827,7 +846,7 @@ export async function renderRecordPage(container, app, type) {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const item = discovered[Number(btn.dataset.inspectDiscovered)];
-        if (item) openDiscoveredAccountSheet(app, item, existingAccounts, existingCards);
+        if (item) openDiscoveredAccountSheet(app, item, existingAccounts, existingCards, existingLoans);
       });
     });
 
@@ -839,29 +858,51 @@ export async function renderRecordPage(container, app, type) {
         btn.disabled = true;
         btn.textContent = '...';
 
+        const isLoan = item.is_loan || item.kind === 'loan' || item.instrument_type === 'loan';
         const isCard = item.kind === 'card' || item.instrument_type === 'credit_card';
         const isDebit = item.is_debit_card || item.instrument_type === 'debit_card';
         const bank = item.bank || item.institution || 'Bank';
         const last4 = item.last_4 || '';
 
-        const recordPayload = isCard ? {
-          card_name: item.suggested_name || item.name || `${bank} Credit Card`,
-          bank,
-          last_4: last4,
-          total_limit: item.total_limit || 0,
-          available_limit: item.available_limit !== null && item.available_limit !== undefined ? item.available_limit : 0,
-          current_balance: item.current_balance || 0,
-        } : {
-          name: item.suggested_name || item.name || `${bank} Account`,
-          category: item.category || (isDebit ? 'Bank' : (item.instrument_type === 'meal_card' ? 'Meal Card' : (item.instrument_type === 'wallet' ? 'Wallet' : 'Bank'))),
-          institution: bank,
-          account_number: isDebit ? (item.account_number || '') : (last4 || item.account_number || ''),
-          debit_card_last_4: isDebit ? (last4 || '') : (item.debit_card_last_4 || ''),
-          balance: item.balance || 0,
-        };
+        let recordType = 'account';
+        let recordPayload;
+
+        if (isLoan) {
+          recordType = 'loan';
+          recordPayload = {
+            name: item.suggested_name || item.name || `${bank} Loan`,
+            lender: bank,
+            account_number: last4 || item.account_number || '',
+            last_4: last4,
+            current_outstanding: item.current_outstanding || Math.abs(item.balance || 0),
+            principal_amount: item.current_outstanding || Math.abs(item.balance || 0),
+            monthly_emi: item.monthly_emi || 0,
+            debit_day: item.debit_day || null,
+          };
+        } else if (isCard) {
+          recordType = 'card';
+          recordPayload = {
+            card_name: item.suggested_name || item.name || `${bank} Credit Card`,
+            bank,
+            last_4: last4,
+            total_limit: item.total_limit || 0,
+            available_limit: item.available_limit !== null && item.available_limit !== undefined ? item.available_limit : 0,
+            current_balance: item.current_balance || 0,
+          };
+        } else {
+          recordType = 'account';
+          recordPayload = {
+            name: item.suggested_name || item.name || `${bank} Account`,
+            category: item.category || (isDebit ? 'Bank' : (item.instrument_type === 'meal_card' ? 'Meal Card' : (item.instrument_type === 'wallet' ? 'Wallet' : 'Bank'))),
+            institution: bank,
+            account_number: isDebit ? (item.account_number || '') : (last4 || item.account_number || ''),
+            debit_card_last_4: isDebit ? (last4 || '') : (item.debit_card_last_4 || ''),
+            balance: item.balance || 0,
+          };
+        }
 
         const res = await Bridge.db('save_record', {
-          record_type: isCard ? 'card' : 'account',
+          record_type: recordType,
           record: recordPayload,
         });
 
@@ -871,7 +912,7 @@ export async function renderRecordPage(container, app, type) {
             last_4: last4,
             instrument_type: item.instrument_type,
           });
-          toast(`Added ${recordPayload.name || recordPayload.card_name}!`, 'success');
+          toast(`Added ${recordPayload.name || recordPayload.card_name}.`, 'success');
           app.refresh();
         } else {
           toast(res?.message || 'Could not add account.', 'error');
@@ -926,7 +967,7 @@ export async function renderRecordPage(container, app, type) {
           });
           if (res && res.status === 'success') {
             progress.complete(`Added ${res.added || discovered.length} accounts!`, 350);
-            toast(`Added ${res.added || discovered.length} accounts!`, 'success');
+            toast(`Added ${res.added || discovered.length} accounts.`, 'success');
             app.refresh();
           } else {
             progress.fail('Failed to add accounts.');
@@ -1120,6 +1161,18 @@ async function openRecordSheet(app, type, existing, preset = null) {
           <button type="button" class="btn btn-outlined btn-xs" data-convert-to-card style="flex-shrink:0">
             ${icon('autorenew', 'icon-sm')}Convert
           </button>
+        </div>
+        <div class="card-flat convert-prompt-banner" style="margin-top:6px">
+          <div class="row" style="gap:8px;align-items:center;min-width:0">
+            <span class="avatar avatar-xs avatar-investment">${icon('home', 'icon-sm')}</span>
+            <div style="min-width:0">
+              <div style="font-weight:600;font-size:12.5px">Is this a Home Loan / OD?</div>
+              <div class="caption" style="font-size:11px">Track EMI, overdraft & outstanding</div>
+            </div>
+          </div>
+          <button type="button" class="btn btn-outlined btn-xs" data-convert-to-loan style="flex-shrink:0">
+            ${icon('autorenew', 'icon-sm')}Convert
+          </button>
         </div>`
       : (type === 'card'
         ? `<div class="card-flat convert-prompt-banner">
@@ -1133,8 +1186,33 @@ async function openRecordSheet(app, type, existing, preset = null) {
             <button type="button" class="btn btn-outlined btn-xs" data-convert-to-account style="flex-shrink:0">
               ${icon('autorenew', 'icon-sm')}Convert
             </button>
+          </div>
+          <div class="card-flat convert-prompt-banner" style="margin-top:6px">
+            <div class="row" style="gap:8px;align-items:center;min-width:0">
+              <span class="avatar avatar-xs avatar-investment">${icon('home', 'icon-sm')}</span>
+              <div style="min-width:0">
+                <div style="font-weight:600;font-size:12.5px">Is this a Loan / OD Account?</div>
+                <div class="caption" style="font-size:11px">Track EMI, overdraft & outstanding</div>
+              </div>
+            </div>
+            <button type="button" class="btn btn-outlined btn-xs" data-convert-to-loan style="flex-shrink:0">
+              ${icon('autorenew', 'icon-sm')}Convert
+            </button>
           </div>`
-        : '')
+        : (type === 'loan'
+          ? `<div class="card-flat convert-prompt-banner">
+              <div class="row" style="gap:8px;align-items:center;min-width:0">
+                <span class="avatar avatar-xs avatar-bank">${icon('account_balance', 'icon-sm')}</span>
+                <div style="min-width:0">
+                  <div style="font-weight:600;font-size:12.5px">Is this a Bank Account?</div>
+                  <div class="caption" style="font-size:11px">Track savings & debit card</div>
+                </div>
+              </div>
+              <button type="button" class="btn btn-outlined btn-xs" data-convert-to-account style="flex-shrink:0">
+                ${icon('autorenew', 'icon-sm')}Convert
+              </button>
+            </div>`
+          : ''))
   ) : '';
 
   const mergeBtnHtml = existing ? (
@@ -1295,7 +1373,7 @@ async function openRecordSheet(app, type, existing, preset = null) {
           });
 
           if (res && res.status === 'success') {
-            toast('Converted to Credit Card!', 'success');
+            toast('Converted to Credit Card.', 'success');
             close(true);
           } else {
             toast(res?.message || 'Could not convert account.', 'error');
@@ -1319,10 +1397,36 @@ async function openRecordSheet(app, type, existing, preset = null) {
           });
 
           if (res && res.status === 'success') {
-            toast('Converted to Bank Account with Debit Card!', 'success');
+            toast('Converted to Bank Account with Debit Card.', 'success');
             close(true);
           } else {
             toast(res?.message || 'Could not convert card.', 'error');
+          }
+        });
+      }
+
+      const convertToLoanBtn = node.querySelector('[data-convert-to-loan]');
+      if (convertToLoanBtn && existing) {
+        convertToLoanBtn.addEventListener('click', async () => {
+          const title = existing.name || existing.card_name || 'Account';
+          const confirmed = await confirmDialog(
+            'Convert to Loan / OD?',
+            `Move "${h(title)}" to Loans & Liabilities to track outstanding, interest, EMI, and overdraft balance. All existing transactions will be transferred.`,
+            { confirmLabel: 'Convert to Loan' },
+          );
+          if (!confirmed) return;
+
+          const res = await Bridge.db('convert_record', {
+            from_type: type,
+            id: existing.id,
+            to_type: 'loan',
+          });
+
+          if (res && res.status === 'success') {
+            toast('Converted to Loan Account', 'success');
+            close(true);
+          } else {
+            toast(res?.message || 'Could not convert record.', 'error');
           }
         });
       }
@@ -1424,7 +1528,7 @@ async function openRecordSheet(app, type, existing, preset = null) {
               balance_action: targetCardResult.balanceAction,
             });
             if (mergeRes.status === 'success') {
-              toast(`Merged card! (${mergeRes.moved_transactions || 0} transactions updated)`, 'success');
+              toast(`Merged card (${mergeRes.moved_transactions || 0} transactions updated).`, 'success');
               close(true);
               app.refresh();
             } else {
@@ -1548,7 +1652,7 @@ async function openRecordSheet(app, type, existing, preset = null) {
               balance_action: targetAccResult.balanceAction,
             });
             if (mergeRes.status === 'success') {
-              toast(`Merged account! (${mergeRes.moved_transactions || 0} transactions updated)`, 'success');
+              toast(`Merged account (${mergeRes.moved_transactions || 0} transactions updated).`, 'success');
               close(true);
               app.refresh();
             } else {

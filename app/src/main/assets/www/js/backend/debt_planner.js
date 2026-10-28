@@ -283,7 +283,7 @@ export function calculateDebtSummary(db, args = {}) {
   // DTI calculation
   const [andClause, andParams] = memberClause(memberId, 'AND');
   const salary = db.get(
-    `SELECT amount FROM transactions WHERE type = 'Income'${andClause} ORDER BY date DESC LIMIT 1`,
+    `SELECT amount FROM transactions WHERE type = 'Income' AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0${andClause} ORDER BY date DESC LIMIT 1`,
     andParams,
   );
   const monthlyIncome = salary ? number(salary.amount) : 50000;
@@ -402,7 +402,7 @@ export function calculateDtiRatio(db, args = {}) {
   // Monthly net income (from last salary transaction or average of last 3 months income)
   const [andClause, andParams] = memberClause(memberId, 'AND');
   const salary = db.get(
-    `SELECT amount FROM transactions WHERE type = 'Income'${andClause} ORDER BY date DESC LIMIT 1`,
+    `SELECT amount FROM transactions WHERE type = 'Income' AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0${andClause} ORDER BY date DESC LIMIT 1`,
     andParams,
   );
   const monthlyIncome = salary ? number(salary.amount) : 50000;

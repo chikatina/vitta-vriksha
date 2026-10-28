@@ -236,6 +236,7 @@ export async function renderSmsIngest(container, app) {
             <div class="virtual-scroll-box" data-discovered-box style="display:flex;flex-direction:column;gap:8px">
               ${discovered.map((d, i) => {
                 const isAdded = addedIndices.has(i);
+                const isLoan = d.is_loan || d.kind === 'loan' || d.instrument_type === 'loan';
                 const isCredit = d.instrument_type === 'credit_card';
                 const isDebit = d.instrument_type === 'debit_card';
                 const isMeal = d.instrument_type === 'meal_card' || d.category === 'Meal Card';
@@ -246,7 +247,11 @@ export async function renderSmsIngest(container, app) {
                 let avatarClass = 'avatar-bank';
                 let label = 'Savings / Bank';
 
-                if (isCredit) {
+                if (isLoan) {
+                  glyph = 'home';
+                  avatarClass = 'avatar-debit';
+                  label = 'Home Loan / OD';
+                } else if (isCredit) {
                   glyph = 'credit_card';
                   avatarClass = 'avatar-credit';
                   label = 'Credit Card';
@@ -289,11 +294,12 @@ export async function renderSmsIngest(container, app) {
                   </div>
                   <div class="row-between" style="align-items:center;padding-top:4px;border-top:1px solid var(--outline-variant);gap:6px">
                     <div class="row" style="gap:4px;align-items:center;flex-wrap:wrap">
-                      ${d.balance ? `<span class="caption" style="color:var(--income);font-size:11px;font-weight:600">Bal: ${h(formatCurrency(d.balance, app.currency, app.locale))}</span>` : ''}
+                      ${isLoan && (d.current_outstanding || d.balance) ? `<span class="caption" style="color:var(--expense);font-size:11px;font-weight:600">Debt: ${h(formatCurrency(d.current_outstanding || Math.abs(d.balance), app.currency, app.locale))}</span>` : (d.balance ? `<span class="caption" style="color:var(--income);font-size:11px;font-weight:600">Bal: ${h(formatCurrency(d.balance, app.currency, app.locale))}</span>` : '')}
+                      ${isLoan && d.monthly_emi ? `<span class="caption" style="color:var(--expense);font-size:11px">· EMI: ${h(formatCurrency(d.monthly_emi, app.currency, app.locale))}</span>` : ''}
                       ${isCredit && (d.total_limit || d.current_balance) ? `<span class="caption" style="color:var(--expense);font-size:11px">${d.current_balance ? `Bal: ${h(formatCurrency(d.current_balance, app.currency, app.locale))}` : ''}${d.total_limit ? ` · Limit: ${h(formatCurrency(d.total_limit, app.currency, app.locale))}` : ''}</span>` : ''}
                       ${d.txn_count ? `<span class="caption" style="font-size:11px;color:var(--on-surface-variant)">${d.txn_count} alert${d.txn_count === 1 ? '' : 's'}</span>` : ''}
                     </div>
-                    ${!isAdded ? `
+                    ${!isAdded && !isLoan ? `
                       <button type="button" class="btn btn-outlined btn-xs" data-toggle-type="${i}" style="gap:3px;padding:3px 6px;font-size:11px;flex-shrink:0">
                         ${icon('autorenew', 'icon-sm')}Make ${isCredit ? 'Bank A/c' : 'Credit Card'}
                       </button>` : ''}
@@ -488,7 +494,7 @@ export async function renderSmsIngest(container, app) {
           const idx = Number(cardEl.dataset.discoveredCard);
           const item = discovered[idx];
           if (item) {
-            openDiscoveredAccountSheet(app, item, discoverRes?.existing_accounts || [], discoverRes?.existing_cards || []);
+            openDiscoveredAccountSheet(app, item, discoverRes?.existing_accounts || [], discoverRes?.existing_cards || [], discoverRes?.existing_loans || []);
           }
         });
       });
@@ -523,29 +529,51 @@ export async function renderSmsIngest(container, app) {
           btn.disabled = true;
           btn.textContent = '...';
 
+          const isLoan = item.is_loan || item.kind === 'loan' || item.instrument_type === 'loan';
           const isCard = item.kind === 'card' || item.instrument_type === 'credit_card';
           const isDebit = item.is_debit_card || item.instrument_type === 'debit_card';
           const bank = item.bank || item.institution || 'Bank';
           const last4 = item.last_4 || '';
 
-          const recordPayload = isCard ? {
-            card_name: item.suggested_name || item.name || `${bank} Credit Card`,
-            bank,
-            last_4: last4,
-            total_limit: item.total_limit || 0,
-            available_limit: item.available_limit !== null && item.available_limit !== undefined ? item.available_limit : 0,
-            current_balance: item.current_balance || 0,
-          } : {
-            name: item.suggested_name || item.name || `${bank} Account`,
-            category: item.category || (isDebit ? 'Bank' : (item.instrument_type === 'meal_card' ? 'Meal Card' : (item.instrument_type === 'wallet' ? 'Wallet' : 'Bank'))),
-            institution: bank,
-            account_number: isDebit ? (item.account_number || '') : (last4 || item.account_number || ''),
-            debit_card_last_4: isDebit ? (last4 || '') : (item.debit_card_last_4 || ''),
-            balance: item.balance || 0,
-          };
+          let recordType = 'account';
+          let recordPayload;
+
+          if (isLoan) {
+            recordType = 'loan';
+            recordPayload = {
+              name: item.suggested_name || item.name || `${bank} Loan`,
+              lender: bank,
+              account_number: last4 || item.account_number || '',
+              last_4: last4,
+              current_outstanding: item.current_outstanding || Math.abs(item.balance || 0),
+              principal_amount: item.current_outstanding || Math.abs(item.balance || 0),
+              monthly_emi: item.monthly_emi || 0,
+              debit_day: item.debit_day || null,
+            };
+          } else if (isCard) {
+            recordType = 'card';
+            recordPayload = {
+              card_name: item.suggested_name || item.name || `${bank} Credit Card`,
+              bank,
+              last_4: last4,
+              total_limit: item.total_limit || 0,
+              available_limit: item.available_limit !== null && item.available_limit !== undefined ? item.available_limit : 0,
+              current_balance: item.current_balance || 0,
+            };
+          } else {
+            recordType = 'account';
+            recordPayload = {
+              name: item.suggested_name || item.name || `${bank} Account`,
+              category: item.category || (isDebit ? 'Bank' : (item.instrument_type === 'meal_card' ? 'Meal Card' : (item.instrument_type === 'wallet' ? 'Wallet' : 'Bank'))),
+              institution: bank,
+              account_number: isDebit ? (item.account_number || '') : (last4 || item.account_number || ''),
+              debit_card_last_4: isDebit ? (last4 || '') : (item.debit_card_last_4 || ''),
+              balance: item.balance || 0,
+            };
+          }
 
           const saveRes = await Bridge.db('save_record', {
-            record_type: isCard ? 'card' : 'account',
+            record_type: recordType,
             record: recordPayload,
           });
 
@@ -556,7 +584,7 @@ export async function renderSmsIngest(container, app) {
               instrument_type: item.instrument_type,
             });
             addedIndices.add(idx);
-            toast(`Added ${recordPayload.name || recordPayload.card_name}!`, 'success');
+            toast(`Added ${recordPayload.name || recordPayload.card_name}.`, 'success');
             renderSummaryAndSections();
           } else {
             toast(saveRes?.message || 'Could not add record.', 'error');
@@ -587,7 +615,7 @@ export async function renderSmsIngest(container, app) {
 
           if (addRes && addRes.status === 'success') {
             progress.complete(`Added ${addRes.added} accounts & cards!`, 350);
-            toast(`Added ${addRes.added} accounts and cards!`, 'success');
+            toast(`Added ${addRes.added} accounts and cards.`, 'success');
             discovered.forEach((_, i) => addedIndices.add(i));
             renderSummaryAndSections();
           } else {
@@ -665,7 +693,7 @@ export async function renderSmsIngest(container, app) {
     renderSummaryAndSections();
 
     if (res.imported > 0) {
-      toast(`Imported ${res.imported} transactions from bank messages!`, 'success');
+      toast(`Imported ${res.imported} transactions from bank messages.`, 'success');
     } else {
       toast(`Scan complete. ${res.read} messages reviewed.`, 'info');
     }

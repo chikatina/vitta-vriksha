@@ -187,7 +187,7 @@ export function findRecurring(db, args = {}) {
   const rows = db.all(
     'SELECT id, date, amount, category, type, description, merchant, merchant_key, member_id,'
     + ' COALESCE(is_investment_outflow, 0) AS is_investment_outflow FROM transactions'
-    + ` WHERE date >= ? AND type != 'Income' AND type != 'Transfer'`
+    + ` WHERE date >= ? AND type != 'Income' AND type != 'Transfer' AND COALESCE(is_ignored, 0) = 0 AND COALESCE(is_duplicate, 0) = 0`
     + " AND (COALESCE(merchant, '') != '' OR COALESCE(description, '') != '' OR COALESCE(is_investment_outflow, 0) = 1 OR category = 'Mutual Funds' OR category = 'Investments')"
     + `${clause} ORDER BY date ASC, id ASC`,
     [from, ...params],

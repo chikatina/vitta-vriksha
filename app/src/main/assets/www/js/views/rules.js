@@ -288,6 +288,7 @@ export async function renderRules(container, app) {
   const discovered = discoverRes.discovered || [];
   const existingAccounts = discoverRes.existing_accounts || [];
   const existingCards = discoverRes.existing_cards || [];
+  const existingLoans = discoverRes.existing_loans || [];
 
   const readyList = review.filter((i) => i.state === 'pending' && (i.reason === 'ready' || i.suggested_category) && i.amount > 0);
   const dupList = review.filter((i) => i.state === 'pending' && (i.duplicate_of > 0 || i.reason === 'possible-duplicate'));
@@ -335,13 +336,14 @@ export async function renderRules(container, app) {
             ${discovered.map((d, i) => `
               <div class="card-flat" style="background:var(--surface-container-high);padding:14px;border-radius:var(--radius-md);border:1px solid var(--outline-variant);display:flex;flex-direction:column;gap:10px;width:100%;box-sizing:border-box">
                 <div style="display:flex;align-items:flex-start;gap:12px;cursor:pointer" data-inspect-discovered="${i}">
-                  <span class="avatar avatar-sm ${d.instrument_type === 'credit_card' ? 'avatar-credit' : (d.instrument_type === 'debit_card' || d.instrument_type === 'prepaid_card' ? 'avatar-debit' : (d.instrument_type === 'wallet' ? 'avatar-wallet' : (d.instrument_type === 'meal_card' ? 'avatar-meal' : 'avatar-bank')))}" style="flex-shrink:0;margin-top:2px">
+                  <span class="avatar avatar-sm ${d.instrument_type === 'loan' ? 'avatar-expense' : (d.instrument_type === 'credit_card' ? 'avatar-credit' : (d.instrument_type === 'debit_card' || d.instrument_type === 'prepaid_card' ? 'avatar-debit' : (d.instrument_type === 'wallet' ? 'avatar-wallet' : (d.instrument_type === 'meal_card' ? 'avatar-meal' : 'avatar-bank'))))}" style="flex-shrink:0;margin-top:2px">
                     ${icon(
-                      d.instrument_type === 'debit_card' ? 'payments' :
+                      d.instrument_type === 'loan' ? 'home' :
+                      (d.instrument_type === 'debit_card' ? 'payments' :
                       (d.instrument_type === 'credit_card' ? 'credit_card' :
                       (d.instrument_type === 'meal_card' || d.category === 'Meal Card' ? 'restaurant' :
                       (d.instrument_type === 'wallet' || d.category === 'Wallet' ? 'account_balance_wallet' :
-                      (d.instrument_type === 'prepaid_card' || d.category === 'Prepaid Card' ? 'credit_card' : 'account_balance')))),
+                      (d.instrument_type === 'prepaid_card' || d.category === 'Prepaid Card' ? 'credit_card' : 'account_balance'))))),
                       'icon-sm'
                     )}
                   </span>
@@ -350,18 +352,20 @@ export async function renderRules(container, app) {
                       <div style="font-weight:700;font-size:13.5px;color:var(--on-surface);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
                         ${h(d.suggested_name || d.name || d.card_name)}
                       </div>
-                      <span class="badge ${d.instrument_type === 'credit_card' ? 'badge-gold' : (d.instrument_type === 'debit_card' || d.instrument_type === 'prepaid_card' ? 'badge-income' : (d.instrument_type === 'wallet' ? 'badge-info' : (d.instrument_type === 'meal_card' ? 'badge-warning' : 'badge-income')))}" style="font-size:10px;padding:1px 6px;text-transform:uppercase;letter-spacing:0.3px;flex-shrink:0">
+                      <span class="badge ${d.instrument_type === 'loan' ? 'badge-expense' : (d.instrument_type === 'credit_card' ? 'badge-gold' : (d.instrument_type === 'debit_card' || d.instrument_type === 'prepaid_card' ? 'badge-income' : (d.instrument_type === 'wallet' ? 'badge-info' : (d.instrument_type === 'meal_card' ? 'badge-warning' : 'badge-income'))))}" style="font-size:10px;padding:1px 6px;text-transform:uppercase;letter-spacing:0.3px;flex-shrink:0">
                         ${h(
-                          d.instrument_type === 'debit_card' ? 'Debit Card' :
+                          d.instrument_type === 'loan' ? 'Home Loan / OD' :
+                          (d.instrument_type === 'debit_card' ? 'Debit Card' :
                           (d.instrument_type === 'credit_card' ? 'Credit Card' :
                           (d.instrument_type === 'meal_card' || d.category === 'Meal Card' ? 'Meal Card' :
                           (d.instrument_type === 'wallet' || d.category === 'Wallet' ? 'Wallet' :
-                          (d.instrument_type === 'prepaid_card' || d.category === 'Prepaid Card' ? 'Prepaid' : 'Bank A/c'))))
+                          (d.instrument_type === 'prepaid_card' || d.category === 'Prepaid Card' ? 'Prepaid' : 'Bank A/c')))))
                         )}
                       </span>
                     </div>
                     <div class="caption" style="font-size:11.5px;margin-top:2px;color:var(--on-surface-variant)">
-                      ${h(d.bank || d.institution || 'Bank')} · ending ${h(d.last_4)}
+                      ${h(d.bank || d.institution || d.lender || 'Bank')} · ending ${h(d.last_4)}
+                      ${(d.instrument_type === 'loan' && (d.current_outstanding || d.balance)) ? ` · Debt: ${h(formatCurrency(d.current_outstanding || d.balance, app.currency, app.locale))}` : ''}
                     </div>
                     ${d.txn_count ? `
                       <div class="caption" style="color:var(--accent);font-size:11px;font-weight:600;margin-top:3px">
@@ -717,7 +721,7 @@ export async function renderRules(container, app) {
           last_4: last4,
           instrument_type: item.instrument_type,
         });
-        toast(`Added ${recordPayload.name || recordPayload.card_name}!`, 'success');
+        toast(`Added ${recordPayload.name || recordPayload.card_name}.`, 'success');
         app.refresh();
       } else {
         toast(res?.message || 'Could not add record.', 'error');
@@ -870,8 +874,22 @@ export async function renderRules(container, app) {
       btn.disabled = true;
       btn.textContent = 'Adding...';
 
-      const isCard = item.kind === 'card';
-      const recordPayload = isCard ? {
+      const isLoan = item.kind === 'loan' || item.instrument_type === 'loan';
+      const isCard = !isLoan && (item.kind === 'card' || item.instrument_type === 'credit_card');
+      const recordPayload = isLoan ? {
+        name: item.suggested_name || item.name || `${item.bank || 'Bank'} Home Loan`,
+        loan_type: 'Home Loan',
+        principal_amount: item.current_outstanding || item.balance || 0,
+        current_outstanding: item.current_outstanding || item.balance || 0,
+        interest_rate: 8.5,
+        start_date: new Date().toISOString().slice(0, 10),
+        tenure_months: 240,
+        monthly_emi: item.monthly_emi || 0,
+        lender: item.bank || item.institution || item.lender || 'Bank',
+        debit_day: item.debit_day || 5,
+        account_number: item.last_4 || item.account_number || '',
+        last_4: item.last_4 || '',
+      } : (isCard ? {
         card_name: item.suggested_name || item.card_name,
         bank: item.bank || 'Bank',
         last_4: item.last_4 || '',
@@ -883,15 +901,22 @@ export async function renderRules(container, app) {
         institution: item.bank || item.institution || 'Bank',
         account_number: item.last_4 || item.account_number || '',
         balance: item.balance || 0,
-      };
+      });
 
       const res = await Bridge.db('save_record', {
-        record_type: isCard ? 'card' : 'account',
+        record_type: isLoan ? 'loan' : (isCard ? 'card' : 'account'),
         record: recordPayload,
       });
 
       if (res && res.status === 'success') {
-        toast(`Added ${item.suggested_name || item.name || item.card_name}!`, 'success');
+        await Bridge.db('ignore_discovered_account', {
+          identifier: `${item.instrument_type || (isLoan ? 'loan' : (isCard ? 'credit_card' : 'account'))}:${item.bank || ''}:${item.last_4 || ''}`.toLowerCase(),
+          issuer: item.bank || item.institution || item.lender,
+          last_4: item.last_4,
+          instrument_type: isLoan ? 'loan' : (isCard ? 'credit_card' : 'account'),
+        });
+        await Bridge.db('reconcile_transactions');
+        toast(`Added ${item.suggested_name || item.name || item.card_name}.`, 'success');
         app.refresh();
       } else {
         toast(res?.message || 'Could not add that record.', 'error');
@@ -906,7 +931,7 @@ export async function renderRules(container, app) {
       e.stopPropagation();
       const idx = Number(el.dataset.inspectDiscovered);
       const item = discovered[idx];
-      if (item) openDiscoveredAccountSheet(app, item, existingAccounts, existingCards);
+      if (item) openDiscoveredAccountSheet(app, item, existingAccounts, existingCards, existingLoans);
     });
   });
 
@@ -927,7 +952,7 @@ export async function renderRules(container, app) {
 
       if (res && res.status === 'success') {
         progress.complete(`Added ${res.added} accounts & cards!`, 350);
-        toast(`Successfully added ${res.added} accounts and cards!`, 'success');
+        toast(`Added ${res.added} accounts and cards.`, 'success');
       } else {
         progress.fail('Could not add accounts.');
         toast(res?.message || 'Could not add accounts.', 'error');
@@ -1904,12 +1929,20 @@ const ruleSheet = addRule;
 /**
  * Details, Classification and 2-way Link bottom sheet for discovered accounts & cards.
  */
-export async function openDiscoveredAccountSheet(app, item, existingAccounts = [], existingCards = []) {
-  let selectedInstrument = item.instrument_type || (item.is_debit_card ? 'debit_card' : (item.kind === 'card' ? 'credit_card' : (item.category === 'Meal Card' ? 'meal_card' : (item.category === 'Wallet' ? 'wallet' : 'bank_account'))));
+export async function openDiscoveredAccountSheet(app, item, existingAccounts = [], existingCards = [], existingLoans = []) {
+  if (!existingLoans || !existingLoans.length) {
+    const loanRes = await Bridge.db('list_records', { record_type: 'loan' });
+    if (loanRes && loanRes.status === 'success' && Array.isArray(loanRes.records)) {
+      existingLoans = loanRes.records;
+    }
+  }
 
-  const discKey = `${item.instrument_type || (item.is_debit_card ? 'debit_card' : (item.kind === 'card' ? 'credit_card' : 'account'))}:${item.bank || item.institution || ''}:${item.last_4 || ''}`.toLowerCase();
+  let selectedInstrument = item.instrument_type || (item.kind === 'loan' ? 'loan' : (item.is_debit_card ? 'debit_card' : (item.kind === 'card' ? 'credit_card' : (item.category === 'Meal Card' ? 'meal_card' : (item.category === 'Wallet' ? 'wallet' : 'bank_account')))));
+
+  const discKey = `${item.instrument_type || (item.kind === 'loan' ? 'loan' : (item.is_debit_card ? 'debit_card' : (item.kind === 'card' ? 'credit_card' : 'account')))}:${item.bank || item.institution || item.lender || ''}:${item.last_4 || ''}`.toLowerCase();
 
   const getGlyph = (inst) => {
+    if (inst === 'loan') return 'home';
     if (inst === 'debit_card') return 'payments';
     if (inst === 'credit_card') return 'credit_card';
     if (inst === 'meal_card') return 'restaurant';
@@ -1919,6 +1952,7 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
   };
 
   const getLabel = (inst) => {
+    if (inst === 'loan') return 'Home Loan / Overdraft';
     if (inst === 'debit_card') return 'Debit Card (Linked to Bank)';
     if (inst === 'credit_card') return 'Credit Card';
     if (inst === 'meal_card') return 'Meal Card / Food Wallet';
@@ -1936,7 +1970,7 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
           </span>
           <div style="min-width:0;flex:1">
             <div style="font-weight:700;font-size:15px;color:var(--on-surface)">${h(item.suggested_name || item.name || item.card_name)}</div>
-            <div class="caption" id="discoveredHeaderSubtitle">${h(item.bank || item.institution || 'Bank')} · ${h(getLabel(selectedInstrument))}</div>
+            <div class="caption" id="discoveredHeaderSubtitle">${h(item.bank || item.institution || item.lender || 'Bank')} · ${h(getLabel(selectedInstrument))}</div>
           </div>
         </div>
 
@@ -1944,6 +1978,16 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
           <span>Identifier / Digits</span>
           <span style="font-weight:600;font-variant-numeric:tabular-nums">${h(item.last_4 || 'N/A')}</span>
         </div>
+        ${(item.current_outstanding || (item.kind === 'loan' && item.balance)) ? `
+          <div class="row-between" style="font-size:13px;padding:8px 0;border-top:1px solid var(--outline-variant);color:var(--on-surface-variant)">
+            <span>Outstanding Debt</span>
+            <span style="font-weight:600;color:var(--expense)">${h(formatCurrency(item.current_outstanding || item.balance, app.currency, app.locale))}</span>
+          </div>` : ''}
+        ${item.monthly_emi ? `
+          <div class="row-between" style="font-size:13px;padding:8px 0;border-top:1px solid var(--outline-variant);color:var(--on-surface-variant)">
+            <span>Monthly Mandate / EMI</span>
+            <span style="font-weight:600">${h(formatCurrency(item.monthly_emi, app.currency, app.locale))}</span>
+          </div>` : ''}
         ${item.txn_count ? `
           <div class="row-between" style="font-size:13px;padding:8px 0;border-top:1px solid var(--outline-variant);color:var(--on-surface-variant)">
             <span>Matched SMS Alerts</span>
@@ -1970,6 +2014,7 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
           label: 'Card / Account Type',
           value: selectedInstrument,
           options: [
+            { value: 'loan', label: 'Loan / Overdraft (Home Loan, OD)' },
             { value: 'debit_card', label: 'Debit Card (Links to Bank Account)' },
             { value: 'credit_card', label: 'Credit Card (Standalone Credit Card)' },
             { value: 'bank_account', label: 'Bank Account (Savings / Salary / Current)' },
@@ -1998,29 +2043,84 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
     const container = node.querySelector('#discoveredOptionsContainer');
     if (!container) return;
 
+    const isLoan = inst === 'loan';
     const isDebit = inst === 'debit_card';
     const isCredit = inst === 'credit_card';
     const isBank = inst === 'bank_account';
 
     const headerSubtitle = node.querySelector('#discoveredHeaderSubtitle');
-    if (headerSubtitle) headerSubtitle.textContent = `${item.bank || item.institution || 'Bank'} · ${getLabel(inst)}`;
+    if (headerSubtitle) headerSubtitle.textContent = `${item.bank || item.institution || item.lender || 'Bank'} · ${getLabel(inst)}`;
     const headerGlyph = node.querySelector('#discoveredHeaderGlyph');
     if (headerGlyph) headerGlyph.innerHTML = icon(getGlyph(inst), 'icon-sm');
 
     const bankAccounts = existingAccounts.filter((a) => !a.category || a.category === 'Bank' || a.category === 'Savings' || a.category === 'Current');
-    const existingTargetOptions = isCredit
+    const existingTargetOptions = isLoan
       ? [
-          { value: '', label: 'Select existing Credit Card...' },
-          ...existingCards.map((c) => ({ value: String(c.id), label: `${c.card_name} (${c.bank || 'Bank'}${c.last_4 ? ` · ${c.last_4}` : ''})` })),
+          { value: '', label: 'Select existing Loan to link...' },
+          ...existingLoans.map((l) => ({ value: String(l.id), label: `${l.name} (${l.lender || 'Lender'}${l.last_4 ? ` · ${l.last_4}` : ''})` })),
         ]
-      : [
-          { value: '', label: isDebit ? 'Select existing Bank Account to link this Debit Card...' : 'Select existing Bank Account to combine...' },
-          ...bankAccounts.map((a) => ({ value: String(a.id), label: `${a.name} (${a.institution || 'Bank'}${a.account_number ? ` · ${a.account_number}` : ''}${a.debit_card_last_4 ? ` · DC: ${a.debit_card_last_4}` : ''})` })),
-        ];
+      : (isCredit
+        ? [
+            { value: '', label: 'Select existing Credit Card...' },
+            ...existingCards.map((c) => ({ value: String(c.id), label: `${c.card_name} (${c.bank || 'Bank'}${c.last_4 ? ` · ${c.last_4}` : ''})` })),
+          ]
+        : [
+            { value: '', label: isDebit ? 'Select existing Bank Account to link this Debit Card...' : 'Select existing Bank Account to combine...' },
+            ...bankAccounts.map((a) => ({ value: String(a.id), label: `${a.name} (${a.institution || 'Bank'}${a.account_number ? ` · ${a.account_number}` : ''}${a.debit_card_last_4 ? ` · DC: ${a.debit_card_last_4}` : ''})` })),
+          ]);
 
     let html = '';
 
-    if (isDebit) {
+    if (isLoan) {
+      html = `
+        <div class="card-flat" style="background:var(--surface-container-high);padding:14px 16px;border-radius:var(--radius-lg);border:1px solid var(--outline-variant);margin-bottom:var(--gap-3)">
+          <div style="font-weight:700;font-size:14px;margin-bottom:8px">
+            Add as New Loan / Overdraft
+          </div>
+          <div class="field" style="margin-bottom:10px">
+            <label class="field-label">Loan Account Name</label>
+            <input class="input" type="text" data-field-name value="${h(item.suggested_name || item.name || `${item.bank || 'Bank'} Home Loan`)}" />
+          </div>
+          <div class="row" style="gap:10px;margin-bottom:10px">
+            <div class="field" style="flex:1">
+              <label class="field-label">Outstanding Debt</label>
+              <input class="input" type="number" step="any" data-field-outstanding value="${item.current_outstanding || item.balance || ''}" />
+            </div>
+            <div class="field" style="flex:1">
+              <label class="field-label">Monthly EMI</label>
+              <input class="input" type="number" step="any" data-field-emi value="${item.monthly_emi || ''}" />
+            </div>
+          </div>
+          <button class="btn btn-filled btn-block" data-action-add-new>
+            ${icon('add', 'icon-sm')}Add as New Loan
+          </button>
+        </div>
+
+        ${existingLoans.length ? `
+          <div class="card-flat" style="background:var(--surface-container-high);padding:14px 16px;border-radius:var(--radius-lg);border:1px solid var(--outline-variant)">
+            <div style="font-weight:700;font-size:14px;margin-bottom:6px">
+              Or: Link to Existing Loan
+            </div>
+            <p class="caption" style="margin-bottom:10px">
+              Associates this account number (ending ${h(item.last_4)}) with your tracked loan so mandate payments link automatically.
+            </p>
+            ${selectField({
+              key: 'target_existing_id',
+              id: 'selectTargetExisting',
+              label: 'Existing Loan',
+              value: '',
+              options: existingTargetOptions,
+            })}
+            ${item.last_4 ? `
+              <label class="row" style="gap:8px;align-items:center;margin-top:10px;cursor:pointer">
+                <input type="checkbox" id="chkCombineUpdateDigits" checked style="width:16px;height:16px">
+                <span style="font-size:12px">Update target loan account digits to ${h(item.last_4)}</span>
+              </label>` : ''}
+            <button class="btn btn-outlined btn-block" data-action-combine style="margin-top:12px">
+              ${icon('open_in_new', 'icon-sm')}Link to Loan
+            </button>
+          </div>` : ''}`;
+    } else if (isDebit) {
       html = `
         <div class="card-flat" style="background:var(--surface-container-high);padding:14px 16px;border-radius:var(--radius-lg);border:1px solid var(--outline-variant);margin-bottom:var(--gap-3)">
           <div style="font-weight:700;font-size:14px;margin-bottom:6px">
@@ -2136,6 +2236,7 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
   };
 
   const wireOptionActions = (node, inst) => {
+    const isLoan = inst === 'loan';
     const isDebit = inst === 'debit_card';
     const isCredit = inst === 'credit_card';
 
@@ -2143,6 +2244,46 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
     if (addNewBtn) {
       addNewBtn.addEventListener('click', async () => {
         const customName = node.querySelector('[data-field-name]').value.trim() || item.suggested_name || item.name || item.card_name;
+
+        if (isLoan) {
+          const outstandingInput = node.querySelector('[data-field-outstanding]');
+          const emiInput = node.querySelector('[data-field-emi]');
+          const outstanding = outstandingInput && outstandingInput.value ? Math.abs(Number(outstandingInput.value)) : (item.current_outstanding || item.balance || 0);
+          const emi = emiInput && emiInput.value ? Math.abs(Number(emiInput.value)) : (item.monthly_emi || 0);
+
+          const res = await Bridge.db('save_record', {
+            record_type: 'loan',
+            record: {
+              name: customName,
+              loan_type: 'Home Loan',
+              principal_amount: outstanding || 0,
+              current_outstanding: outstanding || 0,
+              interest_rate: 8.5,
+              start_date: new Date().toISOString().slice(0, 10),
+              tenure_months: 240,
+              monthly_emi: emi || 0,
+              lender: item.bank || item.institution || item.lender || 'Bank',
+              debit_day: item.debit_day || 5,
+              account_number: item.last_4 || '',
+              last_4: item.last_4 || '',
+            },
+          });
+
+          if (res && res.status === 'success') {
+            await Bridge.db('ignore_discovered_account', {
+              identifier: discKey,
+              issuer: item.bank || item.institution || item.lender,
+              last_4: item.last_4,
+              instrument_type: 'loan',
+            });
+            await Bridge.db('reconcile_transactions');
+            toast(`Added ${customName}`, 'success');
+            app.refresh();
+          } else {
+            toast(res?.message || 'Could not add loan.', 'error');
+          }
+          return;
+        }
 
         const recordPayload = isCredit ? {
           card_name: customName,
@@ -2185,7 +2326,7 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
         const selectBtn = node.querySelector('.select-button[data-field="target_existing_id"]');
         const targetId = selectBtn ? selectBtn.dataset.value : '';
         if (!targetId) {
-          toast(isDebit ? 'Please select a bank account to link this debit card.' : 'Please select an existing account to combine with.', 'error');
+          toast(isLoan ? 'Please select a loan to link with.' : (isDebit ? 'Please select a bank account to link this debit card.' : 'Please select an existing account to combine with.'), 'error');
           return;
         }
 
@@ -2193,16 +2334,18 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
 
         const res = await Bridge.db('combine_discovered_account', {
           target_id: Number(targetId),
-          target_type: isCredit ? 'card' : 'account',
+          target_type: isLoan ? 'loan' : (isCredit ? 'card' : 'account'),
           last_4: item.last_4 || '',
-          bank: item.bank || item.institution || '',
+          bank: item.bank || item.institution || item.lender || '',
           is_debit_card: isDebit,
           instrument_type: inst,
           update_last_4: updateLast4,
+          current_outstanding: item.current_outstanding || item.balance,
+          monthly_emi: item.monthly_emi,
         });
 
         if (res && res.status === 'success') {
-          toast(isDebit ? 'Successfully linked Debit Card to Bank Account!' : 'Successfully combined and linked account!', 'success');
+          toast(isLoan ? 'Successfully linked account to Loan!' : (isDebit ? 'Successfully linked Debit Card to Bank Account!' : 'Successfully combined and linked account!'), 'success');
           app.refresh();
         } else {
           toast(res?.message || 'Could not combine account.', 'error');
