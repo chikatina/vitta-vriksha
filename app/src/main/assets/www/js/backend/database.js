@@ -1068,32 +1068,10 @@ export const MIGRATIONS = [
       addColumnIfMissing(db, 'demat_holdings', 'invested_value', 'REAL DEFAULT 0.0');
       addColumnIfMissing(db, 'nps_holdings', 'invested_value', 'REAL DEFAULT 0.0');
       addColumnIfMissing(db, 'asset_accounts', 'institution', "TEXT DEFAULT ''");
-  addColumnIfMissing(db, 'asset_accounts', 'account_number', "TEXT DEFAULT ''");
-  addColumnIfMissing(db, 'asset_accounts', 'institution', "TEXT DEFAULT ''");
-  addColumnIfMissing(db, 'asset_accounts', 'account_number', "TEXT DEFAULT ''");
-  addColumnIfMissing(db, 'asset_accounts', 'debit_card_last_4', "TEXT DEFAULT ''");
+      addColumnIfMissing(db, 'asset_accounts', 'account_number', "TEXT DEFAULT ''");
+      addColumnIfMissing(db, 'asset_accounts', 'debit_card_last_4', "TEXT DEFAULT ''");
       addColumnIfMissing(db, 'asset_accounts', 'account_type', "TEXT DEFAULT ''");
       addColumnIfMissing(db, 'custom_categories', 'monthly_budget', 'REAL DEFAULT 0.0');
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS transaction_buckets (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        member_id INTEGER DEFAULT 1,
-        name TEXT NOT NULL,
-        icon TEXT DEFAULT 'folder',
-        color TEXT DEFAULT '#3B82F6',
-        target_budget REAL DEFAULT 0.0,
-        start_date TEXT,
-        end_date TEXT,
-        status TEXT DEFAULT 'active',
-        notes TEXT,
-        created_at TEXT,
-        FOREIGN KEY (member_id) REFERENCES family_members(id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_buckets_member ON transaction_buckets(member_id);
-  `);
-  addColumnIfMissing(db, 'transactions', 'bucket_id', 'INTEGER REFERENCES transaction_buckets(id)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_tx_bucket ON transactions(bucket_id);');
-  db.run("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('budget_cycle_start_day', '1')");
 
     },
   },
@@ -1365,6 +1343,27 @@ export const MIGRATIONS = [
       addColumnIfMissing(db, 'transactions', 'sip_id', 'INTEGER');
       addColumnIfMissing(db, 'transactions', 'sip_mandate_id', 'INTEGER');
       addColumnIfMissing(db, 'transactions', 'is_sip_split', 'INTEGER DEFAULT 0');
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS transaction_buckets (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          member_id INTEGER DEFAULT 1,
+          name TEXT NOT NULL,
+          icon TEXT DEFAULT 'folder',
+          color TEXT DEFAULT '#3B82F6',
+          target_budget REAL DEFAULT 0.0,
+          start_date TEXT,
+          end_date TEXT,
+          status TEXT DEFAULT 'active',
+          notes TEXT,
+          created_at TEXT,
+          FOREIGN KEY (member_id) REFERENCES family_members(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_buckets_member ON transaction_buckets(member_id);
+      `);
+      addColumnIfMissing(db, 'transactions', 'bucket_id', 'INTEGER REFERENCES transaction_buckets(id)');
+      db.run('CREATE INDEX IF NOT EXISTS idx_tx_bucket ON transactions(bucket_id);');
+      db.run("INSERT OR IGNORE INTO app_settings (key, value) VALUES ('budget_cycle_start_day', '1')");
 
       db.run('CREATE INDEX IF NOT EXISTS idx_sip_mandate ON sips(mandate_id);');
       db.run('CREATE INDEX IF NOT EXISTS idx_sip_isin ON sips(isin);');
@@ -1642,6 +1641,26 @@ function runAdditiveMigrations(db) {
   db.run('CREATE INDEX IF NOT EXISTS idx_tx_sip ON transactions(sip_id);');
   db.run('CREATE INDEX IF NOT EXISTS idx_tx_sip_mandate ON transactions(sip_mandate_id);');
   db.run('CREATE INDEX IF NOT EXISTS idx_tx_loan ON transactions(loan_id);');
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS transaction_buckets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      member_id INTEGER DEFAULT 1,
+      name TEXT NOT NULL,
+      icon TEXT DEFAULT 'folder',
+      color TEXT DEFAULT '#3B82F6',
+      target_budget REAL DEFAULT 0.0,
+      start_date TEXT,
+      end_date TEXT,
+      status TEXT DEFAULT 'active',
+      notes TEXT,
+      created_at TEXT,
+      FOREIGN KEY (member_id) REFERENCES family_members(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_buckets_member ON transaction_buckets(member_id);
+  `);
+  addColumnIfMissing(db, 'transactions', 'bucket_id', 'INTEGER REFERENCES transaction_buckets(id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_tx_bucket ON transactions(bucket_id);');
 
   // SIP Tracker & Mandates Schema Migration
   addColumnIfMissing(db, 'sips', 'name', "TEXT DEFAULT ''");
@@ -5615,9 +5634,26 @@ export function reconcileExistingTransactions(db) {
     }
   }
 
-  const userAccounts = db.all('SELECT id, account_number, debit_card_last_4 FROM asset_accounts');
-  const userCards = db.all('SELECT id, last_4 FROM credit_cards');
-  const userLoans = db.all('SELECT id, name, lender, account_number, last_4, monthly_emi, debit_day, current_outstanding FROM loans');
+  let userAccounts = [];
+  if (tableExists(db, 'asset_accounts')) {
+    const cols = db.all('PRAGMA table_info(asset_accounts)').map((c) => c.name);
+    const hasAcc = cols.includes('account_number') ? 'account_number' : "'' AS account_number";
+    const hasLast4 = cols.includes('debit_card_last_4') ? 'debit_card_last_4' : "'' AS debit_card_last_4";
+    userAccounts = db.all(`SELECT id, ${hasAcc}, ${hasLast4} FROM asset_accounts`);
+  }
+  let userCards = [];
+  if (tableExists(db, 'credit_cards')) {
+    const cols = db.all('PRAGMA table_info(credit_cards)').map((c) => c.name);
+    const hasLast4 = cols.includes('last_4') ? 'last_4' : "'' AS last_4";
+    userCards = db.all(`SELECT id, ${hasLast4} FROM credit_cards`);
+  }
+  let userLoans = [];
+  if (tableExists(db, 'loans')) {
+    const cols = db.all('PRAGMA table_info(loans)').map((c) => c.name);
+    const colList = ['name', 'lender', 'account_number', 'last_4', 'monthly_emi', 'debit_day', 'current_outstanding'];
+    const selectExprs = colList.map((col) => (cols.includes(col) ? col : `'' AS ${col}`)).join(', ');
+    userLoans = db.all(`SELECT id, ${selectExprs} FROM loans`);
+  }
 
   // 4. Single-leg self-transfers where raw_sms explicitly specifies another registered user account/card/loan
   const activeTx = db.all(
