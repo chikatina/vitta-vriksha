@@ -721,7 +721,7 @@ export async function renderRules(container, app) {
           last_4: last4,
           instrument_type: item.instrument_type,
         });
-        toast(`Added ${recordPayload.name || recordPayload.card_name}!`, 'success');
+        toast(`Added ${recordPayload.name || recordPayload.card_name}.`, 'success');
         app.refresh();
       } else {
         toast(res?.message || 'Could not add record.', 'error');
@@ -916,7 +916,7 @@ export async function renderRules(container, app) {
           instrument_type: isLoan ? 'loan' : (isCard ? 'credit_card' : 'account'),
         });
         await Bridge.db('reconcile_transactions');
-        toast(`Added ${item.suggested_name || item.name || item.card_name}!`, 'success');
+        toast(`Added ${item.suggested_name || item.name || item.card_name}.`, 'success');
         app.refresh();
       } else {
         toast(res?.message || 'Could not add that record.', 'error');
@@ -952,7 +952,7 @@ export async function renderRules(container, app) {
 
       if (res && res.status === 'success') {
         progress.complete(`Added ${res.added} accounts & cards!`, 350);
-        toast(`Successfully added ${res.added} accounts and cards!`, 'success');
+        toast(`Added ${res.added} accounts and cards.`, 'success');
       } else {
         progress.fail('Could not add accounts.');
         toast(res?.message || 'Could not add accounts.', 'error');

@@ -767,3 +767,24 @@ export function categoryForMerchant(merchant, body = '') {
   const cleanBody = bodyText.replace(/(?:https?:\/\/|www\.)[^\s,;]+|[a-z0-9-]+\.(?:com|in|co\.in|org|net|io|app)\/[^\s,;]*/gi, ' ');
   return cleanBody.trim() ? keywords().find(cleanBody) : '';
 }
+
+const UTR_PATTERNS = [
+  /\bupi(?:\/|\s*(?:ref|txn|reference)?\s*(?:no\.?|id|num)?[:\s\/-]+)([A-Za-z0-9]{6,24})\b/i,
+  /\b(?:ref(?:\s*no\.?|\s*id|\s*num)?|rrn|utr(?:\s*no\.?)?|txn\s*id|transaction\s*id|reference\s*no\.?)[:\s\/-]+([A-Za-z0-9]{6,24})\b/i,
+  /\b(?:info|via)[:\s]+[A-Za-z0-9\s-]*\/\s*([0-9]{6,24})\b/i,
+  /\bupi\/\s*([0-9]{6,24})\b/i,
+];
+
+export function extractUtr(text) {
+  if (!text || typeof text !== 'string') return '';
+  for (const pattern of UTR_PATTERNS) {
+    const match = pattern.exec(text);
+    if (match && match[1]) {
+      const val = match[1].trim();
+      if (val.length >= 6 && /\d/.test(val) && !/^(success|pending|completed|declined|reversed)$/i.test(val)) {
+        return val;
+      }
+    }
+  }
+  return '';
+}

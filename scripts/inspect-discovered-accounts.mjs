@@ -9,6 +9,10 @@ import { parseAccountDetailsFromText } from '../app/src/main/assets/www/js/backe
 const inputPath = path.join('messages-2026-09-29', 'messages.ndjson');
 
 async function inspect() {
+  if (!fs.existsSync(inputPath)) {
+    console.log(Input file not found at . Provide a valid ndjson file.);
+    return;
+  }
   const rl = readline.createInterface({
     input: fs.createReadStream(inputPath),
     crlfDelay: Infinity,

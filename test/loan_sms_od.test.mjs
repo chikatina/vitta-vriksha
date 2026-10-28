@@ -383,4 +383,129 @@ describe('Home Loan Overdraft (OD), Negative Balance & Mandate Reconciliation', 
     assert.equal(updatedTx.loan_id, newLoanId);
     assert.equal(updatedTx.card_id, null);
   });
+  it('does NOT misreconcile unrelated expense and income across accounts as transfer without UTR/transfer context', async () => {
+    const acc1Res = await call('save_record', {
+      record_type: 'account',
+      record: { name: 'HDFC Bank', category: 'Bank', account_number: '1111' },
+    });
+    const acc2Res = await call('save_record', {
+      record_type: 'account',
+      record: { name: 'ICICI Bank', category: 'Bank', account_number: '2222' },
+    });
+    const acc1Id = acc1Res.id || acc1Res.record_id;
+    const acc2Id = acc2Res.id || acc2Res.record_id;
+
+    // Outflow on HDFC (e.g. Shopping)
+    const t1Res = await call('save_transaction', {
+      transaction: {
+        date: '2026-10-15',
+        amount: 3500,
+        type: 'Expense',
+        category: 'Shopping',
+        account_id: acc1Id,
+        raw_sms: 'Rs 3500 debited from HDFC a/c 1111 for Amazon purchase',
+      },
+    });
+
+    // Inflow on ICICI (e.g. Client Payment or Reimbursement)
+    const t2Res = await call('save_transaction', {
+      transaction: {
+        date: '2026-10-16',
+        amount: 3500,
+        type: 'Income',
+        category: 'Freelance',
+        account_id: acc2Id,
+        raw_sms: 'Rs 3500 credited to ICICI a/c 2222 from Client X',
+      },
+    });
+
+    // Run reconciliation
+    await call('reconcile_existing_transactions');
+
+    const txRes = await call('get_transactions', { limit: 10 });
+    const t1 = txRes.transactions.find((t) => t.id === (t1Res.transaction_id || t1Res.id));
+    const t2 = txRes.transactions.find((t) => t.id === (t2Res.transaction_id || t2Res.id));
+
+    assert.equal(t1.type, 'Expense');
+    assert.equal(t1.category, 'Shopping');
+    assert.equal(t2.type, 'Income');
+    assert.equal(t2.category, 'Freelance');
+  });
+
+  it('correctly reconciles cross-account transfer when shared UTR or self-transfer text is present', async () => {
+    const acc1Res = await call('save_record', {
+      record_type: 'account',
+      record: { name: 'HDFC Bank', category: 'Bank', account_number: '3333' },
+    });
+    const acc2Res = await call('save_record', {
+      record_type: 'account',
+      record: { name: 'SBI Bank', category: 'Bank', account_number: '4444' },
+    });
+    const acc1Id = acc1Res.id || acc1Res.record_id;
+    const acc2Id = acc2Res.id || acc2Res.record_id;
+
+    const t1Res = await call('save_transaction', {
+      transaction: {
+        date: '2026-10-15',
+        amount: 10000,
+        type: 'Expense',
+        category: 'Other',
+        account_id: acc1Id,
+        raw_sms: 'Rs 10000.00 debited from HDFC a/c 3333 on 15-10-26 to self-transfer UPI/628912345678',
+      },
+    });
+
+    const t2Res = await call('save_transaction', {
+      transaction: {
+        date: '2026-10-15',
+        amount: 10000,
+        type: 'Income',
+        category: 'Other',
+        account_id: acc2Id,
+        raw_sms: 'Rs 10000.00 credited to SBI a/c 4444 on 15-10-26 UPI/628912345678',
+      },
+    });
+
+    await call('reconcile_existing_transactions');
+
+    const txRes = await call('get_transactions', { limit: 10 });
+    const t1 = txRes.transactions.find((t) => t.id === (t1Res.transaction_id || t1Res.id));
+    const t2 = txRes.transactions.find((t) => t.id === (t2Res.transaction_id || t2Res.id));
+
+    assert.equal(t1.type, 'Transfer');
+    assert.equal(t2.type, 'Transfer');
+    assert.equal(t1.category, 'Transfer');
+    assert.equal(t2.category, 'Transfer');
+  });
+
+  it('does NOT treat charges on different cards on the same day as duplicates', async () => {
+    const c1Res = await call('save_record', {
+      record_type: 'card',
+      record: { card_name: 'Amazon Pay ICICI', last_4: '5555' },
+    });
+    const c2Res = await call('save_record', {
+      record_type: 'card',
+      record: { card_name: 'HDFC Regalia', last_4: '6666' },
+    });
+
+    // Ingest charge on Card 5555
+    await ingestAlert('Alert: Spent Rs 999.00 on Credit Card ending 5555 at Swiggy on 17-Oct-26', 'ICICIB');
+
+    // Ingest charge on Card 6666
+    const parsed2 = await parseSmsText('Alert: Spent Rs 999.00 on Credit Card ending 6666 at Swiggy on 17-Oct-26', 'HDFCBK');
+    const classifyRes = await handleSmsAction({
+      action: 'classify_alert',
+      body: 'Alert: Spent Rs 999.00 on Credit Card ending 6666 at Swiggy on 17-Oct-26',
+      sender: 'HDFCBK',
+      amount: parsed2.amount,
+      category: parsed2.category,
+      type: parsed2.type,
+      merchant: parsed2.merchant,
+      date: parsed2.date,
+      accountLast4: '6666',
+    });
+
+    assert.equal(classifyRes.status, 'success');
+    assert.equal(classifyRes.duplicate_warning, false);
+  });
 });

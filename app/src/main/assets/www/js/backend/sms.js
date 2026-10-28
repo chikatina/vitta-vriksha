@@ -17,13 +17,24 @@ import {
 import { memberClause } from './periods.js';
 import { readSmsInbox, takePendingAlerts } from './native.js';
 import {
-  categoryForMerchant, extractMerchant, extractPrimaryClause, isCreditAlert, merchantKey, notATransaction,
+  categoryForMerchant, extractMerchant, extractPrimaryClause, extractUtr, isCreditAlert, merchantKey, notATransaction,
 } from './merchants.js';
 import { fail } from './errors.js';
 
 const DEFAULT_AMOUNT_RE = /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i;
 const FALLBACK_AMOUNT_RE = /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i;
 const ACCOUNT_RE = /(?:card|a\/c|acct|account|wallet|vpa)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s]*([0-9]{3,4})\b/i;
+
+export function candidateAccountDigits(r) {
+  if (!r) return '';
+  if (r.account_last4) return String(r.account_last4).trim().slice(-4);
+  if (r.instrument_digits) return String(r.instrument_digits).trim().slice(-4);
+  if (r.raw_sms) {
+    const m = ACCOUNT_RE.exec(r.raw_sms);
+    if (m && m[1]) return m[1].slice(-4);
+  }
+  return '';
+}
 
 export function extractTransactionAmount(text) {
   const t = String(text || '');
@@ -98,26 +109,7 @@ function extractDate(text) {
   return null;
 }
 
-const UTR_PATTERNS = [
-  /\bupi(?:\/|\s*(?:ref|txn|reference)?\s*(?:no\.?|id|num)?[:\s\/-]+)([A-Za-z0-9]{6,24})\b/i,
-  /\b(?:ref(?:\s*no\.?|\s*id|\s*num)?|rrn|utr(?:\s*no\.?)?|txn\s*id|transaction\s*id|reference\s*no\.?)[:\s\/-]+([A-Za-z0-9]{6,24})\b/i,
-  /\b(?:info|via)[:\s]+[A-Za-z0-9\s-]*\/\s*([0-9]{6,24})\b/i,
-  /\bupi\/\s*([0-9]{6,24})\b/i,
-];
-
-export function extractUtr(text) {
-  if (!text || typeof text !== 'string') return '';
-  for (const pattern of UTR_PATTERNS) {
-    const match = pattern.exec(text);
-    if (match && match[1]) {
-      const val = match[1].trim();
-      if (val.length >= 6 && /\d/.test(val) && !/^(success|pending|completed|declined|reversed)$/i.test(val)) {
-        return val;
-      }
-    }
-  }
-  return '';
-}
+export { extractUtr };
 
 export function isoFromMillis(millis) {
   if (!millis) return null;
@@ -815,11 +807,17 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
 
   const ctx = buildClassificationContext(db, memberId);
   const txByDateAmount = new Map();
-  for (const row of db.all('SELECT id, date, amount, type, raw_sms FROM transactions WHERE amount > 0')) {
+  for (const row of db.all(`SELECT t.id, t.date, t.amount, t.type, t.raw_sms,
+           COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
+    FROM transactions t
+    LEFT JOIN asset_accounts a ON t.account_id = a.id
+    LEFT JOIN credit_cards c ON t.card_id = c.id
+    WHERE t.amount > 0 AND COALESCE(t.is_ignored, 0) = 0 AND COALESCE(t.is_duplicate, 0) = 0`)) {
     const key = `${row.date}:${row.amount}`;
     if (!txByDateAmount.has(key)) txByDateAmount.set(key, []);
     txByDateAmount.get(key).push({
       ...row,
+      account_last4: candidateAccountDigits(row),
       utr: extractUtr(row.raw_sms),
     });
   }
@@ -1037,11 +1035,17 @@ async function reimportInbox(db, args) {
 
   const ctx = buildClassificationContext(db, memberId);
   const txByDateAmount = new Map();
-  for (const row of db.all('SELECT id, date, amount, type, raw_sms FROM transactions WHERE amount > 0')) {
+  for (const row of db.all(`SELECT t.id, t.date, t.amount, t.type, t.raw_sms,
+           COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
+    FROM transactions t
+    LEFT JOIN asset_accounts a ON t.account_id = a.id
+    LEFT JOIN credit_cards c ON t.card_id = c.id
+    WHERE t.amount > 0 AND COALESCE(t.is_ignored, 0) = 0 AND COALESCE(t.is_duplicate, 0) = 0`)) {
     const key = `${row.date}:${row.amount}`;
     if (!txByDateAmount.has(key)) txByDateAmount.set(key, []);
     txByDateAmount.get(key).push({
       ...row,
+      account_last4: candidateAccountDigits(row),
       utr: extractUtr(row.raw_sms),
     });
   }
@@ -1189,7 +1193,8 @@ export function duplicateOf(db, { date, amount, body, type = null, accountLast4 
   const rows = db.all(
     `SELECT t.id, t.date, t.amount, t.merchant, t.category, t.type, t.description,
             t.account_id, t.card_id, t.raw_sms,
-            COALESCE(a.name, c.card_name) AS instrument_name
+            COALESCE(a.name, c.card_name) AS instrument_name,
+            COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
      FROM transactions t
      LEFT JOIN asset_accounts a ON t.account_id = a.id
      LEFT JOIN credit_cards c ON t.card_id = c.id
@@ -1208,6 +1213,15 @@ export function duplicateOf(db, { date, amount, body, type = null, accountLast4 
       if (!r.type) return true;
       const rOutflow = r.type === 'Expense' || r.type === 'Investment';
       return isOutflow === rOutflow;
+    });
+  }
+  if (!candidates.length) return null;
+
+  const incomingDigits = String(accountLast4 || '').trim().slice(-4);
+  if (incomingDigits) {
+    candidates = candidates.filter((r) => {
+      const candDigits = candidateAccountDigits(r);
+      return !candDigits || candDigits === incomingDigits;
     });
   }
   if (!candidates.length) return null;
@@ -1247,6 +1261,15 @@ export function duplicateOfFast(txByDateAmount, { date, amount, body, type = nul
       if (!r.type) return true;
       const rOutflow = r.type === 'Expense' || r.type === 'Investment';
       return isOutflow === rOutflow;
+    });
+  }
+  if (!candidates.length) return null;
+
+  const incomingDigits = String(accountLast4 || '').trim().slice(-4);
+  if (incomingDigits) {
+    candidates = candidates.filter((r) => {
+      const candDigits = candidateAccountDigits(r);
+      return !candDigits || candDigits === incomingDigits;
     });
   }
   if (!candidates.length) return null;
@@ -1304,7 +1327,8 @@ async function reviewAlerts(db, args) {
   for (const row of db.all(`
     SELECT t.id, t.date, t.amount, t.merchant, t.category, t.type, t.description,
            t.account_id, t.card_id, t.raw_sms,
-           COALESCE(a.name, c.card_name) AS instrument_name
+           COALESCE(a.name, c.card_name) AS instrument_name,
+           COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
     FROM transactions t
     LEFT JOIN asset_accounts a ON t.account_id = a.id
     LEFT JOIN credit_cards c ON t.card_id = c.id
@@ -1314,6 +1338,7 @@ async function reviewAlerts(db, args) {
     if (!txByDateAmount.has(key)) txByDateAmount.set(key, []);
     txByDateAmount.get(key).push({
       ...row,
+      account_last4: candidateAccountDigits(row),
       utr: extractUtr(row.raw_sms),
     });
   }
@@ -1645,7 +1670,7 @@ async function classifyAlert(db, args) {
   // Filing from the review screen is a deliberate act, so a twin is reported rather than
   // refused: only the user knows whether it is the bank repeating itself or a second
   // coffee.
-  const twin = duplicateOf(db, { date: args.date || today(), amount, body, type });
+  const twin = duplicateOf(db, { date: args.date || today(), amount, body, type, accountLast4: args.accountLast4 });
   let learned = { merchant_key: '', applied: 0 };
 
   let accountId = args.account_id !== undefined && args.account_id !== null ? Number(args.account_id) : null;

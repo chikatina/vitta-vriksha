@@ -11,7 +11,7 @@ import { fail } from './errors.js';
 import { BackupDecryptError, decryptData, encryptData, hashPin, pinMatches } from './crypto.js';
 import { Database } from './sqlite.js';
 import { deleteDatabase, deleteVaultKey, takePendingAlerts, writeAttempts } from './native.js';
-import { isCreditAlert, merchantKey, notATransaction } from './merchants.js';
+import { extractUtr, isCreditAlert, merchantKey, notATransaction } from './merchants.js';
 import { classifyAsset } from './asset-class.js';
 import {
   changeVaultPin, createVault, failedAttempts, isUnlocked, lockVault, mirrorConfig,
@@ -5152,7 +5152,8 @@ export function reconcileExistingTransactions(db) {
   // 1. Mark non-transactions as ignored (payee additions, passbook balances, etc.)
   const rows = db.all("SELECT id, raw_sms FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' AND COALESCE(is_ignored, 0) = 0");
   for (const row of rows) {
-    if (notATransaction(row.raw_sms)) {
+    const reason = notATransaction(row.raw_sms);
+    if (reason && reason !== 'self-transfer' && reason !== 'card-payment') {
       db.run('UPDATE transactions SET is_ignored = 1 WHERE id = ?', [row.id]);
     }
   }
@@ -5222,11 +5223,20 @@ export function reconcileExistingTransactions(db) {
   }
 
   // 5. Pair matching outflow and inflow transactions across distinct user accounts/cards/loans
-  for (let i = 0; i < activeTx.length; i++) {
-    const t1 = activeTx[i];
-    for (let j = i + 1; j < activeTx.length; j++) {
-      const t2 = activeTx[j];
-      if (Math.abs(t1.amount - t2.amount) < 0.01) {
+  // Group by exact rounded amount (in paise) to eliminate O(N^2) pairwise comparisons
+  const txByAmount = new Map();
+  for (const t of activeTx) {
+    const key = Math.round(t.amount * 100);
+    if (!txByAmount.has(key)) txByAmount.set(key, []);
+    txByAmount.get(key).push(t);
+  }
+
+  for (const group of txByAmount.values()) {
+    if (group.length < 2) continue;
+    for (let i = 0; i < group.length; i++) {
+      const t1 = group[i];
+      for (let j = i + 1; j < group.length; j++) {
+        const t2 = group[j];
         const inst1 = t1.loan_id ? `loan:${t1.loan_id}` : (t1.card_id ? `card:${t1.card_id}` : (t1.account_id ? `acc:${t1.account_id}` : null));
         const inst2 = t2.loan_id ? `loan:${t2.loan_id}` : (t2.card_id ? `card:${t2.card_id}` : (t2.account_id ? `acc:${t2.account_id}` : null));
         if (inst1 && inst2 && inst1 !== inst2) {
@@ -5236,10 +5246,31 @@ export function reconcileExistingTransactions(db) {
             const isT1Credit = t1.type === 'Income' ? true : (t1.type === 'Expense' ? false : isCreditAlert(t1.raw_sms));
             const isT2Credit = t2.type === 'Income' ? true : (t2.type === 'Expense' ? false : isCreditAlert(t2.raw_sms));
             if (isT1Credit !== isT2Credit) {
+              const utr1 = extractUtr(t1.raw_sms);
+              const utr2 = extractUtr(t2.raw_sms);
+              const shareUtr = Boolean(utr1 && utr2 && utr1 === utr2);
               const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(t1.raw_sms || '')
                 || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(t2.raw_sms || '');
               const hasLoan = Boolean(t1.loan_id || t2.loan_id) || isLoanOrEmi;
               const isCard = !isLoanOrEmi && Boolean(t1.card_id || t2.card_id);
+
+              // Require explicit correlation: shared UTR, loan/mandate alert, credit card repayment keyword, prior transfer flag, or counterparty account mention
+              const mentionsTransfer = /self[- ]transfer|transfer to self|own a\/c|trf to|card.*payment|payment.*card|credit card/i.test(t1.raw_sms || '')
+                || /self[- ]transfer|transfer to self|own a\/c|trf to|card.*payment|payment.*card|credit card/i.test(t2.raw_sms || '');
+              const isAlreadyTransfer = t1.type === 'Transfer' || t2.type === 'Transfer';
+              const t1Acc = userAccounts.find((a) => a.id === t1.account_id);
+              const t2Acc = userAccounts.find((a) => a.id === t2.account_id);
+              const t1Digits = String(t1Acc?.account_number || t1Acc?.debit_card_last_4 || '').slice(-4);
+              const t2Digits = String(t2Acc?.account_number || t2Acc?.debit_card_last_4 || '').slice(-4);
+              const mentionsOtherAccount = Boolean(
+                (t2Digits && t1.raw_sms && t1.raw_sms.includes(t2Digits))
+                || (t1Digits && t2.raw_sms && t2.raw_sms.includes(t1Digits))
+              );
+
+              if (!shareUtr && !hasLoan && !isCard && !mentionsTransfer && !isAlreadyTransfer && !mentionsOtherAccount) {
+                continue;
+              }
+
               const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
               t1.type = 'Transfer';
               t1.category = cat;
