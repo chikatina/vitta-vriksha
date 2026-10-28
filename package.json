@@ -18,6 +18,7 @@
     "bump": "node tools/bump-version.mjs",
     "bump:patch": "node tools/bump-version.mjs --type patch",
     "bump:minor": "node tools/bump-version.mjs --type minor",
+    "bump:major": "node tools/bump-version.mjs --type major",
     "bump:code": "node tools/bump-version.mjs --type code-only"
   },
   "dependencies": {

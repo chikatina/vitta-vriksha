@@ -5,18 +5,33 @@ import path from 'node:path';
 
 // Parse CLI flags
 const args = process.argv.slice(2);
-let bumpType = 'patch'; // patch, minor, major, code-only
+let rawBumpType = 'patch'; // patch, minor, major, code-only, none
 let targetCode = null;
 let targetName = null;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--type' && args[i + 1]) {
-    bumpType = args[++i];
+    rawBumpType = args[++i];
   } else if (args[i] === '--code' && args[i + 1]) {
     targetCode = parseInt(args[++i], 10);
   } else if (args[i] === '--name' && args[i + 1]) {
     targetName = args[++i];
   }
+}
+
+// Normalize bump type (handles choices like "patch (Z - bug fixes)", "minor (Y)", etc.)
+const lower = (rawBumpType || '').toLowerCase();
+let bumpType = 'none';
+if (lower.includes('major')) {
+  bumpType = 'major';
+} else if (lower.includes('minor')) {
+  bumpType = 'minor';
+} else if (lower.includes('patch')) {
+  bumpType = 'patch';
+} else if (lower.includes('code')) {
+  bumpType = 'code-only';
+} else if (lower.includes('none')) {
+  bumpType = 'none';
 }
 
 const rootDir = process.cwd();
@@ -42,14 +57,24 @@ if (!codeMatch || !nameMatch) {
 const currentCode = parseInt(codeMatch[1], 10);
 const currentName = nameMatch[1];
 
-// 2. Compute new versionCode
-const newCode = targetCode && targetCode > 0 ? targetCode : currentCode + 1;
+if (bumpType === 'none' && !targetCode && !targetName) {
+  console.log(`No version bump requested. Current: v${currentName} (build ${currentCode})`);
+  process.exit(0);
+}
 
-// 3. Compute new versionName
+// 2. Compute new versionCode
+let newCode = currentCode;
+if (targetCode && targetCode > 0) {
+  newCode = targetCode;
+} else if (bumpType !== 'none' || targetName) {
+  newCode = currentCode + 1;
+}
+
+// 3. Compute new versionName (X.Y.Z)
 let newName = currentName;
 if (targetName) {
-  newName = targetName;
-} else if (bumpType === 'code-only') {
+  newName = targetName.trim().replace(/^v/, '');
+} else if (bumpType === 'code-only' || bumpType === 'none') {
   newName = currentName;
 } else {
   const parts = currentName.split('.').map(p => parseInt(p, 10) || 0);
@@ -58,19 +83,23 @@ if (targetName) {
   let patch = parts[2] || 0;
 
   if (bumpType === 'major') {
+    // X bump: 1.0.9 -> 2.0.0
     major += 1;
     minor = 0;
     patch = 0;
   } else if (bumpType === 'minor') {
+    // Y bump: 1.0.9 -> 1.1.0
     minor += 1;
     patch = 0;
-  } else {
+  } else if (bumpType === 'patch') {
+    // Z bump: 1.0.9 -> 1.0.10
     patch += 1;
   }
   newName = `${major}.${minor}.${patch}`;
 }
 
-console.log(`Auto Version Bump:`);
+console.log(`Version Bump Result:`);
+console.log(`  Bump selection: ${rawBumpType}`);
 console.log(`  Previous: versionCode ${currentCode} | versionName "${currentName}"`);
 console.log(`  New:      versionCode ${newCode} | versionName "${newName}"`);
 
