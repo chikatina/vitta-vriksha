@@ -581,7 +581,6 @@ export function initDb(db, force = false) {
     CREATE INDEX IF NOT EXISTS idx_tx_type ON transactions(type);
     CREATE INDEX IF NOT EXISTS idx_tx_account ON transactions(account_id);
     CREATE INDEX IF NOT EXISTS idx_tx_card ON transactions(card_id);
-    CREATE INDEX IF NOT EXISTS idx_tx_loan ON transactions(loan_id);
     CREATE INDEX IF NOT EXISTS idx_tx_merchant_key ON transactions(merchant_key);
     CREATE INDEX IF NOT EXISTS idx_tx_date_amount ON transactions(date, amount);
 
@@ -668,7 +667,6 @@ export function initDb(db, force = false) {
         updated_at TEXT,
         FOREIGN KEY (member_id) REFERENCES family_members(id)
     );
-    CREATE INDEX IF NOT EXISTS idx_loans_last_4 ON loans(last_4);
 
     CREATE TABLE IF NOT EXISTS credit_cards (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1069,7 +1067,11 @@ export const MIGRATIONS = [
       db.run("UPDATE loans SET direction = 'borrowed' WHERE direction IS NULL OR direction = ''");
       addColumnIfMissing(db, 'demat_holdings', 'invested_value', 'REAL DEFAULT 0.0');
       addColumnIfMissing(db, 'nps_holdings', 'invested_value', 'REAL DEFAULT 0.0');
-      addColumnIfMissing(db, 'asset_accounts', 'debit_card_last_4', "TEXT DEFAULT ''");
+      addColumnIfMissing(db, 'asset_accounts', 'institution', "TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'asset_accounts', 'account_number', "TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'asset_accounts', 'institution', "TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'asset_accounts', 'account_number', "TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'asset_accounts', 'debit_card_last_4', "TEXT DEFAULT ''");
       addColumnIfMissing(db, 'asset_accounts', 'account_type', "TEXT DEFAULT ''");
       addColumnIfMissing(db, 'custom_categories', 'monthly_budget', 'REAL DEFAULT 0.0');
   db.exec(`
@@ -1589,6 +1591,8 @@ function runAdditiveMigrations(db) {
 
   addColumnIfMissing(db, 'demat_holdings', 'invested_value', 'REAL DEFAULT 0.0');
   addColumnIfMissing(db, 'nps_holdings', 'invested_value', 'REAL DEFAULT 0.0');
+  addColumnIfMissing(db, 'asset_accounts', 'institution', "TEXT DEFAULT ''");
+  addColumnIfMissing(db, 'asset_accounts', 'account_number', "TEXT DEFAULT ''");
   addColumnIfMissing(db, 'asset_accounts', 'debit_card_last_4', "TEXT DEFAULT ''");
   addColumnIfMissing(db, 'asset_accounts', 'account_type', "TEXT DEFAULT ''");
 
@@ -6380,8 +6384,10 @@ function saveTransactionBucket(db, args) {
 function deleteTransactionBucket(db, args) {
   const id = Number(args.bucket_id || args.id);
   if (!id) return fail('BAD_REQUEST', 'Bucket ID is required.');
-  db.run('UPDATE transactions SET bucket_id = NULL WHERE bucket_id = ?', [id]);
-  db.run('DELETE FROM transaction_buckets WHERE id = ?', [id]);
+  db.transaction(() => {
+    db.run('UPDATE transactions SET bucket_id = NULL WHERE bucket_id = ?', [id]);
+    db.run('DELETE FROM transaction_buckets WHERE id = ?', [id]);
+  });
   return { status: 'success', deleted_id: id };
 }
 
@@ -6400,7 +6406,7 @@ function assignTransactionsBucket(db, args) {
 }
 
 function getSpendingHeatmapAction(db, args) {
-  const memberId = resolveMemberId(db, args.member_id);
+  const [mSql, mParams] = memberClause(args.member_id, 'AND');
   const daysCount = Math.max(28, Math.min(365, Number(args.days) || 84));
   const endDate = args.end_date || today();
   const end = parseISO(endDate) || new Date();
@@ -6417,12 +6423,13 @@ function getSpendingHeatmapAction(db, args) {
            COALESCE(SUM(amount), 0) AS total_spent,
            COUNT(*) AS count
     FROM transactions
-    WHERE member_id = ?
-      AND date >= ? AND date <= ?
+    WHERE date >= ? AND date <= ?
+      ${mSql}
       AND type IN ('Expense', 'debit')
       AND COALESCE(is_ignored, 0) = 0
+      AND COALESCE(is_duplicate, 0) = 0
     GROUP BY date
-  `, [memberId, fromDate, toDate]);
+  `, [fromDate, toDate, ...mParams]);
 
   const spendMap = new Map();
   for (const r of rows) {
