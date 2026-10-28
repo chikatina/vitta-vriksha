@@ -13,6 +13,27 @@ on:
           - alpha
           - beta
           - production
+      bump_type:
+        description: 'Version Increment (SemVer: X.Y.Z)'
+        required: true
+        default: 'patch (Z - bug fixes, small updates)'
+        type: choice
+        options:
+          - 'patch (Z - bug fixes, small updates: 1.0.X)'
+          - 'minor (Y - new features: 1.X.0)'
+          - 'major (X - breaking / milestone release: X.0.0)'
+          - 'code-only (increment versionCode only, keep X.Y.Z)'
+          - 'none (keep existing version from repository)'
+      custom_version_name:
+        description: 'Custom Version Name X.Y.Z (optional override, e.g. 1.2.0)'
+        required: false
+        default: ''
+        type: string
+      version_code:
+        description: 'Override Version Code (optional integer, e.g. 18)'
+        required: false
+        default: ''
+        type: string
       release_notes:
         description: 'Release Notes / Changelog'
         required: false
@@ -107,6 +128,20 @@ jobs:
           else
             echo "Notice: Signing secrets not configured. Building unsigned release artifacts."
           fi
+
+      - name: Apply Version Override or Auto-Bump
+        env:
+          OVERRIDE_CODE: ${{ github.event.inputs.version_code }}
+          BUMP_TYPE: ${{ github.event.inputs.bump_type }}
+          CUSTOM_NAME: ${{ github.event.inputs.custom_version_name }}
+        run: |
+          ARGS=()
+          [ -n "$OVERRIDE_CODE" ] && ARGS+=("--code" "$OVERRIDE_CODE")
+          [ -n "$CUSTOM_NAME" ] && ARGS+=("--name" "$CUSTOM_NAME")
+          [ -n "$BUMP_TYPE" ] && ARGS+=("--type" "$BUMP_TYPE")
+
+          echo "Applying version configuration with args: ${ARGS[@]}"
+          node tools/bump-version.mjs "${ARGS[@]}"
 
       - name: Make Gradlew Executable
         run: chmod +x gradlew
