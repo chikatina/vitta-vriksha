@@ -271,21 +271,36 @@ export async function renderRules(container, app) {
   const granted = Bridge.checkPermission('SMS');
   const smsTrackingActive = granted && Bridge.isSmsTrackingEnabled();
 
-  const [ruleRes, merchantRes, categoryRes, discoverRes] = await Promise.all([
+  const [ruleRes, merchantRes, categoryRes, reviewRes, discoverRes] = await Promise.all([
     Bridge.call('sms', { action: 'get_rules' }),
     Bridge.call('sms', { action: 'get_merchant_rules' }),
     Bridge.db('get_categories'),
+    granted ? Bridge.call('sms', { action: 'review', days: 0, filter: reviewFilter })
+      : Promise.resolve({ items: [], counts: {} }),
     Bridge.db('discover_accounts_from_sms'),
   ]);
 
   const rules = ruleRes.rules || [];
   const merchantRules = merchantRes.rules || [];
   const categories = categoryRes.categories || [];
-  const review = [];
-  let isScanning = granted && smsTrackingActive;
-  let discovered = discoverRes.discovered || [];
+  const review = reviewRes.items || [];
+  const counts = reviewRes.counts || {};
+  const discovered = discoverRes.discovered || [];
   const existingAccounts = discoverRes.existing_accounts || [];
   const existingCards = discoverRes.existing_cards || [];
+
+  const readyList = review.filter((i) => i.state === 'pending' && (i.reason === 'ready' || i.suggested_category) && i.amount > 0);
+  const dupList = review.filter((i) => i.state === 'pending' && (i.duplicate_of > 0 || i.reason === 'possible-duplicate'));
+  const unclearList = review.filter((i) => i.state === 'pending' && (!i.amount || i.amount <= 0 || i.reason === 'amount-missing' || i.reason === 'no-rule'));
+  const allPendingList = review.filter((i) => i.state === 'pending');
+
+  let filteredReview = review;
+  if (reviewFilter === 'pending') {
+    if (reviewSubFilter === 'ready') filteredReview = readyList;
+    else if (reviewSubFilter === 'dups') filteredReview = dupList;
+    else if (reviewSubFilter === 'unclear') filteredReview = unclearList;
+    else filteredReview = allPendingList;
+  }
 
   container.innerHTML = `
     <div class="sticky-header">
@@ -301,7 +316,76 @@ export async function renderRules(container, app) {
 
     <!-- MESSAGES TAB CONTENT -->
     <div data-tab-content="messages" style="display: ${activeTab === 'messages' ? 'block' : 'none'}">
-      <div data-discovered-section></div>
+      ${discovered.length ? `
+        <div class="card" style="border:1px solid var(--accent);background:var(--surface-container-low)">
+          <div class="row-between" style="align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+            <div class="row" style="gap:6px;align-items:center;min-width:0">
+              <span style="color:var(--accent);display:flex;flex-shrink:0">${icon('star', 'icon-sm')}</span>
+              <span style="font-weight:700;font-size:13.5px;white-space:nowrap">Discovered Accounts</span>
+              <span class="badge badge-income" style="font-size:11px;padding:2px 8px">${discovered.length}</span>
+            </div>
+            <button class="btn btn-filled btn-xs" data-add-all-discovered style="flex-shrink:0">
+              ${icon('check_circle', 'icon-sm')}Add All
+            </button>
+          </div>
+          <p class="caption" style="margin-bottom:12px">
+            Detected from your SMS alerts. Tap any row to inspect details or combine with an existing account.
+          </p>
+          <div class="list virtual-scroll-box" style="background:transparent;box-shadow:none;display:flex;flex-direction:column;gap:10px">
+            ${discovered.map((d, i) => `
+              <div class="card-flat" style="background:var(--surface-container-high);padding:14px;border-radius:var(--radius-md);border:1px solid var(--outline-variant);display:flex;flex-direction:column;gap:10px;width:100%;box-sizing:border-box">
+                <div style="display:flex;align-items:flex-start;gap:12px;cursor:pointer" data-inspect-discovered="${i}">
+                  <span class="avatar avatar-sm ${d.instrument_type === 'credit_card' ? 'avatar-credit' : (d.instrument_type === 'debit_card' || d.instrument_type === 'prepaid_card' ? 'avatar-debit' : (d.instrument_type === 'wallet' ? 'avatar-wallet' : (d.instrument_type === 'meal_card' ? 'avatar-meal' : 'avatar-bank')))}" style="flex-shrink:0;margin-top:2px">
+                    ${icon(
+                      d.instrument_type === 'debit_card' ? 'payments' :
+                      (d.instrument_type === 'credit_card' ? 'credit_card' :
+                      (d.instrument_type === 'meal_card' || d.category === 'Meal Card' ? 'restaurant' :
+                      (d.instrument_type === 'wallet' || d.category === 'Wallet' ? 'account_balance_wallet' :
+                      (d.instrument_type === 'prepaid_card' || d.category === 'Prepaid Card' ? 'credit_card' : 'account_balance')))),
+                      'icon-sm'
+                    )}
+                  </span>
+                  <div style="flex:1;min-width:0">
+                    <div class="row-between" style="align-items:center;gap:6px">
+                      <div style="font-weight:700;font-size:13.5px;color:var(--on-surface);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                        ${h(d.suggested_name || d.name || d.card_name)}
+                      </div>
+                      <span class="badge ${d.instrument_type === 'credit_card' ? 'badge-gold' : (d.instrument_type === 'debit_card' || d.instrument_type === 'prepaid_card' ? 'badge-income' : (d.instrument_type === 'wallet' ? 'badge-info' : (d.instrument_type === 'meal_card' ? 'badge-warning' : 'badge-income')))}" style="font-size:10px;padding:1px 6px;text-transform:uppercase;letter-spacing:0.3px;flex-shrink:0">
+                        ${h(
+                          d.instrument_type === 'debit_card' ? 'Debit Card' :
+                          (d.instrument_type === 'credit_card' ? 'Credit Card' :
+                          (d.instrument_type === 'meal_card' || d.category === 'Meal Card' ? 'Meal Card' :
+                          (d.instrument_type === 'wallet' || d.category === 'Wallet' ? 'Wallet' :
+                          (d.instrument_type === 'prepaid_card' || d.category === 'Prepaid Card' ? 'Prepaid' : 'Bank A/c'))))
+                        )}
+                      </span>
+                    </div>
+                    <div class="caption" style="font-size:11.5px;margin-top:2px;color:var(--on-surface-variant)">
+                      ${h(d.bank || d.institution || 'Bank')} · ending ${h(d.last_4)}
+                    </div>
+                    ${d.txn_count ? `
+                      <div class="caption" style="color:var(--accent);font-size:11px;font-weight:600;margin-top:3px">
+                        ${d.txn_count} alert${d.txn_count === 1 ? '' : 's'}${d.total_spent ? ` · ${h(formatCurrency(d.total_spent, app.currency, app.locale))}` : ''}${d.last_seen ? ` · Last active ${h(formatDate(d.last_seen))}` : ''}
+                      </div>` : ''}
+                  </div>
+                </div>
+
+                <div class="discovered-card-actions">
+                  <button class="btn btn-tonal btn-xs" data-inspect-discovered="${i}">
+                    ${icon('open_in_new', 'icon-sm')}Link / Details
+                  </button>
+                  <div class="discovered-btn-group">
+                    <button class="btn btn-filled btn-xs" data-add-discovered="${i}">
+                      ${icon('add', 'icon-sm')}Add
+                    </button>
+                    <button class="btn btn-outlined btn-xs" data-ignore-discovered="${i}" style="color:var(--on-surface-variant);border-color:var(--outline-variant)">
+                      ${icon('visibility_off', 'icon-sm')}Ignore
+                    </button>
+                  </div>
+                </div>
+              </div>`).join('')}
+          </div>
+        </div>` : ''}
 
       ${granted ? `
         <div class="card">
@@ -351,7 +435,82 @@ export async function renderRules(container, app) {
           <div class="caption" data-import-result style="margin-top:10px"></div>
         </div>` : ''}
 
-      ${granted ? '<div class="section" data-messages-section></div>' : ''}
+      ${granted ? `
+        <div class="section">
+          <div class="section-header">
+            <span class="title">Messages</span>
+            <span class="caption">${counts.pending || 0} waiting · ${counts.filed || 0} filed · ${counts.ignored || 0} ignored</span>
+          </div>
+          <div class="chip-scroller review-filters" data-filters>
+            ${[
+              ['pending', `Waiting (${counts.pending || 0})`],
+              ['filed', `Filed (${counts.filed || 0})`],
+              ['ignored', `Ignored / OTP (${counts.ignored || 0})`],
+              ['all', 'Everything'],
+            ].map(([value, label]) => `
+              <button type="button" class="chip" data-filter="${value}"
+                      aria-selected="${reviewFilter === value}">${label}</button>`).join('')}
+          </div>
+
+          ${reviewFilter === 'pending' && allPendingList.length > 0 ? `
+            <div class="chip-scroller" data-sub-filters style="margin-top:var(--gap-2);margin-bottom:var(--gap-2)">
+              <button type="button" class="chip chip-sm" data-sub-filter="all" aria-selected="${reviewSubFilter === 'all'}">
+                All (${allPendingList.length})
+              </button>
+              <button type="button" class="chip chip-sm" data-sub-filter="ready" aria-selected="${reviewSubFilter === 'ready'}">
+                ${icon('check_circle', 'icon-sm')}Ready (${readyList.length})
+              </button>
+              <button type="button" class="chip chip-sm" data-sub-filter="dups" aria-selected="${reviewSubFilter === 'dups'}">
+                ${icon('content_copy', 'icon-sm')}Duplicates (${dupList.length})
+              </button>
+              <button type="button" class="chip chip-sm" data-sub-filter="unclear" aria-selected="${reviewSubFilter === 'unclear'}">
+                ${icon('visibility_off', 'icon-sm')}Unclear (${unclearList.length})
+              </button>
+            </div>` : ''}
+
+          ${(() => {
+            if (reviewFilter !== 'pending' || !allPendingList.length) return '';
+            return `
+              <div class="row" style="gap:6px;margin:8px 0 12px;flex-wrap:wrap;align-items:center;justify-content:space-between">
+                <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">
+                  ${readyList.length ? `
+                    <button type="button" class="btn btn-filled btn-xs" data-accept-all-ready style="gap:4px">
+                      ${icon('check_circle', 'icon-sm')}Accept All Ready (${readyList.length})
+                    </button>` : ''}
+                  ${dupList.length ? `
+                    <button type="button" class="btn btn-tonal btn-xs" data-discard-all-duplicates style="gap:4px">
+                      ${icon('content_copy', 'icon-sm')}Discard ${dupList.length} Duplicate${dupList.length === 1 ? '' : 's'}
+                    </button>` : ''}
+                  ${unclearList.length ? `
+                    <button type="button" class="btn btn-tonal btn-xs" data-discard-all-unclear style="gap:4px">
+                      ${icon('visibility_off', 'icon-sm')}Discard ${unclearList.length} Unclear
+                    </button>` : ''}
+                  ${allPendingList.length > 1 ? `
+                    <button type="button" class="btn btn-outlined btn-xs" data-discard-all-waiting style="gap:4px">
+                      ${icon('delete', 'icon-sm')}Discard All Waiting
+                    </button>` : ''}
+                </div>
+                <button type="button" class="btn btn-sm ${selectMode ? 'btn-filled' : 'btn-tonal'}" data-toggle-select style="gap:4px;height:28px;padding:0 10px;font-size:11.5px">
+                  ${icon(selectMode ? 'check' : 'check_circle', 'icon-sm')}<span>${selectMode ? 'Done' : 'Select'}</span>
+                </button>
+              </div>`;
+          })()}
+
+          ${filteredReview.length ? `
+            <div class="virtual-scroll-box" style="margin-top:var(--gap-2)">
+              <div class="list" data-stream-container style="background:transparent;box-shadow:none;display:flex;flex-direction:column;gap:10px"></div>
+              <div data-stream-sentinel style="height:10px;margin-top:4px"></div>
+            </div>
+            <div data-stream-footer style="margin-top:10px;text-align:center"></div>`
+          : `<div class="card">
+              <div class="caption">
+                ${reviewFilter === 'pending'
+                  ? 'Nothing waiting. Every alert the app read was either filed or recognised as something that did not move money.'
+                  : 'No messages in this filter in the last 90 days.'}
+              </div>
+            </div>`}
+          <div data-batch-bar-host></div>
+        </div>` : ''}
     </div>
 
     <!-- RULES TAB CONTENT -->
@@ -466,21 +625,8 @@ export async function renderRules(container, app) {
   if (allowButton) {
     allowButton.addEventListener('click', async () => {
       if (Bridge.permissionIsBlocked('SMS')) {
-        const goSettings = await confirmDialog(
-          'SMS Permission Required',
-          'Bank SMS tracking requires SMS permission to detect alerts on this device. Please allow SMS permission in settings.',
-          { confirmLabel: 'Open Settings' },
-        );
-        if (goSettings) Bridge.openAppSettings();
+        Bridge.openAppSettings();
         return;
-      }
-      if (Bridge.shouldShowRationale('SMS')) {
-        const proceed = await confirmDialog(
-          'Why SMS Access is Needed',
-          'Vitta Vriksha reads bank alerts on-device to auto-categorize expenses. Your messages never leave this device.',
-          { confirmLabel: 'Continue' },
-        );
-        if (!proceed) return;
       }
       allowButton.disabled = true;
       const okay = await Bridge.requestPermission('SMS');
@@ -608,7 +754,6 @@ export async function renderRules(container, app) {
       }
     });
   });
-
 
   const runButton = container.querySelector('[data-run]');
   const testInput = container.querySelector('[data-test]');
@@ -831,946 +976,474 @@ export async function renderRules(container, app) {
       batchBarHost.innerHTML = '';
       return;
     }
-
-    el.innerHTML = `
-      <div class="card discovered-accounts-card" style="border-left:4px solid var(--accent);margin-bottom:var(--gap-3)">
-        <div class="row-between" style="align-items:center;margin-bottom:10px">
-          <div style="display:flex;align-items:center;gap:8px">
-            <span class="avatar avatar-sm avatar-accent">${icon('account_balance', 'icon-sm')}</span>
-            <span class="card-title" style="margin-bottom:0;font-size:15px">Discovered Accounts & Cards</span>
-          </div>
-          <div class="row" style="gap:6px">
-            <span class="badge badge-accent">${discovered.length} found</span>
-            ${discovered.length > 1 ? `
-              <button type="button" class="btn btn-tonal btn-xs" data-add-all-discovered style="padding:2px 8px;font-size:11px">
-                Add All
-              </button>` : ''}
-          </div>
+    const selCount = selectedIndices.size;
+    batchBarHost.innerHTML = `
+      <div class="batch-action-bar">
+        <div class="row" style="gap:6px;align-items:center;min-width:0">
+          <span style="font-weight:700;font-size:13px;white-space:nowrap">${selCount} selected</span>
+          <button type="button" class="btn btn-text btn-xs" data-batch-select-all style="padding:2px 6px">
+            ${selCount === filteredReview.length ? 'Deselect' : 'Select all'}
+          </button>
         </div>
-        <p class="caption" style="margin-bottom:12px;font-size:12px">
-          The app discovered identifiers in your bank SMS that are not in your Vault. Add them so incoming alerts match their correct balance.
-        </p>
-        <div class="discovered-accounts-grid">
-          ${discovered.map((d, i) => `
-            <div class="discovered-card" data-discovered-idx="${i}">
-              <div class="discovered-card-content">
-                <span class="avatar ${d.instrument_type === 'credit_card' ? 'avatar-gold' : 'avatar-income'}">
-                  ${icon(d.instrument_type === 'credit_card' ? 'credit_card' : 'account_balance')}
-                </span>
-                <div style="flex:1;min-width:0">
-                  <div class="row-between" style="align-items:center;gap:6px">
-                    <div style="font-weight:700;font-size:13.5px;color:var(--on-surface);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                      ${h(d.suggested_name || d.name || d.card_name)}
-                    </div>
-                    <span class="badge ${d.instrument_type === 'credit_card' ? 'badge-gold' : (d.instrument_type === 'debit_card' || d.instrument_type === 'prepaid_card' ? 'badge-income' : (d.instrument_type === 'wallet' ? 'badge-info' : (d.instrument_type === 'meal_card' ? 'badge-warning' : 'badge-income')))}" style="font-size:10px;padding:1px 6px;text-transform:uppercase;letter-spacing:0.3px;flex-shrink:0">
-                      ${h(
-                        d.instrument_type === 'debit_card' ? 'Debit Card' :
-                        (d.instrument_type === 'credit_card' ? 'Credit Card' :
-                        (d.instrument_type === 'meal_card' || d.category === 'Meal Card' ? 'Meal Card' :
-                        (d.instrument_type === 'wallet' || d.category === 'Wallet' ? 'Wallet' :
-                        (d.instrument_type === 'prepaid_card' || d.category === 'Prepaid Card' ? 'Prepaid' : 'Bank A/c'))))
-                      )}
-                    </span>
-                  </div>
-                  <div class="caption" style="font-size:11.5px;margin-top:2px;color:var(--on-surface-variant)">
-                    ${h(d.bank || d.institution || 'Bank')} · ending ${h(d.last_4)}
-                  </div>
-                  ${d.txn_count ? `
-                    <div class="caption" style="color:var(--accent);font-size:11px;font-weight:600;margin-top:3px">
-                      ${d.txn_count} alert${d.txn_count === 1 ? '' : 's'}${d.total_spent ? ` · ${h(formatCurrency(d.total_spent, app.currency, app.locale))}` : ''}${d.last_seen ? ` · Last active ${h(formatDate(d.last_seen))}` : ''}
-                    </div>` : ''}
-                </div>
-              </div>
-
-              <div class="discovered-card-actions">
-                <button class="btn btn-tonal btn-xs" data-inspect-discovered="${i}">
-                  ${icon('open_in_new', 'icon-sm')}Link / Details
-                </button>
-                <div class="discovered-btn-group">
-                  <button class="btn btn-filled btn-xs" data-add-discovered="${i}">
-                    ${icon('add', 'icon-sm')}Add
-                  </button>
-                  <button class="btn btn-outlined btn-xs" data-ignore-discovered="${i}" style="color:var(--on-surface-variant);border-color:var(--outline-variant)">
-                    ${icon('visibility_off', 'icon-sm')}Ignore
-                  </button>
-                </div>
-              </div>
-            </div>`).join('')}
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          <button type="button" class="btn btn-filled btn-sm" data-batch-accept ${selCount ? '' : 'disabled'}>
+            ${icon('check', 'icon-sm')}Accept
+          </button>
+          <button type="button" class="btn btn-tonal btn-sm" data-batch-ignore ${selCount ? '' : 'disabled'}>
+            ${icon('visibility_off', 'icon-sm')}Discard
+          </button>
+          <button type="button" class="btn btn-tonal btn-sm" data-batch-category ${selCount ? '' : 'disabled'}>
+            ${icon('sell', 'icon-sm')}Category
+          </button>
         </div>
       </div>`;
 
-    el.querySelectorAll('[data-inspect-discovered]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const idx = Number(btn.dataset.inspectDiscovered);
-        const item = discovered[idx];
-        if (item) openDiscoveredAccountSheet(app, item, existingAccounts, existingCards);
-      });
-    });
-
-    el.querySelectorAll('[data-add-discovered]').forEach((btn) => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const idx = Number(btn.dataset.addDiscovered);
-        const item = discovered[idx];
-        if (!item) return;
-        btn.disabled = true;
-        btn.textContent = '...';
-
-        const isCard = item.kind === 'card' || item.instrument_type === 'credit_card';
-        const isDebit = item.is_debit_card || item.instrument_type === 'debit_card';
-        const bank = item.bank || item.institution || 'Bank';
-        const last4 = item.last_4 || '';
-
-        const recordPayload = isCard ? {
-          card_name: item.suggested_name || item.name || `${bank} Credit Card`,
-          bank,
-          last_4: last4,
-          total_limit: 0,
-          current_balance: 0,
-        } : {
-          name: item.suggested_name || item.name || `${bank} Account`,
-          category: item.category || (isDebit ? 'Bank' : (item.instrument_type === 'meal_card' ? 'Meal Card' : (item.instrument_type === 'wallet' ? 'Wallet' : 'Bank'))),
-          institution: bank,
-          account_number: isDebit ? (item.account_number || '') : (last4 || item.account_number || ''),
-          debit_card_last_4: isDebit ? (last4 || '') : (item.debit_card_last_4 || ''),
-          balance: 0,
-        };
-
-        const res = await Bridge.db('save_record', {
-          record_type: isCard ? 'card' : 'account',
-          record: recordPayload,
-        });
-
-        if (res && res.status === 'success') {
-          await Bridge.db('ignore_discovered_account', {
-            issuer: bank,
-            last_4: last4,
-            instrument_type: item.instrument_type,
-          });
-          toast(`Added ${recordPayload.name || recordPayload.card_name}!`, 'success');
-          discovered.splice(idx, 1);
-          renderDiscoveredSection();
-        } else {
-          toast(res?.message || 'Could not add record.', 'error');
-          btn.disabled = false;
-          btn.innerHTML = `${icon('add', 'icon-sm')}Add`;
-        }
-      });
-    });
-
-    el.querySelectorAll('[data-ignore-discovered]').forEach((btn) => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const idx = Number(btn.dataset.ignoreDiscovered);
-        const item = discovered[idx];
-        if (!item) return;
-
-        const confirmed = await confirmDialog(
-          'Ignore & Discard Identifier?',
-          `Future alerts for "${h(item.bank || item.institution || '')} ending ${h(item.last_4 || '')}" will not be suggested as a new discovered account.`,
-          { confirmLabel: 'Discard', danger: true },
-        );
-        if (!confirmed) return;
-
-        const res = await Bridge.db('ignore_discovered_account', {
-          issuer: item.bank || item.institution,
-          last_4: item.last_4,
-          instrument_type: item.instrument_type,
-        });
-
-        if (res && res.status === 'success') {
-          toast('Discovered identifier discarded.', 'success');
-          discovered.splice(idx, 1);
-          renderDiscoveredSection();
-        } else {
-          toast(res?.message || 'Could not discard identifier.', 'error');
-        }
-      });
-    });
-
-    const addAllDiscoveredBtn = el.querySelector('[data-add-all-discovered]');
-    if (addAllDiscoveredBtn) {
-      addAllDiscoveredBtn.addEventListener('click', async () => {
-        addAllDiscoveredBtn.disabled = true;
-        const progress = showProgressModal('Adding Discovered Accounts', {
-          message: `Saving ${discovered.length} accounts & cards to vault...`,
-          initialPercent: 40,
-          detail: 'Writing records into encrypted SQLite database',
-        });
-
-        const res = await Bridge.db('add_discovered_accounts', {
-          accounts: discovered,
-          member_id: app.memberFilter === 'all' ? 1 : Number(app.memberFilter || 1),
-        });
-
-        if (res && res.status === 'success') {
-          progress.complete(`Added ${res.added} accounts & cards!`, 350);
-          toast(`Successfully added ${res.added} accounts and cards!`, 'success');
-          discovered = [];
-          renderDiscoveredSection();
-        } else {
-          progress.fail('Could not add accounts.');
-          toast(res?.message || 'Could not add accounts.', 'error');
-          addAllDiscoveredBtn.disabled = false;
-        }
-      });
-    }
-  };
-
-  let updateMessagesStream = null;
-
-  const renderMessagesSection = () => {
-    const messagesSection = container.querySelector('[data-messages-section]');
-    if (!messagesSection) return;
-
-    const allPendingList = review.filter((i) => i.state === 'pending');
-    const readyList = allPendingList.filter((i) => i.reason === 'ready');
-    const dupList = allPendingList.filter((i) => i.duplicate_of > 0 || i.reason === 'possible-duplicate');
-    const unclearList = allPendingList.filter((i) => i.reason !== 'ready' && i.duplicate_of <= 0 && i.reason !== 'possible-duplicate');
-
-    const filedList = review.filter((i) => i.state === 'filed');
-    const ignoredList = review.filter((i) => i.state === 'ignored');
-
-    const counts = {
-      pending: allPendingList.length,
-      filed: filedList.length,
-      ignored: ignoredList.length,
-    };
-
-    let filteredReview = review;
-    if (reviewFilter === 'pending') {
-      if (reviewSubFilter === 'ready') filteredReview = readyList;
-      else if (reviewSubFilter === 'dups') filteredReview = dupList;
-      else if (reviewSubFilter === 'unclear') filteredReview = unclearList;
-      else filteredReview = allPendingList;
-    } else if (reviewFilter === 'filed') {
-      filteredReview = filedList;
-    } else if (reviewFilter === 'ignored') {
-      filteredReview = ignoredList;
-    }
-
-    messagesSection.innerHTML = `
-      <div class="section-header">
-        <span class="title">Messages</span>
-        <span class="caption" data-counts-caption>${counts.pending} waiting · ${counts.filed} filed · ${counts.ignored} ignored</span>
-      </div>
-
-      <div data-scanning-status style="display:${isScanning ? 'flex' : 'none'};align-items:center;gap:8px;padding:8px 12px;background:var(--surface-container-high);border-radius:var(--radius-sm);margin-bottom:var(--gap-2);font-size:12px;border:1px solid var(--outline-variant)">
-        <span class="avatar avatar-xs avatar-accent" style="width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0">
-          ${icon('autorenew', 'icon-sm')}
-        </span>
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:600;color:var(--on-surface)">Streaming all inbox messages...</div>
-          <div class="caption" style="font-size:11px" data-scanning-detail>Reading and categorizing history</div>
-        </div>
-        <span class="badge badge-accent" data-scanning-found style="font-size:10.5px">${counts.pending} waiting</span>
-      </div>
-
-      <div class="chip-scroller review-filters" data-filters>
-        ${[
-          ['pending', `Waiting (${counts.pending})`],
-          ['filed', `Filed (${counts.filed})`],
-          ['ignored', `Ignored / OTP (${counts.ignored})`],
-          ['all', 'Everything'],
-        ].map(([value, label]) => `
-          <button type="button" class="chip" data-filter="${value}"
-                  aria-selected="${reviewFilter === value}">${label}</button>`).join('')}
-      </div>
-
-      ${reviewFilter === 'pending' && (allPendingList.length > 0 || isScanning) ? `
-        <div class="chip-scroller" data-sub-filters style="margin-top:var(--gap-2);margin-bottom:var(--gap-2)">
-          <button type="button" class="chip chip-sm" data-sub-filter="all" aria-selected="${reviewSubFilter === 'all'}">
-            All (${allPendingList.length})
-          </button>
-          <button type="button" class="chip chip-sm" data-sub-filter="ready" aria-selected="${reviewSubFilter === 'ready'}">
-            ${icon('check_circle', 'icon-sm')}Ready (${readyList.length})
-          </button>
-          <button type="button" class="chip chip-sm" data-sub-filter="dups" aria-selected="${reviewSubFilter === 'dups'}">
-            ${icon('content_copy', 'icon-sm')}Duplicates (${dupList.length})
-          </button>
-          <button type="button" class="chip chip-sm" data-sub-filter="unclear" aria-selected="${reviewSubFilter === 'unclear'}">
-            ${icon('visibility_off', 'icon-sm')}Unclear (${unclearList.length})
-          </button>
-        </div>` : ''}
-
-      ${(() => {
-        if (reviewFilter !== 'pending' || !allPendingList.length) return '';
-        return `
-          <div class="row" style="gap:6px;margin:8px 0 12px;flex-wrap:wrap;align-items:center;justify-content:space-between">
-            <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">
-              ${readyList.length ? `
-                <button type="button" class="btn btn-filled btn-xs" data-accept-all-ready style="gap:4px">
-                  ${icon('check_circle', 'icon-sm')}Accept All Ready (${readyList.length})
-                </button>` : ''}
-              ${dupList.length ? `
-                <button type="button" class="btn btn-tonal btn-xs" data-discard-all-duplicates style="gap:4px">
-                  ${icon('content_copy', 'icon-sm')}Discard ${dupList.length} Duplicate${dupList.length === 1 ? '' : 's'}
-                </button>` : ''}
-              ${unclearList.length ? `
-                <button type="button" class="btn btn-tonal btn-xs" data-discard-all-unclear style="gap:4px">
-                  ${icon('visibility_off', 'icon-sm')}Discard ${unclearList.length} Unclear
-                </button>` : ''}
-              ${allPendingList.length > 1 ? `
-                <button type="button" class="btn btn-outlined btn-xs" data-discard-all-waiting style="gap:4px">
-                  ${icon('delete', 'icon-sm')}Discard All Waiting
-                </button>` : ''}
-            </div>
-            <button type="button" class="btn btn-sm ${selectMode ? 'btn-filled' : 'btn-tonal'}" data-toggle-select style="gap:4px;height:28px;padding:0 10px;font-size:11.5px">
-              ${icon(selectMode ? 'check' : 'check_circle', 'icon-sm')}<span>${selectMode ? 'Done' : 'Select'}</span>
-            </button>
-          </div>`;
-      })()}
-
-      <div class="virtual-scroll-box" style="margin-top:var(--gap-2);display:${filteredReview.length || isScanning ? 'block' : 'none'}">
-        <div class="list" data-stream-container style="background:transparent;box-shadow:none;display:flex;flex-direction:column;gap:10px"></div>
-        <div data-stream-sentinel style="height:10px;margin-top:4px"></div>
-      </div>
-      <div data-stream-footer style="margin-top:10px;text-align:center"></div>
-
-      <div class="card" data-empty-card style="display:${!filteredReview.length && !isScanning ? 'block' : 'none'}">
-        <div class="caption">
-          ${reviewFilter === 'pending'
-            ? 'Nothing waiting. Every alert the app read was either filed or recognised as something that did not move money.'
-            : 'No messages in this filter.'}
-        </div>
-      </div>
-      <div data-batch-bar-host></div>
-    `;
-
-    messagesSection.querySelectorAll('[data-filter]').forEach((chip) => {
-      chip.addEventListener('click', () => {
-        reviewFilter = chip.dataset.filter;
-        reviewSubFilter = 'all';
+    batchBarHost.querySelector('[data-batch-select-all]')?.addEventListener('click', () => {
+      if (selectedIndices.size === filteredReview.length) {
         selectedIndices.clear();
-        renderMessagesSection();
-      });
-    });
-
-    messagesSection.querySelectorAll('[data-sub-filter]').forEach((chip) => {
-      chip.addEventListener('click', () => {
-        reviewSubFilter = chip.dataset.subFilter;
-        selectedIndices.clear();
-        renderMessagesSection();
-      });
-    });
-
-    const selectToggleBtn = messagesSection.querySelector('[data-toggle-select]');
-    if (selectToggleBtn) {
-      selectToggleBtn.addEventListener('click', () => {
-        selectMode = !selectMode;
-        selectedIndices.clear();
-        renderMessagesSection();
-      });
-    }
-
-    const streamContainer = messagesSection.querySelector('[data-stream-container]');
-    const streamSentinel = messagesSection.querySelector('[data-stream-sentinel]');
-    const streamFooter = messagesSection.querySelector('[data-stream-footer]');
-    let renderedCount = 0;
-    const CHUNK_SIZE = 30;
-
-    const updateBatchBar = () => {
-      const batchBarHost = messagesSection.querySelector('[data-batch-bar-host]');
-      if (!batchBarHost) return;
-      if (!selectMode) {
-        batchBarHost.innerHTML = '';
-        return;
+      } else {
+        filteredReview.forEach((_, idx) => selectedIndices.add(idx));
       }
-      const selCount = selectedIndices.size;
-      batchBarHost.innerHTML = `
-        <div class="batch-action-bar">
-          <div class="row" style="gap:6px;align-items:center;min-width:0">
-            <span style="font-weight:700;font-size:13px;white-space:nowrap">${selCount} selected</span>
-            <button type="button" class="btn btn-text btn-xs" data-batch-select-all style="padding:2px 6px">
-              ${selCount === filteredReview.length ? 'Deselect' : 'Select all'}
-            </button>
-          </div>
-          <div class="row" style="gap:6px;flex-wrap:wrap">
-            <button type="button" class="btn btn-filled btn-sm" data-batch-accept ${selCount ? '' : 'disabled'}>
-              ${icon('check', 'icon-sm')}Accept
-            </button>
-            <button type="button" class="btn btn-tonal btn-sm" data-batch-ignore ${selCount ? '' : 'disabled'}>
-              ${icon('visibility_off', 'icon-sm')}Discard
-            </button>
-            <button type="button" class="btn btn-tonal btn-sm" data-batch-category ${selCount ? '' : 'disabled'}>
-              ${icon('sell', 'icon-sm')}Category
-            </button>
-          </div>
-        </div>`;
-
-      batchBarHost.querySelector('[data-batch-select-all]')?.addEventListener('click', () => {
-        if (selectedIndices.size === filteredReview.length) {
-          selectedIndices.clear();
-        } else {
-          filteredReview.forEach((_, idx) => selectedIndices.add(idx));
-        }
-        messagesSection.querySelectorAll('[data-select-item]').forEach((cb) => {
-          cb.checked = selectedIndices.has(Number(cb.dataset.selectItem));
-        });
-        updateBatchBar();
+      container.querySelectorAll('[data-select-item]').forEach((cb) => {
+        cb.checked = selectedIndices.has(Number(cb.dataset.selectItem));
       });
+      updateBatchBar();
+    });
 
-      batchBarHost.querySelector('[data-batch-accept]')?.addEventListener('click', async () => {
-        const chosenItems = Array.from(selectedIndices).map((idx) => filteredReview[idx]).filter(Boolean);
-        if (!chosenItems.length) return;
-        const progress = showProgressModal('Filing Transactions', {
-          message: `Filing ${chosenItems.length} selected transactions...`,
-          initialPercent: 40,
-          detail: 'Writing transactions to database',
-        });
-        const itemsToClassify = chosenItems.map((item) => ({
-          body: item.body,
-          amount: item.amount,
-          category: item.chosenCategory || item.suggested_category || 'Shopping',
-          type: item.suggested_type || item.type || 'Expense',
-          merchant: item.merchant || '',
-          date: item.date,
-          apply_to_all: true,
-        }));
-        const res = await Bridge.call('sms', { action: 'classify_batch', items: itemsToClassify });
-        if (res && res.status === 'success') {
-          progress.complete(`Filed ${res.filed || itemsToClassify.length} transactions!`, 300);
-          toast(`Filed ${res.filed || itemsToClassify.length} transactions.`, 'success');
-          chosenItems.forEach((i) => { i.state = 'filed'; });
-          selectedIndices.clear();
-          renderMessagesSection();
-        } else {
-          progress.fail('Failed to file transactions.');
-          toast(res?.message || 'Could not file transactions.', 'error');
-        }
+    batchBarHost.querySelector('[data-batch-accept]')?.addEventListener('click', async () => {
+      const chosenItems = Array.from(selectedIndices).map((idx) => filteredReview[idx]).filter(Boolean);
+      if (!chosenItems.length) return;
+      const progress = showProgressModal('Filing Transactions', {
+        message: `Filing ${chosenItems.length} selected transactions...`,
+        initialPercent: 40,
+        detail: 'Writing transactions to database',
       });
+      const itemsToClassify = chosenItems.map((item) => ({
+        body: item.body,
+        amount: item.amount,
+        category: item.chosenCategory || item.suggested_category || 'Shopping',
+        type: item.suggested_type || item.type || 'Expense',
+        merchant: item.merchant || '',
+        date: item.date,
+        apply_to_all: true,
+      }));
+      const res = await Bridge.call('sms', { action: 'classify_batch', items: itemsToClassify });
+      if (res && res.status === 'success') {
+        progress.complete(`Filed ${res.filed || itemsToClassify.length} transactions!`, 300);
+        toast(`Filed ${res.filed || itemsToClassify.length} transactions.`, 'success');
+        selectedIndices.clear();
+        app.refresh();
+      } else {
+        progress.fail('Failed to file transactions.');
+        toast(res?.message || 'Could not file transactions.', 'error');
+      }
+    });
 
-      batchBarHost.querySelector('[data-batch-ignore]')?.addEventListener('click', async () => {
-        const chosenItems = Array.from(selectedIndices).map((idx) => filteredReview[idx]).filter(Boolean);
-        if (!chosenItems.length) return;
-        const ok = await confirmDialog(
-          'Discard Selected Alerts?',
-          `Discard ${chosenItems.length} selected alert${chosenItems.length === 1 ? '' : 's'} from the waiting list?`,
-          { confirmLabel: 'Discard', danger: true },
-        );
-        if (!ok) return;
-        const res = await Bridge.call('sms', { action: 'ignore_batch', bodies: chosenItems.map((i) => i.body) });
-        if (res && res.status === 'success') {
-          toast(`Discarded ${chosenItems.length} alerts.`, 'success');
-          chosenItems.forEach((i) => { i.state = 'ignored'; });
-          selectedIndices.clear();
-          renderMessagesSection();
-        }
-      });
+    batchBarHost.querySelector('[data-batch-ignore]')?.addEventListener('click', async () => {
+      const chosenItems = Array.from(selectedIndices).map((idx) => filteredReview[idx]).filter(Boolean);
+      if (!chosenItems.length) return;
+      const ok = await confirmDialog(
+        'Discard Selected Alerts?',
+        `Discard ${chosenItems.length} selected alert${chosenItems.length === 1 ? '' : 's'} from the waiting list?`,
+        { confirmLabel: 'Discard', danger: true },
+      );
+      if (!ok) return;
+      const res = await Bridge.call('sms', { action: 'ignore_batch', bodies: chosenItems.map((i) => i.body) });
+      if (res && res.status === 'success') {
+        toast(`Discarded ${chosenItems.length} alerts.`, 'success');
+        selectedIndices.clear();
+        app.refresh();
+      }
+    });
 
-      batchBarHost.querySelector('[data-batch-category]')?.addEventListener('click', () => {
-        pickCategorySheet(app, categories, 'Shopping', (newCat) => {
-          const foundCat = categories.find((c) => c.name === newCat);
-          selectedIndices.forEach((idx) => {
-            const itm = filteredReview[idx];
-            if (itm) {
-              itm.chosenCategory = newCat;
-              if (foundCat && foundCat.type) itm.suggested_type = foundCat.type;
-              const btn = messagesSection.querySelector(`[data-pick-cat="${idx}"]`);
-              const lbl = btn?.querySelector('[data-cat-label]') || messagesSection.querySelector(`[data-cat-label="${idx}"]`);
-              if (lbl) lbl.textContent = newCat;
-              if (foundCat && foundCat.icon && btn) {
-                const iconContainer = btn.querySelector('span:first-child');
-                if (iconContainer) iconContainer.innerHTML = icon(foundCat.icon, 'icon-sm');
-              }
-            }
-          });
-          toast(`Updated category to "${newCat}" for ${selectedIndices.size} items.`, 'info');
-        });
-      });
-    };
-
-    const bindRowEvents = (parent) => {
-      parent.querySelectorAll('[data-pick-cat]').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const idx = Number(btn.dataset.pickCat);
-          const item = filteredReview[idx];
-          if (!item) return;
-          const current = item.chosenCategory || item.suggested_category || 'Shopping';
-          pickCategorySheet(app, categories, current, (newCat) => {
-            item.chosenCategory = newCat;
-            const foundCat = categories.find((c) => c.name === newCat);
-            if (foundCat && foundCat.type) item.suggested_type = foundCat.type;
-            const lbl = btn.querySelector('[data-cat-label]') || messagesSection.querySelector(`[data-cat-label="${idx}"]`);
+    batchBarHost.querySelector('[data-batch-category]')?.addEventListener('click', () => {
+      pickCategorySheet(app, categories, 'Shopping', (newCat) => {
+        const foundCat = categories.find((c) => c.name === newCat);
+        selectedIndices.forEach((idx) => {
+          const itm = filteredReview[idx];
+          if (itm) {
+            itm.chosenCategory = newCat;
+            if (foundCat && foundCat.type) itm.suggested_type = foundCat.type;
+            const btn = container.querySelector(`[data-pick-cat="${idx}"]`);
+            const lbl = btn?.querySelector('[data-cat-label]') || container.querySelector(`[data-cat-label="${idx}"]`);
             if (lbl) lbl.textContent = newCat;
-            if (foundCat && foundCat.icon) {
+            if (foundCat && foundCat.icon && btn) {
               const iconContainer = btn.querySelector('span:first-child');
               if (iconContainer) iconContainer.innerHTML = icon(foundCat.icon, 'icon-sm');
             }
-          });
+          }
         });
+        toast(`Updated category to "${newCat}" for ${selectedIndices.size} items.`, 'info');
       });
+    });
+  };
 
-      parent.querySelectorAll('[data-select-item]').forEach((cb) => {
-        cb.addEventListener('change', () => {
-          const idx = Number(cb.dataset.selectItem);
-          if (cb.checked) selectedIndices.add(idx);
-          else selectedIndices.delete(idx);
-          updateBatchBar();
-        });
-      });
-
-      parent.querySelectorAll('[data-quick-accept]').forEach((button) => {
-        button.addEventListener('click', async () => {
-          const idx = Number(button.dataset.quickAccept);
-          const item = filteredReview[idx];
-          if (!item) return;
-          button.disabled = true;
-
-          const chosenCat = item.chosenCategory || item.suggested_category || 'Shopping';
-          const res = await Bridge.call('sms', {
-            action: 'classify_alert',
-            body: item.body,
-            amount: item.amount,
-            category: chosenCat,
-            merchant: item.merchant || '',
-            type: item.suggested_type || item.type || 'Expense',
-            date: item.date,
-            apply_to_all: true,
-          });
-
-          if (res && res.status === 'success') {
-            item.state = 'filed';
-            item.category = chosenCat;
-            toast(`Filed ${formatCurrency(item.amount, app.currency, app.locale)} under "${chosenCat}".`, 'success');
-            renderMessagesSection();
-          } else {
-            toast(res?.message || 'Could not file transaction.', 'error');
-            button.disabled = false;
+  const bindRowEvents = (parent) => {
+    parent.querySelectorAll('[data-pick-cat]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = Number(btn.dataset.pickCat);
+        const item = filteredReview[idx];
+        if (!item) return;
+        const current = item.chosenCategory || item.suggested_category || 'Shopping';
+        pickCategorySheet(app, categories, current, (newCat) => {
+          item.chosenCategory = newCat;
+          const foundCat = categories.find((c) => c.name === newCat);
+          if (foundCat && foundCat.type) item.suggested_type = foundCat.type;
+          const lbl = btn.querySelector('[data-cat-label]') || container.querySelector(`[data-cat-label="${idx}"]`);
+          if (lbl) lbl.textContent = newCat;
+          if (foundCat && foundCat.icon) {
+            const iconContainer = btn.querySelector('span:first-child');
+            if (iconContainer) iconContainer.innerHTML = icon(foundCat.icon, 'icon-sm');
           }
         });
       });
+    });
 
-      parent.querySelectorAll('[data-ignore]').forEach((button) => {
-        button.addEventListener('click', async () => {
-          const idx = Number(button.dataset.ignore);
-          const item = filteredReview[idx];
-          if (!item) return;
-          const merchantName = item.merchant || '';
-          let createRule = false;
-          if (merchantName) {
-            createRule = await confirmDialog(
-              'Ignore / Discard Message?',
-              `Ignore this alert and exclude from ledger.${merchantName ? `\n\nCreate a standing rule to always auto-discard future messages from "${h(merchantName)}"?` : ''}`,
-              { confirmLabel: merchantName ? 'Ignore & Create Rule' : 'Ignore', cancelLabel: 'Cancel' },
-            );
-            if (createRule === null) return;
-          }
-
-          const res = await Bridge.call('sms', {
-            action: 'ignore_alert',
-            body: item.body,
-            create_rule: Boolean(createRule && merchantName),
-            merchant: merchantName,
-          });
-          if (res && res.status === 'success') {
-            item.state = 'ignored';
-            toast(createRule ? `Message ignored and rule created for "${merchantName}".` : 'Message ignored.', 'success');
-            renderMessagesSection();
-          } else {
-            toast(res?.message || 'Could not ignore that message.', 'error');
-          }
-        });
+    parent.querySelectorAll('[data-select-item]').forEach((cb) => {
+      cb.addEventListener('change', () => {
+        const idx = Number(cb.dataset.selectItem);
+        if (cb.checked) selectedIndices.add(idx);
+        else selectedIndices.delete(idx);
+        updateBatchBar();
       });
+    });
 
-      parent.querySelectorAll('[data-classify]').forEach((button) => {
-        button.addEventListener('click', () => alertSheet(app, categories, filteredReview[Number(button.dataset.classify)]));
-      });
+    parent.querySelectorAll('[data-quick-accept]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const idx = Number(button.dataset.quickAccept);
+        const item = filteredReview[idx];
+        if (!item) return;
+        button.disabled = true;
 
-      parent.querySelectorAll('[data-edit]').forEach((button) => {
-        button.addEventListener('click', () => alertSheet(app, categories, filteredReview[Number(button.dataset.edit)]));
-      });
-
-      parent.querySelectorAll('[data-duplicate]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const idx = Number(btn.dataset.duplicate);
-          const item = filteredReview[idx];
-          if (!item) return;
-
-          const confirmed = await confirmDialog(
-            'Mark as duplicate?',
-            'This will flag the SMS alert so it does not appear as a pending transaction.',
-            { confirmLabel: 'Mark duplicate' },
-          );
-          if (!confirmed) return;
-
-          const res = await Bridge.call('sms', {
-            action: 'mark_duplicate',
-            body: item.body,
-          });
-
-          if (res && res.status === 'success') {
-            item.state = 'ignored';
-            toast('Marked as duplicate.', 'success');
-            renderMessagesSection();
-          } else {
-            toast(res?.message || 'Could not mark as duplicate.', 'error');
-          }
-        });
-      });
-
-      parent.querySelectorAll('[data-discard-duplicate]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const idx = Number(btn.dataset.discardDuplicate);
-          const item = filteredReview[idx];
-          if (!item) return;
-          btn.disabled = true;
-
-          const res = await Bridge.call('sms', {
-            action: 'mark_duplicate',
-            body: item.body,
-          });
-
-          if (res && res.status === 'success') {
-            item.state = 'ignored';
-            toast('Discarded duplicate alert.', 'success');
-            renderMessagesSection();
-          } else {
-            toast(res?.message || 'Could not discard alert.', 'error');
-            btn.disabled = false;
-          }
-        });
-      });
-
-      parent.querySelectorAll('[data-merge-duplicate]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const idx = Number(btn.dataset.mergeDuplicate);
-          const item = filteredReview[idx];
-          if (!item) return;
-          btn.disabled = true;
-          const twin = item.duplicate_twin || {};
-          const targetId = twin.id || item.duplicate_of;
-
-          const res = await Bridge.call('sms', {
-            action: 'merge_alert',
-            transaction_id: targetId,
-            body: item.body,
-            raw_sms: item.body,
-            date: item.date,
-            amount: item.amount,
-            merchant: item.merchant || twin.merchant || '',
-            category: item.chosenCategory || item.suggested_category || twin.category || 'Shopping',
-            type: item.suggested_type || twin.type || 'Expense',
-            apply_to_all: true,
-          });
-
-          if (res && res.status === 'success') {
-            item.state = 'filed';
-            toast('Merged details into existing transaction.', 'success');
-            renderMessagesSection();
-          } else {
-            toast(res?.message || 'Could not merge alert.', 'error');
-            btn.disabled = false;
-          }
-        });
-      });
-
-      parent.querySelectorAll('[data-keep-both]').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          const idx = Number(btn.dataset.keepBoth);
-          const item = filteredReview[idx];
-          if (!item) return;
-          btn.disabled = true;
-
-          const chosenCat = item.chosenCategory || item.suggested_category || 'Shopping';
-          const res = await Bridge.call('sms', {
-            action: 'classify_alert',
-            body: item.body,
-            amount: item.amount,
-            category: chosenCat,
-            merchant: item.merchant || '',
-            type: item.suggested_type || item.type || 'Expense',
-            date: item.date,
-            apply_to_all: true,
-            override_duplicate: true,
-          });
-
-          if (res && res.status === 'success') {
-            item.state = 'filed';
-            item.category = chosenCat;
-            toast(`Filed ${formatCurrency(item.amount, app.currency, app.locale)} under "${chosenCat}".`, 'success');
-            renderMessagesSection();
-          } else {
-            toast(res?.message || 'Could not file transaction.', 'error');
-            btn.disabled = false;
-          }
-        });
-      });
-
-      parent.querySelectorAll('[data-compare-duplicate]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const item = filteredReview[Number(btn.dataset.compareDuplicate)];
-          if (item) openDuplicateCompareSheet(app, categories, item);
-        });
-      });
-    };
-
-    const renderNextBatch = () => {
-      if (!streamContainer) return;
-      const nextSlice = filteredReview.slice(renderedCount, renderedCount + CHUNK_SIZE);
-      if (!nextSlice.length) return;
-
-      const tempDiv = document.createElement('div');
-      tempDiv.innerHTML = nextSlice.map((item, i) => {
-        const actualIdx = renderedCount + i;
-        return renderAlertCard(item, actualIdx, categories, selectMode, selectedIndices.has(actualIdx), app);
-      }).join('');
-
-      bindRowEvents(tempDiv);
-      while (tempDiv.firstChild) {
-        streamContainer.appendChild(tempDiv.firstChild);
-      }
-      renderedCount += nextSlice.length;
-
-      if (streamFooter) {
-        if (renderedCount < filteredReview.length) {
-          streamFooter.innerHTML = `
-            <button type="button" class="btn btn-tonal btn-block" data-load-more style="margin-top:8px">
-              ${icon('expand_more', 'icon-sm')}Show more (${filteredReview.length - renderedCount} remaining)
-            </button>`;
-          streamFooter.querySelector('[data-load-more]')?.addEventListener('click', renderNextBatch);
-        } else {
-          streamFooter.innerHTML = '';
-        }
-      }
-    };
-
-    updateMessagesStream = (newItems, isDone, readCount, totalCount) => {
-      const curPending = review.filter((i) => i.state === 'pending');
-      const curReady = curPending.filter((i) => i.reason === 'ready');
-      const curDups = curPending.filter((i) => i.duplicate_of > 0 || i.reason === 'possible-duplicate');
-      const curUnclear = curPending.filter((i) => i.reason !== 'ready' && i.duplicate_of <= 0 && i.reason !== 'possible-duplicate');
-      const curFiled = review.filter((i) => i.state === 'filed');
-      const curIgnored = review.filter((i) => i.state === 'ignored');
-
-      const countsCaption = messagesSection.querySelector('[data-counts-caption]');
-      if (countsCaption) {
-        countsCaption.textContent = `${curPending.length} waiting · ${curFiled.length} filed · ${curIgnored.length} ignored`;
-      }
-
-      const scanningStatus = messagesSection.querySelector('[data-scanning-status]');
-      if (scanningStatus) {
-        scanningStatus.style.display = isScanning ? 'flex' : 'none';
-        const scanningFound = messagesSection.querySelector('[data-scanning-found]');
-        if (scanningFound) scanningFound.textContent = `${curPending.length} waiting`;
-        const scanningDetail = messagesSection.querySelector('[data-scanning-detail]');
-        if (scanningDetail && totalCount > 0) {
-          scanningDetail.textContent = `Scanned ${readCount} of ${totalCount} messages`;
-        }
-      }
-
-      const pendingChip = messagesSection.querySelector('[data-filter="pending"]');
-      if (pendingChip) pendingChip.textContent = `Waiting (${curPending.length})`;
-      const filedChip = messagesSection.querySelector('[data-filter="filed"]');
-      if (filedChip) filedChip.textContent = `Filed (${curFiled.length})`;
-      const ignoredChip = messagesSection.querySelector('[data-filter="ignored"]');
-      if (ignoredChip) ignoredChip.textContent = `Ignored / OTP (${curIgnored.length})`;
-
-      const subAll = messagesSection.querySelector('[data-sub-filter="all"]');
-      if (subAll) subAll.textContent = `All (${curPending.length})`;
-      const subReady = messagesSection.querySelector('[data-sub-filter="ready"]');
-      if (subReady) subReady.innerHTML = `${icon('check_circle', 'icon-sm')}Ready (${curReady.length})`;
-      const subDups = messagesSection.querySelector('[data-sub-filter="dups"]');
-      if (subDups) subDups.innerHTML = `${icon('content_copy', 'icon-sm')}Duplicates (${curDups.length})`;
-      const subUnclear = messagesSection.querySelector('[data-sub-filter="unclear"]');
-      if (subUnclear) subUnclear.innerHTML = `${icon('visibility_off', 'icon-sm')}Unclear (${curUnclear.length})`;
-
-      if (reviewFilter === 'pending') {
-        if (reviewSubFilter === 'ready') filteredReview = curReady;
-        else if (reviewSubFilter === 'dups') filteredReview = curDups;
-        else if (reviewSubFilter === 'unclear') filteredReview = curUnclear;
-        else filteredReview = curPending;
-      } else if (reviewFilter === 'filed') {
-        filteredReview = curFiled;
-      } else if (reviewFilter === 'ignored') {
-        filteredReview = curIgnored;
-      } else {
-        filteredReview = review;
-      }
-
-      const emptyCard = messagesSection.querySelector('[data-empty-card]');
-      const scrollBox = messagesSection.querySelector('.virtual-scroll-box');
-      if (emptyCard && scrollBox) {
-        const hasItems = filteredReview.length > 0;
-        emptyCard.style.display = !hasItems && !isScanning ? 'block' : 'none';
-        scrollBox.style.display = hasItems || isScanning ? 'block' : 'none';
-      }
-
-      if (streamContainer && (renderedCount === 0 || renderedCount < filteredReview.length)) {
-        renderNextBatch();
-      }
-
-      if (isDone && !isScanning) {
-        renderMessagesSection();
-      }
-    };
-
-    if (streamContainer && filteredReview.length) {
-      renderNextBatch();
-      if (window.IntersectionObserver && streamSentinel) {
-        const observer = new IntersectionObserver((entries) => {
-          if (entries[0]?.isIntersecting && renderedCount < filteredReview.length) {
-            renderNextBatch();
-          }
-        }, { rootMargin: '300px' });
-        observer.observe(streamSentinel);
-      }
-    }
-
-    updateBatchBar();
-
-    const acceptAllReadyBtn = messagesSection.querySelector('[data-accept-all-ready]');
-    if (acceptAllReadyBtn) {
-      acceptAllReadyBtn.addEventListener('click', async () => {
-        if (!readyList.length) return;
-        acceptAllReadyBtn.disabled = true;
-        const progress = showProgressModal('Filing Transactions', {
-          message: `Filing ${readyList.length} ready transaction alerts...`,
-          initialPercent: 30,
-          detail: 'Categorizing and saving to database',
-        });
-        const itemsToClassify = readyList.map((item) => ({
+        const chosenCat = item.chosenCategory || item.suggested_category || 'Shopping';
+        const res = await Bridge.call('sms', {
+          action: 'classify_alert',
           body: item.body,
           amount: item.amount,
-          category: item.chosenCategory || item.suggested_category || 'Shopping',
-          type: item.suggested_type || item.type || 'Expense',
+          category: chosenCat,
           merchant: item.merchant || '',
+          type: item.suggested_type || item.type || 'Expense',
           date: item.date,
           apply_to_all: true,
-        }));
-        const res = await Bridge.call('sms', { action: 'classify_batch', items: itemsToClassify });
+        });
+
         if (res && res.status === 'success') {
-          progress.complete(`Filed ${res.filed || itemsToClassify.length} transactions!`, 300);
-          toast(`Filed ${res.filed || itemsToClassify.length} transactions.`, 'success');
-          readyList.forEach((i) => { i.state = 'filed'; });
-          renderMessagesSection();
+          toast(`Filed ${formatCurrency(item.amount, app.currency, app.locale)} under "${chosenCat}".`, 'success');
+          app.refresh();
         } else {
-          progress.fail('Could not file batch.');
-          toast(res?.message || 'Could not file transactions.', 'error');
-          acceptAllReadyBtn.disabled = false;
+          toast(res?.message || 'Could not file transaction.', 'error');
+          button.disabled = false;
         }
       });
-    }
+    });
 
-    const discardAllDupsBtn = messagesSection.querySelector('[data-discard-all-duplicates]');
-    if (discardAllDupsBtn) {
-      discardAllDupsBtn.addEventListener('click', async () => {
-        if (!dupList.length) return;
+    parent.querySelectorAll('[data-ignore]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const item = filteredReview[Number(button.dataset.ignore)];
+        if (!item) return;
+        const merchantName = item.merchant || '';
+        let createRule = false;
+        if (merchantName) {
+          createRule = await confirmDialog(
+            'Ignore / Discard Message?',
+            `Ignore this alert and exclude from ledger.${merchantName ? `\n\nCreate a standing rule to always auto-discard future messages from "${h(merchantName)}"?` : ''}`,
+            { confirmLabel: merchantName ? 'Ignore & Create Rule' : 'Ignore', cancelLabel: 'Cancel' },
+          );
+          if (createRule === null) return;
+        }
+
+        const res = await Bridge.call('sms', {
+          action: 'ignore_alert',
+          body: item.body,
+          create_rule: Boolean(createRule && merchantName),
+          merchant: merchantName,
+        });
+        if (res && res.status === 'success') {
+          toast(createRule ? `Message ignored and rule created for "${merchantName}".` : 'Message ignored.', 'success');
+          app.refresh();
+        } else {
+          toast(res?.message || 'Could not ignore that message.', 'error');
+        }
+      });
+    });
+
+    parent.querySelectorAll('[data-classify]').forEach((button) => {
+      button.addEventListener('click', () => alertSheet(app, categories, filteredReview[Number(button.dataset.classify)]));
+    });
+
+    parent.querySelectorAll('[data-edit]').forEach((button) => {
+      button.addEventListener('click', () => alertSheet(app, categories, filteredReview[Number(button.dataset.edit)]));
+    });
+
+    parent.querySelectorAll('[data-duplicate]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const item = filteredReview[Number(btn.dataset.duplicate)];
+        if (!item) return;
+
         const confirmed = await confirmDialog(
-          'Discard All Duplicates?',
-          `Discard ${dupList.length} duplicate alert${dupList.length === 1 ? '' : 's'} and preserve existing ledger entries.`,
-          { confirmLabel: `Discard ${dupList.length}`, danger: true },
+          'Mark as duplicate?',
+          'This will flag the SMS alert so it does not appear as a pending transaction.',
+          { confirmLabel: 'Mark duplicate' },
         );
         if (!confirmed) return;
 
-        discardAllDupsBtn.disabled = true;
         const res = await Bridge.call('sms', {
-          action: 'ignore_batch',
-          bodies: dupList.map((i) => i.body),
+          action: 'mark_duplicate',
+          body: item.body,
         });
+
         if (res && res.status === 'success') {
-          toast(`Discarded ${res.ignored || dupList.length} duplicate alerts.`, 'success');
-          dupList.forEach((i) => { i.state = 'ignored'; });
-          renderMessagesSection();
+          toast('Marked as duplicate.', 'success');
+          app.refresh();
         } else {
-          toast(res?.message || 'Could not discard duplicates.', 'error');
-          discardAllDupsBtn.disabled = false;
+          toast(res?.message || 'Could not mark as duplicate.', 'error');
         }
       });
+    });
+
+    parent.querySelectorAll('[data-discard-duplicate]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const item = filteredReview[Number(btn.dataset.discardDuplicate)];
+        if (!item) return;
+        btn.disabled = true;
+
+        const res = await Bridge.call('sms', {
+          action: 'mark_duplicate',
+          body: item.body,
+        });
+
+        if (res && res.status === 'success') {
+          toast('Discarded duplicate alert.', 'success');
+          app.refresh();
+        } else {
+          toast(res?.message || 'Could not discard alert.', 'error');
+          btn.disabled = false;
+        }
+      });
+    });
+
+    parent.querySelectorAll('[data-merge-duplicate]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const item = filteredReview[Number(btn.dataset.mergeDuplicate)];
+        if (!item) return;
+        btn.disabled = true;
+        const twin = item.duplicate_twin || {};
+        const targetId = twin.id || item.duplicate_of;
+
+        const res = await Bridge.call('sms', {
+          action: 'merge_alert',
+          transaction_id: targetId,
+          body: item.body,
+          raw_sms: item.body,
+          date: item.date,
+          amount: item.amount,
+          merchant: item.merchant || twin.merchant || '',
+          category: item.chosenCategory || item.suggested_category || twin.category || 'Shopping',
+          type: item.suggested_type || twin.type || 'Expense',
+          apply_to_all: true,
+        });
+
+        if (res && res.status === 'success') {
+          toast('Merged details into existing transaction.', 'success');
+          app.refresh();
+        } else {
+          toast(res?.message || 'Could not merge alert.', 'error');
+          btn.disabled = false;
+        }
+      });
+    });
+
+    parent.querySelectorAll('[data-keep-both]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const item = filteredReview[Number(btn.dataset.keepBoth)];
+        if (!item) return;
+        btn.disabled = true;
+
+        const chosenCat = item.chosenCategory || item.suggested_category || 'Shopping';
+        const res = await Bridge.call('sms', {
+          action: 'classify_alert',
+          body: item.body,
+          amount: item.amount,
+          category: chosenCat,
+          merchant: item.merchant || '',
+          type: item.suggested_type || item.type || 'Expense',
+          date: item.date,
+          apply_to_all: true,
+          override_duplicate: true,
+        });
+
+        if (res && res.status === 'success') {
+          toast(`Filed ${formatCurrency(item.amount, app.currency, app.locale)} under "${chosenCat}".`, 'success');
+          app.refresh();
+        } else {
+          toast(res?.message || 'Could not file transaction.', 'error');
+          btn.disabled = false;
+        }
+      });
+    });
+
+    parent.querySelectorAll('[data-compare-duplicate]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const item = filteredReview[Number(btn.dataset.compareDuplicate)];
+        if (item) openDuplicateCompareSheet(app, categories, item);
+      });
+    });
+  };
+
+  const renderNextBatch = () => {
+    if (!streamContainer) return;
+    const nextSlice = filteredReview.slice(renderedCount, renderedCount + CHUNK_SIZE);
+    if (!nextSlice.length) return;
+
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = nextSlice.map((item, i) => {
+      const actualIdx = renderedCount + i;
+      return renderAlertCard(item, actualIdx, categories, selectMode, selectedIndices.has(actualIdx), app);
+    }).join('');
+
+    bindRowEvents(tempDiv);
+    while (tempDiv.firstChild) {
+      streamContainer.appendChild(tempDiv.firstChild);
     }
+    renderedCount += nextSlice.length;
 
-    const discardAllUnclearBtn = messagesSection.querySelector('[data-discard-all-unclear]');
-    if (discardAllUnclearBtn) {
-      discardAllUnclearBtn.addEventListener('click', async () => {
-        if (!unclearList.length) return;
-        const confirmed = await confirmDialog(
-          'Discard All Unclear Alerts?',
-          `Discard ${unclearList.length} alert${unclearList.length === 1 ? '' : 's'} with missing or unclear amounts.`,
-          { confirmLabel: `Discard ${unclearList.length}`, danger: true },
-        );
-        if (!confirmed) return;
-
-        discardAllUnclearBtn.disabled = true;
-        const res = await Bridge.call('sms', {
-          action: 'ignore_batch',
-          bodies: unclearList.map((i) => i.body),
-        });
-        if (res && res.status === 'success') {
-          toast(`Discarded ${res.ignored || unclearList.length} unclear alerts.`, 'success');
-          unclearList.forEach((i) => { i.state = 'ignored'; });
-          renderMessagesSection();
-        } else {
-          toast(res?.message || 'Could not discard alerts.', 'error');
-          discardAllUnclearBtn.disabled = false;
-        }
-      });
-    }
-
-    const discardAllWaitingBtn = messagesSection.querySelector('[data-discard-all-waiting]');
-    if (discardAllWaitingBtn) {
-      discardAllWaitingBtn.addEventListener('click', async () => {
-        if (!allPendingList.length) return;
-        const confirmed = await confirmDialog(
-          'Discard All Waiting Alerts?',
-          `Discard all ${allPendingList.length} waiting alert${allPendingList.length === 1 ? '' : 's'}.`,
-          { confirmLabel: `Discard All (${allPendingList.length})`, danger: true },
-        );
-        if (!confirmed) return;
-
-        discardAllWaitingBtn.disabled = true;
-        const res = await Bridge.call('sms', {
-          action: 'ignore_batch',
-          bodies: allPendingList.map((i) => i.body),
-        });
-        if (res && res.status === 'success') {
-          toast(`Discarded ${res.ignored || allPendingList.length} alerts.`, 'success');
-          allPendingList.forEach((i) => { i.state = 'ignored'; });
-          renderMessagesSection();
-        } else {
-          toast(res?.message || 'Could not discard alerts.', 'error');
-          discardAllWaitingBtn.disabled = false;
-        }
-      });
+    if (streamFooter) {
+      if (renderedCount < filteredReview.length) {
+        streamFooter.innerHTML = `
+          <button type="button" class="btn btn-tonal btn-block" data-load-more style="margin-top:8px">
+            ${icon('expand_more', 'icon-sm')}Show more (${filteredReview.length - renderedCount} remaining)
+          </button>`;
+        streamFooter.querySelector('[data-load-more]')?.addEventListener('click', renderNextBatch);
+      } else {
+        streamFooter.innerHTML = '';
+      }
     }
   };
 
-  renderDiscoveredSection();
-  if (granted) {
-    renderMessagesSection();
-
-    if (smsTrackingActive) {
-      Bridge.call('sms', {
-        action: 'review',
-        days: 0,
-        filter: 'all',
-        onBatch(batch) {
-          if (batch.items && batch.items.length) {
-            for (const itm of batch.items) {
-              review.push(itm);
-            }
-          }
-          if (batch.done) {
-            isScanning = false;
-          }
-          if (typeof updateMessagesStream === 'function') {
-            updateMessagesStream(batch.items || [], batch.done, batch.read || 0, batch.total || 0);
-          } else {
-            renderMessagesSection();
-          }
-        },
-      }).catch(() => {
-        isScanning = false;
-        if (typeof updateMessagesStream === 'function') {
-          updateMessagesStream([], true, 0, 0);
-        } else {
-          renderMessagesSection();
+  if (streamContainer && filteredReview.length) {
+    renderNextBatch();
+    if (window.IntersectionObserver && streamSentinel) {
+      const observer = new IntersectionObserver((entries) => {
+        if (entries[0]?.isIntersecting && renderedCount < filteredReview.length) {
+          renderNextBatch();
         }
-      });
+      }, { rootMargin: '300px' });
+      observer.observe(streamSentinel);
     }
   }
 
+  updateBatchBar();
+
+  const acceptAllReadyBtn = container.querySelector('[data-accept-all-ready]');
+  if (acceptAllReadyBtn) {
+    acceptAllReadyBtn.addEventListener('click', async () => {
+      if (!readyList.length) return;
+      acceptAllReadyBtn.disabled = true;
+      const progress = showProgressModal('Filing Transactions', {
+        message: `Filing ${readyList.length} ready transaction alerts...`,
+        initialPercent: 30,
+        detail: 'Categorizing and saving to database',
+      });
+      const itemsToClassify = readyList.map((item) => ({
+        body: item.body,
+        amount: item.amount,
+        category: item.chosenCategory || item.suggested_category || 'Shopping',
+        type: item.suggested_type || item.type || 'Expense',
+        merchant: item.merchant || '',
+        date: item.date,
+        apply_to_all: true,
+      }));
+      const res = await Bridge.call('sms', { action: 'classify_batch', items: itemsToClassify });
+      if (res && res.status === 'success') {
+        progress.complete(`Filed ${res.filed || itemsToClassify.length} transactions!`, 300);
+        toast(`Filed ${res.filed || itemsToClassify.length} transactions.`, 'success');
+        app.refresh();
+      } else {
+        progress.fail('Could not file batch.');
+        toast(res?.message || 'Could not file transactions.', 'error');
+        acceptAllReadyBtn.disabled = false;
+      }
+    });
+  }
+
+  const discardAllDupsBtn = container.querySelector('[data-discard-all-duplicates]');
+  if (discardAllDupsBtn) {
+    discardAllDupsBtn.addEventListener('click', async () => {
+      if (!dupList.length) return;
+      const confirmed = await confirmDialog(
+        'Discard All Duplicates?',
+        `Discard ${dupList.length} duplicate alert${dupList.length === 1 ? '' : 's'} and preserve existing ledger entries.`,
+        { confirmLabel: `Discard ${dupList.length}`, danger: true },
+      );
+      if (!confirmed) return;
+
+      discardAllDupsBtn.disabled = true;
+      const res = await Bridge.call('sms', {
+        action: 'ignore_batch',
+        bodies: dupList.map((i) => i.body),
+      });
+      if (res && res.status === 'success') {
+        toast(`Discarded ${res.ignored || dupList.length} duplicate alerts.`, 'success');
+        app.refresh();
+      } else {
+        toast(res?.message || 'Could not discard duplicates.', 'error');
+        discardAllDupsBtn.disabled = false;
+      }
+    });
+  }
+
+  const discardAllUnclearBtn = container.querySelector('[data-discard-all-unclear]');
+  if (discardAllUnclearBtn) {
+    discardAllUnclearBtn.addEventListener('click', async () => {
+      if (!unclearList.length) return;
+      const confirmed = await confirmDialog(
+        'Discard All Unclear Alerts?',
+        `Discard ${unclearList.length} alert${unclearList.length === 1 ? '' : 's'} with missing or unclear amounts.`,
+        { confirmLabel: `Discard ${unclearList.length}`, danger: true },
+      );
+      if (!confirmed) return;
+
+      discardAllUnclearBtn.disabled = true;
+      const res = await Bridge.call('sms', {
+        action: 'ignore_batch',
+        bodies: unclearList.map((i) => i.body),
+      });
+      if (res && res.status === 'success') {
+        toast(`Discarded ${res.ignored || unclearList.length} unclear alerts.`, 'success');
+        app.refresh();
+      } else {
+        toast(res?.message || 'Could not discard alerts.', 'error');
+        discardAllUnclearBtn.disabled = false;
+      }
+    });
+  }
+
+  const discardAllWaitingBtn = container.querySelector('[data-discard-all-waiting]');
+  if (discardAllWaitingBtn) {
+    discardAllWaitingBtn.addEventListener('click', async () => {
+      if (!allPendingList.length) return;
+      const confirmed = await confirmDialog(
+        'Discard All Waiting Alerts?',
+        `Discard all ${allPendingList.length} waiting alert${allPendingList.length === 1 ? '' : 's'}.`,
+        { confirmLabel: `Discard All (${allPendingList.length})`, danger: true },
+      );
+      if (!confirmed) return;
+
+      discardAllWaitingBtn.disabled = true;
+      const res = await Bridge.call('sms', {
+        action: 'ignore_batch',
+        bodies: allPendingList.map((i) => i.body),
+      });
+      if (res && res.status === 'success') {
+        toast(`Discarded ${res.ignored || allPendingList.length} alerts.`, 'success');
+        app.refresh();
+      } else {
+        toast(res?.message || 'Could not discard alerts.', 'error');
+        discardAllWaitingBtn.disabled = false;
+      }
+    });
+  }
 
   container.querySelectorAll('[data-forget-merchant]').forEach((btn) => {
     btn.addEventListener('click', async () => {
