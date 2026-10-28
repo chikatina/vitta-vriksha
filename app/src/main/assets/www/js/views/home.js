@@ -254,8 +254,21 @@ export async function renderHome(container, app) {
       );
       if (ask) {
         if (Bridge.permissionIsBlocked('SMS')) {
-          Bridge.openAppSettings();
+          const go = await confirmDialog(
+            'SMS Permission Blocked',
+            'SMS permission was permanently disabled. Please enable it in Android app settings.',
+            { confirmLabel: 'Open Settings' },
+          );
+          if (go) Bridge.openAppSettings();
           return;
+        }
+        if (Bridge.shouldShowRationale('SMS')) {
+          const proceed = await confirmDialog(
+            'Why SMS Access is Needed',
+            'Vitta Vriksha reads bank SMS locally on your device to automate transaction tracking. No messages leave your phone.',
+            { confirmLabel: 'Continue' },
+          );
+          if (!proceed) return;
         }
         await Bridge.requestPermission('SMS');
         if (Bridge.checkPermission('SMS')) {
@@ -289,6 +302,14 @@ export async function renderHome(container, app) {
         );
         if (go) Bridge.openAppSettings();
         return;
+      }
+      if (Bridge.shouldShowRationale('SMS')) {
+        const proceed = await confirmDialog(
+          'Why SMS Access is Needed',
+          'Vitta Vriksha reads transaction SMS on-device to track expenses and recurring payments. Your messages never leave your phone.',
+          { confirmLabel: 'Continue' },
+        );
+        if (!proceed) return;
       }
       bannerSmsBtn.disabled = true;
       await Bridge.requestPermission('SMS');
@@ -330,6 +351,15 @@ export async function renderHome(container, app) {
         );
         if (goSettings) Bridge.openAppSettings();
         return;
+      }
+
+      if (Bridge.shouldShowRationale('SMS')) {
+        const proceed = await confirmDialog(
+          'Why SMS Access is Needed',
+          'Vitta Vriksha reads transaction SMS on-device to track expenses and recurring payments. Your messages never leave your phone.',
+          { confirmLabel: 'Continue' },
+        );
+        if (!proceed) return;
       }
 
       smsAction.disabled = true;

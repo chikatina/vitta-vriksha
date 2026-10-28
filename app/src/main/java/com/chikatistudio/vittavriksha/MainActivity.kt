@@ -70,6 +70,23 @@ class MainActivity : AppCompatActivity() {
         filePathCallback = null
     }
 
+    private var pendingPermissionName: String? = null
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val name = pendingPermissionName ?: return@registerForActivityResult
+        pendingPermissionName = null
+        val granted = results.isNotEmpty() && results.values.all { it }
+        webAppInterface.reportPermissionResult(name, granted)
+    }
+
+    fun requestRuntimePermissions(name: String, permissions: Array<String>) {
+        pendingPermissionName = name
+        leftForAnotherApp = true
+        permissionLauncher.launch(permissions)
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -396,12 +413,14 @@ class MainActivity : AppCompatActivity() {
     private fun handleNotificationIntent(intent: Intent?) {
         val reminderId = intent?.getStringExtra(ReminderReceiver.EXTRA_ID)
             ?: intent?.getStringExtra("reminder_id")
+            ?: intent?.getStringExtra("action")
             ?: return
         if (::webView.isInitialized) {
             val escaped = reminderId.replace("'", "\\'")
             webView.evaluateJavascript("window.onNotificationClicked && window.onNotificationClicked('$escaped');", null)
             intent?.removeExtra(ReminderReceiver.EXTRA_ID)
             intent?.removeExtra("reminder_id")
+            intent?.removeExtra("action")
         }
     }
 

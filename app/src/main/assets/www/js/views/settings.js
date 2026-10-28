@@ -131,6 +131,21 @@ export async function renderSettings(container, app) {
   })}
 
       <div class="field" style="margin-top:16px">
+        ${selectField({
+          key: 'budget_cycle_start_day',
+          label: 'Financial month starts on',
+          value: app.settings.budget_cycle_start_day || '1',
+          options: [
+            { value: '1', label: '1st of month (Calendar default)' },
+            { value: '25', label: '25th of month (Salary cycle)' },
+            { value: '28', label: '28th of month' },
+            { value: '5', label: '5th of month' },
+            { value: '10', label: '10th of month' },
+            { value: '15', label: '15th of month' },
+          ],
+        })}
+      </div>
+      <div class="field" style="margin-top:16px">
         <label class="field-label" for="monthlyBudget">Monthly budget</label>
         <input class="input numeric" id="monthlyBudget" data-budget type="number"
                inputmode="decimal" step="any"
@@ -265,6 +280,14 @@ export async function renderSettings(container, app) {
         if (open) Bridge.openAppSettings();
         return;
       }
+      if (Bridge.shouldShowRationale('SMS')) {
+        const proceed = await confirmDialog(
+          'Why SMS Access is Needed',
+          'Vitta Vriksha reads bank alerts on-device to track expenses and recurring payments. Your messages never leave this device.',
+          { confirmLabel: 'Continue' },
+        );
+        if (!proceed) return;
+      }
       quickEnableSmsBtn.disabled = true;
       const granted = await Bridge.requestPermission('SMS');
       if (granted) {
@@ -310,6 +333,16 @@ function bindMoney(container, app) {
     app.refresh();
   });
 
+  const cycleField = container.querySelector('[data-field="budget_cycle_start_day"]');
+  if (cycleField) {
+    cycleField.addEventListener('change', async (event) => {
+      const value = event.target.value;
+      const result = await app.db('update_setting', { key: 'budget_cycle_start_day', value });
+      if (!result) return;
+      app.settings.budget_cycle_start_day = value;
+      toast('Financial cycle updated.', 'success');
+    });
+  }
   const budget = container.querySelector('[data-budget]');
   budget.addEventListener('change', async () => {
     const value = String(Number(budget.value) || 0);

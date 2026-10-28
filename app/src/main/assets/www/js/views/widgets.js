@@ -25,7 +25,7 @@ import {
   formatRelativeDate, describePeriod,
 } from '../formatters.js';
 import {
-  barSeriesChart, lineSeriesChart, donutChart, barList, legend, heatCalendar, sparkline,
+  barSeriesChart, lineSeriesChart, donutChart, barList, legend, heatCalendar, heatMatrix, sparkline,
   bindChartSelect,
 } from '../charts.js';
 import { categoryIndex, transactionRow, bindTransactionRows } from './shared.js';
@@ -1202,6 +1202,61 @@ export const WIDGETS = {
     },
   },
 
+
+  spending_heatmap: {
+    label: 'Spending heatmap',
+    description: '12-week daily spending matrix and no-spend streak',
+    icon: 'calendar_month',
+    options: [
+      {
+        key: 'weeks',
+        label: 'Range',
+        default: '12',
+        choices: [
+          { value: '12', label: '12 weeks (3 months)' },
+          { value: '24', label: '24 weeks (6 months)' },
+        ],
+      },
+    ],
+    needs(options) {
+      const weeks = options.weeks || '12';
+      return [`spending_heatmap:${weeks}`, 'summary'];
+    },
+    render(data, app, options) {
+      const weeks = Number(options.weeks) || 12;
+      const res = data[`spending_heatmap:${weeks}`];
+      if (!res || !res.cells || !res.cells.length || res.total_spent === 0) return '';
+
+      return card('Spending heatmap', `
+        <div class="row-between" style="margin-bottom:8px">
+          <span class="caption">${res.no_spend_days} no-spend days in ${weeks} weeks</span>
+          <span class="badge ${res.current_no_spend_streak > 0 ? 'badge-income' : 'badge-neutral'}">
+            ${icon('local_fire_department', 'icon-sm')}${res.current_no_spend_streak}d streak
+          </span>
+        </div>
+        <div data-heatmap>
+          ${heatMatrix(res.cells, {
+            format: (value) => money(app, value),
+          })}
+        </div>
+        <div class="row-between" style="margin-top:10px">
+          <span class="caption">Avg ${money(app, res.average_daily_spent)}/day</span>
+          <span class="caption">Longest streak: ${res.longest_no_spend_streak} days</span>
+        </div>`, { action: drillAction() });
+    },
+    bind(node, data, app, options) {
+      bindChartSelect(node.querySelector('[data-heatmap]'), (date) => {
+        if (!date) return;
+        openPeriodSheet(app, { granularity: 'day', bucket: date, flow: 'spend' });
+      });
+      const drill = node.querySelector('[data-drill]');
+      if (drill) {
+        drill.addEventListener('click', () => {
+          app.go('home', 'insights');
+        });
+      }
+    },
+  },
   daily_calendar: {
     label: 'Day by day',
     description: 'Daily spending heatmap',
@@ -1688,6 +1743,13 @@ export async function loadWidgetData(app, layout) {
   const entries = await Promise.all([...needs].map(async (need) => {
     const [kind, ...rest] = need.split(':');
 
+    if (kind === 'spending_heatmap') {
+      const weeks = Number(rest[0]) || 12;
+      return [need, await Bridge.db('get_spending_heatmap', {
+        days: weeks * 7,
+        member_id: member,
+      })];
+    }
     if (kind === 'summary') return [need, await Bridge.db('get_summary', { member_id: member })];
     if (kind === 'debt_summary') return [need, await Bridge.db('get_debt_summary', { member_id: member })];
     if (kind === 'safe_to_spend') return [need, await Bridge.db('get_safe_to_spend', { member_id: member })];

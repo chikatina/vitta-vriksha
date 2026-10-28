@@ -45,6 +45,11 @@ export const ERROR_CODES = {
   MERCHANT_UNKNOWN: 'The message names no counterparty to learn a rule from.',
   MERCHANT_CATEGORY_REQUIRED: 'A category is needed to teach the app anything.',
 
+  // SIPs and Mandates
+  MANDATE_NOT_FOUND: 'The specified SIP mandate could not be found.',
+  SIP_NOT_FOUND: 'The specified SIP could not be found.',
+  SPLIT_TOTAL_MISMATCH: 'The sum of child SIP splits must equal the mandate total amount.',
+
   // Backup
   BACKUP_PASSWORD_WEAK: 'The export password was shorter than eight characters.',
   BACKUP_PASSWORD_MISSING: 'No password was supplied.',
@@ -71,6 +76,15 @@ export const ERROR_CODES = {
   CSV_EMPTY: 'The CSV file contains no transaction rows.',
   CSV_UNKNOWN_HEADER: 'Could not identify tradebook headers in the CSV file.',
   CSV_MISSING_COLUMNS: 'CSV is missing essential trade columns.',
+
+  // Custom Buckets
+  BUCKET_NOT_FOUND: 'The specified transaction bucket was not found.',
+  BUCKET_NAME_REQUIRED: 'A name is required for the bucket.',
+
+  // UPI and Statement PDF import
+  STATEMENT_PARSE_FAILED: 'Could not extract valid transactions from this statement.',
+  STATEMENT_UNSUPPORTED: 'The statement format is not recognized or supported.',
+  IMPORT_EMPTY: 'No valid records to import were found.',
 };
 
 /** Builds an error reply. An unregistered code is surfaced rather than hidden. */

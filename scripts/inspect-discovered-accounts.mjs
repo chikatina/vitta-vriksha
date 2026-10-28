@@ -10,7 +10,7 @@ const inputPath = path.join('messages-2026-09-29', 'messages.ndjson');
 
 async function inspect() {
   if (!fs.existsSync(inputPath)) {
-    console.log(Input file not found at . Provide a valid ndjson file.);
+    console.log(`Input file not found at ${inputPath}. Provide a valid ndjson file.`);
     return;
   }
   const rl = readline.createInterface({

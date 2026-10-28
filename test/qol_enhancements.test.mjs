@@ -365,4 +365,38 @@ test('QOL: Goal Presets, dynamic glyphs and pacing calculations', async () => {
   assert.equal(goalRow.progress.value, 50);
 });
 
+test('QOL: checkbox icons render valid SVG in transaction select mode and avoid missing glyphs', async () => {
+  const { icon } = await import('../app/src/main/assets/www/js/ui.js');
+  const { ICON_CODEPOINTS } = await import('../app/src/main/assets/www/js/icon-codepoints.js');
+  const { transactionRow } = await import('../app/src/main/assets/www/js/views/shared.js');
+
+  // 1. Registered in codepoints
+  assert.ok(ICON_CODEPOINTS.check_box, 'check_box registered');
+  assert.ok(ICON_CODEPOINTS.check_box_outline_blank, 'check_box_outline_blank registered');
+
+  // 2. Icon output contains SVG and not the help glyph
+  const checkedIcon = icon('check_box', 'icon-md');
+  assert.ok(checkedIcon.includes('<svg'), 'check_box must render SVG');
+  assert.ok(checkedIcon.includes('class="icon icon-md icon-checkbox checked"'), 'check_box must have checked class');
+  assert.ok(!checkedIcon.includes(ICON_CODEPOINTS.help), 'must not render help glyph');
+
+  const blankIcon = icon('check_box_outline_blank', 'icon-md');
+  assert.ok(blankIcon.includes('<svg'), 'check_box_outline_blank must render SVG');
+  assert.ok(blankIcon.includes('class="icon icon-md icon-checkbox"'), 'check_box_outline_blank must have icon-checkbox class');
+  assert.ok(!blankIcon.includes(ICON_CODEPOINTS.help), 'must not render help glyph');
+
+  // 3. Transaction row renders checkbox in select mode
+  const app = { currency: 'INR', locale: 'en-IN' };
+  const tx = { id: 101, type: 'Expense', amount: 300, category: 'General', merchant: 'Chai', date: '2026-09-12' };
+
+  const unselectedRow = transactionRow(tx, app, new Map(), { selectable: true, selected: false });
+  assert.ok(unselectedRow.includes('selection-checkbox'), 'row has selection-checkbox container');
+  assert.ok(unselectedRow.includes('icon-checkbox'), 'row renders checkbox icon');
+  assert.ok(!unselectedRow.includes('selected-row'), 'row is not selected');
+
+  const selectedRow = transactionRow(tx, app, new Map(), { selectable: true, selected: true });
+  assert.ok(selectedRow.includes('selected-row'), 'row has selected-row class');
+  assert.ok(selectedRow.includes('icon-checkbox checked'), 'row renders checked checkbox icon');
+});
+
 

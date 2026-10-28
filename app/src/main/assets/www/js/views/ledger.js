@@ -62,7 +62,7 @@ export async function renderLedger(container, app) {
   let activeDay = app.ledgerDayValue || today;
 
   const [txRes, categoryRes, memberRes] = await Promise.all([
-    Bridge.db('get_transactions', { member_id: app.memberFilter, include_ignored: true, limit: 2000 }),
+    Bridge.db('get_transactions', { member_id: app.memberFilter, include_ignored: true, limit: 2000, bucket_id: app.bucketFilter || undefined }),
     Bridge.db('get_categories'),
     Bridge.db('get_family_members'),
   ]);
@@ -205,11 +205,31 @@ export async function renderLedger(container, app) {
         <button class="chip" data-insights>${icon('query_stats', 'icon-sm')}Trends</button>
       </div>
 
+      <div data-bucket-active-chip></div>
+      <div data-nlq-answer></div>
       <div data-stats-strip></div>
     </div>
 
     <div data-results></div>
     <div data-batch-bar-host></div>`;
+
+  
+  const bucketChipHost = container.querySelector('[data-bucket-active-chip]');
+  if (bucketChipHost && app.bucketFilter) {
+    bucketChipHost.innerHTML = `
+      <div class="row" style="margin:var(--gap-2) 0;align-items:center;background:var(--accent-container);color:var(--on-accent-container);padding:6px 12px;border-radius:var(--radius-sm);justify-content:space-between">
+        <div class="row" style="gap:6px;align-items:center;font-weight:600;font-size:13px">
+          ${icon('luggage', 'icon-sm')}<span>Filtered by Bucket</span>
+        </div>
+        <button type="button" class="btn btn-xs btn-text" data-clear-bucket-filter style="color:inherit">Clear filter</button>
+      </div>`;
+    bucketChipHost.querySelector('[data-clear-bucket-filter]')?.addEventListener('click', () => {
+      app.bucketFilter = null;
+      app.refresh();
+    });
+  }
+
+  const nlqAnswerHost = container.querySelector('[data-nlq-answer]');
 
   const results = container.querySelector('[data-results]');
   const batchBarHost = container.querySelector('[data-batch-bar-host]');
@@ -322,6 +342,9 @@ export async function renderLedger(container, app) {
           <button class="btn btn-tonal btn-sm" data-batch-cat ${count ? '' : 'disabled'}>
             ${icon('label', 'icon-sm')}Category
           </button>
+          <button class="btn btn-tonal btn-sm" data-batch-bucket ${count ? '' : 'disabled'}>
+            ${icon('luggage', 'icon-sm')}Bucket
+          </button>
           <button class="btn btn-tonal btn-sm" data-batch-member ${count ? '' : 'disabled'}>
             ${icon('group', 'icon-sm')}Member
           </button>
@@ -360,6 +383,56 @@ export async function renderLedger(container, app) {
       });
       paintBatchBar(rows);
     });
+
+    
+    const bucketBtn = batchBarHost.querySelector('[data-batch-bucket]');
+    if (bucketBtn) {
+      bucketBtn.addEventListener('click', async () => {
+        if (!selectedIds.size) return;
+        const bRes = await Bridge.db('get_transaction_buckets', { member_id: app.memberFilter });
+        const bucketsList = bRes.buckets || [];
+        const picked = await sheet('Assign to Bucket', `
+          <div class="field">
+            <label class="field-label">Choose a Bucket / Trip</label>
+            <div class="list" style="margin-top:var(--gap-2)">
+              <button class="list-row" data-choose-bucket="none">
+                <span class="avatar avatar-sm" style="background:var(--surface-container-high);color:var(--on-surface-variant)">${icon('close')}</span>
+                <span class="list-row-main"><span class="list-row-title">None (Remove from Bucket)</span></span>
+                ${icon('chevron_right', 'icon-sm')}
+              </button>
+              ${bucketsList.map((b) => `
+                <button class="list-row" data-choose-bucket="${b.id}">
+                  <span class="avatar avatar-sm" style="background:var(--accent-container);color:var(--accent)">${icon(b.icon || 'luggage')}</span>
+                  <span class="list-row-main">
+                    <span class="list-row-title">${h(b.name)}</span>
+                    <span class="list-row-sub">${h(b.status)} · ${b.target_budget ? `Budget: ${formatCurrency(b.target_budget)}` : 'No budget set'}</span>
+                  </span>
+                  ${icon('chevron_right', 'icon-sm')}
+                </button>`).join('')}
+            </div>
+          </div>`, {
+          onMount(node, close) {
+            node.querySelectorAll('[data-choose-bucket]').forEach((btn) => {
+              btn.addEventListener('click', () => close(btn.dataset.chooseBucket === 'none' ? 'none' : (btn.dataset.chooseBucket ? Number(btn.dataset.chooseBucket) : null)));
+            });
+          },
+        });
+
+        if (picked !== null && picked !== undefined) {
+          const bucketId = picked === 'none' ? null : Number(picked);
+          await Bridge.db('assign_transactions_bucket', {
+            ids: [...selectedIds],
+            bucket_id: bucketId,
+          });
+          toast(`Updated ${selectedIds.size} transactions.`, 'success');
+          selectedIds.clear();
+          selectMode = false;
+          selectToggleBtn.innerHTML = `${icon('check_circle', 'icon-sm')}<span>Select</span>`;
+          selectToggleBtn.className = 'btn btn-sm btn-tonal';
+          app.refresh();
+        }
+      });
+    }
 
     const catBtn = batchBarHost.querySelector('[data-batch-cat]');
     if (catBtn) {
@@ -896,6 +969,26 @@ export async function renderLedger(container, app) {
     if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
     searchDebounceTimer = setTimeout(() => {
       query = val.toLowerCase().trim();
+
+    const trimmed = val.trim();
+    if (trimmed.length > 5 && /\b(spent|how much|total|largest|highest|lowest|count|in\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|august|july|september|october)|last\s+month|this\s+month)\b/i.test(trimmed)) {
+      Bridge.db('nlq_query', { query: trimmed, member_id: app.memberFilter }).then((res) => {
+        if (res && res.status === 'success' && nlqAnswerHost) {
+          nlqAnswerHost.innerHTML = `
+            <div class="card-accent" style="margin:var(--gap-2) 0;padding:10px 12px">
+              <div class="row" style="gap:8px;align-items:flex-start">
+                ${icon('search', 'icon-sm')}
+                <div style="flex:1">
+                  <div style="font-size:13px;font-weight:600;line-height:1.4">${h(res.answer_text)}</div>
+                </div>
+              </div>
+            </div>`;
+        }
+      }).catch(() => {});
+    } else if (nlqAnswerHost) {
+      nlqAnswerHost.innerHTML = '';
+    }
+
       paint();
     }, 150);
   });

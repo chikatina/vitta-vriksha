@@ -127,6 +127,14 @@ export async function renderSmsIngest(container, app) {
         if (goSettings) Bridge.openAppSettings();
         return;
       }
+      if (Bridge.shouldShowRationale('SMS')) {
+        const proceed = await confirmDialog(
+          'Why SMS Access is Needed',
+          'Vitta Vriksha reads bank alerts on-device to track expenses and recurring payments. Your messages never leave this device.',
+          { confirmLabel: 'Continue' },
+        );
+        if (!proceed) return;
+      }
       await Bridge.requestPermission('SMS');
       if (!Bridge.checkPermission('SMS')) {
         toast('SMS permission is required to scan bank alerts.', 'error');
@@ -181,15 +189,12 @@ export async function renderSmsIngest(container, app) {
       return;
     }
 
-    // Check for discovered accounts & duplicate alerts
-    const [discoverRes, reviewRes] = await Promise.all([
-      Bridge.db('discover_accounts_from_sms'),
-      Bridge.call('sms', { action: 'review', days: 0, filter: 'pending' }),
-    ]);
-
+    // Check for discovered accounts & duplicate alerts from scan
+    const discoverRes = await Bridge.db('discover_accounts_from_sms');
     const discovered = discoverRes?.discovered || [];
-    let dupList = (reviewRes?.items || []).filter((i) => i.duplicate_of > 0 || i.reason === 'possible-duplicate');
+    let dupList = res.duplicate_items || [];
     const addedIndices = new Set();
+    let visibleDupsCount = 20;
 
     resultSection.style.display = 'block';
 
@@ -328,7 +333,7 @@ export async function renderSmsIngest(container, app) {
               Potential duplicate alerts held from ledger to prevent double-counting.
             </p>
             <div class="virtual-scroll-box" data-dups-box style="display:flex;flex-direction:column;gap:10px;max-height:min(55vh, 480px)">
-              ${dupList.map((item, idx) => {
+              ${dupList.slice(0, visibleDupsCount).map((item, idx) => {
                 const twin = item.duplicate_twin;
                 const isExactUtr = Boolean(twin && (twin.match_reason === 'exact-utr' || (twin.utr && item.body && item.body.includes(twin.utr))));
                 const isIdenticalText = Boolean(twin && twin.raw_sms && twin.raw_sms.trim() === item.body.trim());
@@ -441,6 +446,10 @@ export async function renderSmsIngest(container, app) {
                   </div>
                 </div>`;
               }).join('')}
+              ${dupList.length > visibleDupsCount ? `
+                <button type="button" class="btn btn-tonal btn-block btn-xs" data-load-more-dups style="margin-top:4px;gap:4px">
+                  ${icon('expand_more', 'icon-sm')}Show more (${dupList.length - visibleDupsCount} remaining)
+                </button>` : ''}
             </div>
           </div>`;
       }
@@ -652,6 +661,14 @@ export async function renderSmsIngest(container, app) {
             toast('Could not discard duplicates.', 'error');
             discardAllDupsBtn.disabled = false;
           }
+        });
+      }
+
+      const loadMoreDupsBtn = classificationContent.querySelector('[data-load-more-dups]');
+      if (loadMoreDupsBtn) {
+        loadMoreDupsBtn.addEventListener('click', () => {
+          visibleDupsCount += 25;
+          renderSummaryAndSections();
         });
       }
 

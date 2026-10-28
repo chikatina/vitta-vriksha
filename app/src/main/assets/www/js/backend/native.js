@@ -180,6 +180,16 @@ export function checkPermission(name) {
 }
 
 /**
+ * True when the user has denied the permission previously and Android recommends
+ * explaining why the feature needs this permission before prompting again.
+ */
+export function shouldShowRationale(name) {
+  return isAndroid() && bridge().shouldShowRationale
+    ? Boolean(bridge().shouldShowRationale(name))
+    : false;
+}
+
+/**
  * True when the user has ticked "don't ask again". Asking again would do nothing, so the
  * UI points at system settings instead.
  */

@@ -6,7 +6,7 @@ import {
   taxDisclaimerCard, pickFile, saveFile, showProgressModal,
 } from '../ui.js';
 import {
-  formatBucketLabel, formatBucketTitle, formatCurrency, formatDate, describePeriod, todayISO,
+  formatBucketLabel, formatBucketTitle, formatCurrency, formatDate, formatDayMonth, describePeriod, todayISO,
 } from '../formatters.js';
 import {
   barSeriesChart, lineSeriesChart, donutChart, bindChartSelect, sparkline,
@@ -85,6 +85,77 @@ function units(value) {
   return Number.isInteger(number) ? String(number) : number.toFixed(3);
 }
 
+function formatCostBreakdown(line, moneyFn) {
+  if (!line) return '';
+  const parts = [];
+  const stamp = Number(line.stamp_duty || 0);
+  const stt = Number(line.stt || 0);
+  const charges = Number(line.charges || 0);
+  if (stamp > 0) parts.push(`Stamp duty ${moneyFn(stamp)}`);
+  if (stt > 0) parts.push(`STT ${moneyFn(stt)}`);
+  if (charges > 0) parts.push(`Exchange/Charges ${moneyFn(charges)}`);
+  return parts.length ? ` · ${parts.join(' · ')}` : '';
+}
+
+function renderHistoryTransactionItem(line, money, { showScheme = false } = {}) {
+  const stamp = Number(line.stamp_duty || 0);
+  const stt = Number(line.stt || 0);
+  const charges = Number(line.charges || 0);
+  const totalDuty = stamp + stt + charges;
+  const isLoss = Number(line.amount) < 0;
+  const displayTitle = showScheme
+    ? (line.scheme_name || line.isin || line.description || line.kind || 'Movement')
+    : (line.description || line.kind || 'Movement');
+  const dateStr = line.date ? (line.date.length === 10 && line.date.includes('-') ? formatDate(line.date) : line.date) : '';
+
+  return `
+    <details class="history-item">
+      <summary>
+        <div style="min-width:0;flex:1">
+          <div class="row" style="align-items:center;gap:6px">
+            <span style="font-weight:600;font-size:13px;color:var(--on-surface);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h(displayTitle)}</span>
+            ${totalDuty > 0 ? `<span class="badge" style="background:var(--surface-container-highest);color:var(--on-surface-variant);font-size:10px;padding:1px 5px;border-radius:var(--radius-full)">Tax/Fees</span>` : ''}
+          </div>
+          <div class="caption" style="font-size:11.5px;margin-top:2px;color:var(--on-surface-variant)">
+            ${h(dateStr)}${line.nav ? ` · NAV ${money(line.nav)}` : ''}
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;display:flex;align-items:center;gap:8px">
+          <div>
+            <div class="numeric ${isLoss ? 'holdings-loss' : 'holdings-gain'}" style="font-size:13.5px;font-weight:650">
+              ${money(Math.abs(Number(line.amount)))}
+            </div>
+            <div class="caption" style="font-size:11px">${units(line.units)} units</div>
+          </div>
+          <span class="history-expand-icon">
+            ${icon('expand_more', 'icon-sm')}
+          </span>
+        </div>
+      </summary>
+      <div class="history-item-details">
+        <div class="grid-2" style="gap:8px;row-gap:8px">
+          <div><span class="caption" style="font-size:11px">Date</span><div class="numeric" style="font-weight:600">${h(line.date)}</div></div>
+          <div><span class="caption" style="font-size:11px">NAV</span><div class="numeric" style="font-weight:600">${line.nav ? money(line.nav) : '-'}</div></div>
+          <div><span class="caption" style="font-size:11px">Units</span><div class="numeric" style="font-weight:600">${units(line.units)}</div></div>
+          <div><span class="caption" style="font-size:11px">Amount</span><div class="numeric" style="font-weight:600">${money(Math.abs(Number(line.amount)))}</div></div>
+          ${stamp > 0 ? `<div><span class="caption" style="font-size:11px">Stamp Duty</span><div class="numeric" style="font-weight:600">${money(stamp)}</div></div>` : ''}
+          ${stt > 0 ? `<div><span class="caption" style="font-size:11px">STT</span><div class="numeric" style="font-weight:600">${money(stt)}</div></div>` : ''}
+          ${charges > 0 ? `<div><span class="caption" style="font-size:11px">Exchange / Charges</span><div class="numeric" style="font-weight:600">${money(charges)}</div></div>` : ''}
+          ${totalDuty > 0 ? `<div><span class="caption" style="font-size:11px">Total Statutory Costs</span><div class="numeric" style="font-weight:600">${money(totalDuty)}</div></div>` : ''}
+        </div>
+        ${(line.description && showScheme) || (line.kind && line.kind !== line.description) ? `
+          <div class="caption" style="margin-top:8px;padding-top:6px;border-top:1px solid var(--outline-variant);line-height:1.4">
+            <strong>${h(line.kind || 'Type')}:</strong> ${h(line.description || '')}
+          </div>` : ''}
+        ${line.folio_number || line.isin ? `
+          <div class="row" style="gap:12px;margin-top:6px;font-size:11px;color:var(--on-surface-variant)">
+            ${line.folio_number ? `<span>Folio: <strong class="numeric">${h(line.folio_number)}</strong></span>` : ''}
+            ${line.isin ? `<span>ISIN: <strong class="numeric">${h(line.isin)}</strong></span>` : ''}
+          </div>` : ''}
+      </div>
+    </details>`;
+}
+
 /** Everything a search should look through, including what is not on the card. */
 function haystack(holding) {
   return `${holding.name} ${holding.asset_class} ${holding.portfolio} ${holding.amc} `
@@ -119,6 +190,9 @@ export async function renderInvestments(container, app) {
       <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
         <button class="btn btn-sm btn-filled" data-record-trade style="font-size:12px;padding:6px 12px">
           ${icon('add', 'icon-sm')} Record Trade
+        </button>
+        <button class="btn btn-sm btn-tonal" data-open-sips style="font-size:12px;padding:6px 12px">
+          ${icon('trending_up', 'icon-sm')} SIP Tracker
         </button>
         <button class="btn btn-sm btn-tonal" data-import-csv style="font-size:12px;padding:6px 12px">
           ${icon('upload_file', 'icon-sm')} Import CSV
@@ -295,6 +369,9 @@ export async function renderInvestments(container, app) {
         paintList();
       });
     }
+
+    const sipsBtn = container.querySelector('[data-open-sips]');
+    if (sipsBtn) sipsBtn.addEventListener('click', () => app.open('sips'));
 
     const recordBtn = container.querySelector('[data-record-trade]');
     if (recordBtn) recordBtn.addEventListener('click', () => openRecordTradeModal(container, app));
@@ -608,22 +685,8 @@ async function openFolioPeriodSheet(app, bucket, granularity) {
       <span class="title">Every line</span>
       <span class="caption">${lines.count}${lines.capped ? '+' : ''}</span>
     </div>
-    <div class="list">
-      ${lines.transactions.map((line) => `
-        <div class="list-row">
-          <span class="list-row-main">
-            <span class="list-row-title">${h(line.scheme_name || line.isin || 'Movement')}</span>
-            <span class="list-row-sub">
-              ${h(formatDate(line.date))}${line.description ? ` · ${h(line.description)}` : ''}
-            </span>
-          </span>
-          <span class="list-row-trailing">
-            <span class="list-row-amount ${Number(line.amount) < 0 ? 'holdings-loss' : ''}">
-              ${h(money(Math.abs(Number(line.amount))))}
-            </span>
-            <span class="list-row-sub">${units(line.units)} units</span>
-          </span>
-        </div>`).join('')}
+    <div class="list" style="margin-top:8px">
+      ${lines.transactions.map((line) => renderHistoryTransactionItem(line, money, { showScheme: true })).join('')}
     </div>`, { autofocus: false });
 }
 
@@ -656,51 +719,296 @@ function fact(label, value, className = '') {
     </div>`;
 }
 
-function holdingHistoryChart(lines, money) {
-  const sorted = [...lines].reverse();
-  let running = 0;
-  const points = sorted.map((l) => {
-    running += Number(l.amount) || 0;
-    return { date: l.date, value: running, nav: l.nav, units: l.units };
-  });
+export function formatChartDateWithYear(value, includeDay = false) {
+  if (!value) return '';
+  if (value === 'Today') return 'Today';
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value));
+  let date;
+  if (match) {
+    date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  } else {
+    date = new Date(value);
+  }
+  if (!date || Number.isNaN(date.getTime())) return String(value);
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const m = MONTHS[date.getMonth()];
+  const yy = `'${String(date.getFullYear()).slice(-2)}`;
+  if (includeDay) {
+    return `${date.getDate()} ${m} ${yy}`;
+  }
+  return `${m} ${yy}`;
+}
 
-  const values = points.map((p) => p.value);
-  const max = Math.max(...values, 1);
-  const min = Math.min(...values, 0);
-  const span = max - min || 1;
-  const width = 320;
-  const height = 130;
-  const padding = 14;
-  const chartW = width - padding * 2;
-  const chartH = height - padding * 2;
+export function holdingHistoryChart(lines, money, holding) {
+  const sorted = [...lines].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  let runningUnits = 0;
+  let runningInvested = 0;
+  let lastKnownNav = Number(holding?.nav) || 0;
 
-  const x = (i) => padding + (i / Math.max(points.length - 1, 1)) * chartW;
-  const y = (val) => height - padding - ((val - min) / span) * chartH;
+  if (!lastKnownNav) {
+    for (const l of sorted) {
+      if (Number(l.nav) > 0) {
+        lastKnownNav = Number(l.nav);
+        break;
+      }
+    }
+  }
 
-  const polyPoints = points.map((p, i) => `${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ');
-  const areaPath = `M ${x(0).toFixed(1)},${height - padding} `
-    + `L ${polyPoints.split(' ').join(' L ')} `
-    + `L ${x(points.length - 1).toFixed(1)},${height - padding} Z`;
+  // Consolidate same-date transactions to eliminate duplicate x ticks and intra-day dips
+  const dateMap = new Map();
+  for (const line of sorted) {
+    const d = line.date || 'Unknown';
+    if (!dateMap.has(d)) dateMap.set(d, []);
+    dateMap.get(d).push(line);
+  }
+
+  const points = [];
+  for (const [d, txList] of dateMap.entries()) {
+    for (const line of txList) {
+      const amount = Number(line.amount) || 0;
+      const unitsVal = Number(line.units) || 0;
+      const navVal = Number(line.nav) || 0;
+      const stamp = Number(line.stamp_duty || 0);
+      const charges = Number(line.charges || 0);
+      const kind = String(line.kind || '').toUpperCase();
+      const isSell = kind.includes('SELL') || kind.includes('REDEMPTION') || amount < 0;
+
+      if (navVal > 0) lastKnownNav = navVal;
+
+      if (!isSell && (amount > 0 || unitsVal > 0)) {
+        const addCosts = stamp + charges;
+        const effectiveCost = (unitsVal > 0 && navVal > 0 && Math.abs(amount - (unitsVal * navVal)) < 0.02 && addCosts > 0)
+          ? amount + addCosts
+          : amount;
+        runningInvested += effectiveCost;
+        runningUnits += unitsVal;
+      } else if (isSell) {
+        const unitsSold = Math.abs(unitsVal);
+        if (runningUnits > 0 && unitsSold > 0) {
+          const avgCost = runningInvested / runningUnits;
+          const soldCost = Math.min(runningInvested, unitsSold * avgCost);
+          runningUnits = Math.max(0, runningUnits - unitsSold);
+          runningInvested = Math.max(0, runningInvested - soldCost);
+        } else {
+          runningInvested = Math.max(0, runningInvested - Math.abs(amount));
+          runningUnits = Math.max(0, runningUnits - unitsSold);
+        }
+      }
+    }
+
+    let valuation = 0;
+    if (runningUnits > 0) {
+      if (lastKnownNav > 0) {
+        valuation = runningUnits * lastKnownNav;
+      } else if (runningInvested > 0) {
+        valuation = runningInvested;
+      } else if (points.length > 0 && points[points.length - 1].value > 0) {
+        valuation = points[points.length - 1].value;
+      }
+    }
+
+    if (valuation <= 0 && runningUnits > 0) {
+      valuation = (points.length > 0 && points[points.length - 1].value > 0)
+        ? points[points.length - 1].value
+        : runningInvested;
+    }
+
+    points.push({
+      date: d,
+      invested: Math.round(runningInvested * 100) / 100,
+      value: Math.round(valuation * 100) / 100,
+      nav: lastKnownNav,
+      units: runningUnits,
+    });
+  }
+
+  if (holding) {
+    const curUnits = Number(holding.units) || runningUnits;
+    const curNav = Number(holding.nav) || lastKnownNav || 0;
+    const lastPoint = points[points.length - 1];
+
+    let curVal = Number(holding.value);
+    if (!curVal || curVal <= 0) {
+      if (curUnits > 0 && curNav > 0) {
+        curVal = curUnits * curNav;
+      } else if (curUnits > 0 && lastPoint && lastPoint.value > 0) {
+        curVal = lastPoint.value;
+      } else if (curUnits > 0 && runningInvested > 0) {
+        curVal = runningInvested;
+      } else {
+        curVal = 0;
+      }
+    }
+
+    let curInv = holding.has_cost ? Number(holding.invested) : (lastPoint?.invested || runningInvested);
+    if (curUnits > 0 && (!curInv || curInv <= 0) && lastPoint?.invested > 0) {
+      curInv = lastPoint.invested;
+    }
+
+    const curDate = holding.last_updated || 'Today';
+    const lastDate = lastPoint?.date;
+
+    if (!lastDate || curDate !== lastDate) {
+      points.push({
+        date: curDate,
+        invested: Math.round(curInv * 100) / 100,
+        value: Math.round(curVal * 100) / 100,
+        nav: curNav,
+        units: curUnits,
+        isCurrent: true,
+      });
+    } else {
+      lastPoint.value = Math.round(curVal * 100) / 100;
+      if (holding.has_cost || curInv > 0) {
+        lastPoint.invested = Math.round(curInv * 100) / 100;
+      }
+      lastPoint.isCurrent = true;
+    }
+  }
+
+  if (points.length < 2) {
+    return `<div class="card-flat" style="padding:16px;text-align:center;color:var(--on-surface-variant);font-size:12.5px">
+      Not enough transaction history to plot chart.
+    </div>`;
+  }
+
+  const width = 340;
+  const height = 190;
+  const padLeft = 52;
+  const padRight = 16;
+  const padTop = 18;
+  const padBottom = 26;
+
+  const chartW = width - padLeft - padRight;
+  const chartH = height - padTop - padBottom;
+
+  const allInvested = points.map((p) => p.invested);
+  const allValues = points.map((p) => p.value);
+  const allNumbers = [...allInvested, ...allValues];
+
+  let minVal = Math.min(0, ...allNumbers);
+  let maxVal = Math.max(...allNumbers, 1) * 1.08;
+  if (minVal === maxVal) maxVal = minVal + 1;
+  const span = maxVal - minVal || 1;
+
+  const x = (i) => padLeft + (i / Math.max(points.length - 1, 1)) * chartW;
+  const y = (val) => padTop + chartH - ((val - minVal) / span) * chartH;
+
+  const investedPoints = points.map((p, i) => `${x(i).toFixed(1)},${y(p.invested).toFixed(1)}`).join(' ');
+  const valuePoints = points.map((p, i) => `${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ');
+
+  const baselineY = y(minVal).toFixed(1);
+  const valueAreaPath = `M ${x(0).toFixed(1)},${baselineY} `
+    + `L ${valuePoints.split(' ').join(' L ')} `
+    + `L ${x(points.length - 1).toFixed(1)},${baselineY} Z`;
+
+  const yTicks = [0, 0.33, 0.66, 1].map((ratio) => {
+    const val = minVal + span * ratio;
+    const yPos = y(val);
+    return `
+      <line x1="${padLeft}" y1="${yPos.toFixed(1)}" x2="${(width - padRight).toFixed(1)}" y2="${yPos.toFixed(1)}"
+            stroke="var(--outline-variant)" stroke-width="0.75" stroke-dasharray="3 3"/>
+      <text x="${padLeft - 6}" y="${(yPos + 3).toFixed(1)}" text-anchor="end" font-size="9"
+            fill="var(--on-surface-variant)" font-family="monospace">${money(val)}</text>`;
+  }).join('');
+
+  const axisLine = `<line x1="${padLeft}" y1="${baselineY}" x2="${(width - padRight).toFixed(1)}" y2="${baselineY}" stroke="var(--outline)" stroke-width="1"/>`;
+
+  const firstDate = points[0]?.date;
+  const lastDate = points[points.length - 1]?.date;
+  let includeDay = false;
+  if (firstDate && lastDate && firstDate.length === 10 && lastDate.length === 10) {
+    const d1 = new Date(firstDate);
+    const d2 = new Date(lastDate);
+    const diffDays = Math.abs((d2 - d1) / (1000 * 60 * 60 * 24));
+    if (diffDays <= 90 || (d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth())) {
+      includeDay = true;
+    }
+  }
+
+  const xIndices = [0];
+  if (points.length >= 3) xIndices.push(Math.floor((points.length - 1) / 2));
+  if (points.length >= 2) xIndices.push(points.length - 1);
+
+  let xLabelsList = xIndices.map((idx) => formatChartDateWithYear(points[idx]?.date, includeDay));
+  if (!includeDay && new Set(xLabelsList).size < xLabelsList.length) {
+    includeDay = true;
+    xLabelsList = xIndices.map((idx) => formatChartDateWithYear(points[idx]?.date, true));
+  }
+
+  const xLabels = xIndices.map((idx, i) => {
+    const xPos = x(idx).toFixed(1);
+    const anchor = idx === 0 ? 'start' : (idx === points.length - 1 ? 'end' : 'middle');
+    const labelText = xLabelsList[i] || '';
+    return `<text x="${xPos}" y="${height - 6}" text-anchor="${anchor}" font-size="9.5" fill="var(--on-surface-variant)">${h(labelText)}</text>`;
+  }).join('');
+
+  const latestP = points[points.length - 1];
+  const latestVal = latestP.value;
+  const latestInv = latestP.invested;
+  const diff = latestVal - latestInv;
+  const diffPct = latestInv > 0 ? (diff / latestInv) * 100 : 0;
+  const valColor = diff >= 0 ? 'var(--income)' : 'var(--expense)';
+  const latestDateFormatted = latestP.date && latestP.date.length === 10 ? formatDate(latestP.date) : latestP.date;
 
   return `
-    <div style="background:var(--surface-container-high);border-radius:var(--radius);padding:12px;margin-top:8px">
-      <div class="row-between" style="font-size:11px;color:var(--on-surface-variant);margin-bottom:6px">
-        <span>${h(points[0].date)} · ${money(points[0].value)}</span>
-        <span>${h(points[points.length - 1].date)} · ${money(points[points.length - 1].value)}</span>
+    <div style="background:var(--surface-container-high);border-radius:var(--radius);padding:14px 12px 10px;margin-top:8px;border:1px solid var(--outline-variant)" data-holding-chart>
+      <div class="row-between" style="align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <div class="row" style="gap:12px;align-items:center">
+          <span style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;color:var(--on-surface)">
+            <span style="width:8px;height:8px;border-radius:50%;background:${valColor}"></span>
+            Value: <strong class="numeric" data-chart-val>${money(latestVal)}</strong>
+          </span>
+          <span style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;color:var(--on-surface-variant)">
+            <span style="width:10px;height:2px;background:#3B82F6;display:inline-block"></span>
+            Invested: <strong class="numeric" data-chart-inv>${money(latestInv)}</strong>
+          </span>
+        </div>
+        <div class="row" style="gap:6px;align-items:center">
+          <span class="caption numeric" data-chart-date style="font-size:11px;font-weight:600;color:var(--on-surface-variant)">${h(latestDateFormatted)}</span>
+          <span class="badge" data-chart-badge style="background:${diff >= 0 ? 'var(--income-container)' : 'var(--expense-container)'};color:${valColor};font-size:11px;font-weight:700;padding:2px 8px;border-radius:var(--radius-full)">
+            ${diff >= 0 ? '+' : ''}${money(diff)} (${diff >= 0 ? '+' : ''}${diffPct.toFixed(1)}%)
+          </span>
+        </div>
       </div>
+
       <svg width="100%" height="${height}" viewBox="0 0 ${width} ${height}" style="overflow:visible;display:block">
         <defs>
-          <linearGradient id="holdingGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.3" />
-            <stop offset="100%" stop-color="var(--accent)" stop-opacity="0.0" />
+          <linearGradient id="valueGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${valColor}" stop-opacity="0.25" />
+            <stop offset="100%" stop-color="${valColor}" stop-opacity="0.0" />
           </linearGradient>
         </defs>
-        <path d="${areaPath}" fill="url(#holdingGrad)" />
-        <polyline points="${polyPoints}" fill="none" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        ${yTicks}
+        ${axisLine}
+        <path d="${valueAreaPath}" fill="url(#valueGrad)" />
+        <polyline points="${investedPoints}" fill="none" stroke="#3B82F6" stroke-width="2" stroke-dasharray="4 3" stroke-linecap="round" stroke-linejoin="round" />
+        <polyline points="${valuePoints}" fill="none" stroke="${valColor}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+
+        <!-- Vertical Scrubber and Active Milestone Dots -->
+        <line data-chart-scrubber x1="${x(points.length - 1).toFixed(1)}" y1="${padTop}" x2="${x(points.length - 1).toFixed(1)}" y2="${baselineY}" stroke="var(--outline)" stroke-width="1.5" stroke-dasharray="3 2" style="display:none;pointer-events:none"/>
+        <circle data-chart-scrubber-inv cx="${x(points.length - 1).toFixed(1)}" cy="${y(latestInv).toFixed(1)}" r="4.5" fill="#3B82F6" stroke="var(--surface)" stroke-width="2" style="display:none;pointer-events:none"/>
+        <circle data-chart-scrubber-val cx="${x(points.length - 1).toFixed(1)}" cy="${y(latestVal).toFixed(1)}" r="5.5" fill="${valColor}" stroke="var(--surface)" stroke-width="2" style="display:none;pointer-events:none"/>
+
+        <!-- Milestone Markers -->
         ${points.map((p, i) => `
-          <circle cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="3" fill="var(--accent)" />
+          <circle cx="${x(i).toFixed(1)}" cy="${y(p.invested).toFixed(1)}" r="2.5" fill="#3B82F6" style="pointer-events:none"/>
+          <circle cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="3" fill="${valColor}" style="pointer-events:none"/>
         `).join('')}
+
+        <!-- Mobile Touch Hit Targets -->
+        ${points.map((p, i) => {
+          const colW = chartW / Math.max(points.length - 1, 1);
+          const colX = Math.max(padLeft, x(i) - colW / 2);
+          return `<rect class="chart-hit" data-point-idx="${i}" data-val="${p.value}" data-inv="${p.invested}" data-date="${h(p.date)}" data-is-current="${p.isCurrent ? '1' : '0'}" data-x="${x(i).toFixed(1)}" data-y-val="${y(p.value).toFixed(1)}" data-y-inv="${y(p.invested).toFixed(1)}" x="${colX.toFixed(1)}" y="0" width="${colW.toFixed(1)}" height="${height}" fill="transparent" style="cursor:pointer"/>`;
+        }).join('')}
+
+        ${xLabels}
       </svg>
+      <div class="row-between" style="font-size:10px;color:var(--on-surface-variant);margin-top:6px;opacity:0.8">
+        <span>Tap timeline to inspect milestone</span>
+        <span>${points.length} milestones</span>
+      </div>
     </div>`;
 }
 
@@ -713,7 +1021,7 @@ async function editCost(container, app, holding) {
     isin: holding.isin, folio_number: holding.account, member_id: app.memberFilter,
   });
   const lines = history.transactions || [];
-  const chartHtml = lines.length >= 2 ? holdingHistoryChart(lines, money) : '';
+  const chartHtml = lines.length >= 2 ? holdingHistoryChart(lines, money, holding) : '';
 
   const saved = await sheet(holding.name, `
     <!-- Top Summary Card with Editable Cost -->
@@ -767,24 +1075,47 @@ async function editCost(container, app, holding) {
       <div class="section-header" style="margin-top:16px"><span class="title">Active Tax Lots (${history.active_tax_lots.length})</span></div>
       <div class="list" style="margin-top:6px">
         ${history.active_tax_lots.map((lot) => `
-          <div class="list-row" style="align-items:center">
-            <span class="list-row-main">
-              <span class="list-row-title">${units(lot.remainingUnits)} units @ ${money(lot.buyPrice)}</span>
-              <span class="list-row-sub">Bought ${h(lot.buyDate)} · Held ${lot.daysHeld} days</span>
-            </span>
-            <span style="text-align:right">
-              <span class="badge" style="${lot.isLtcg ? 'background:var(--accent-container);color:var(--on-accent-container)' : 'background:var(--surface-container-highest);color:var(--on-surface-variant)'};font-size:11px;font-weight:700;padding:2px 8px;border-radius:var(--radius-full)">
-                ${lot.isLtcg ? `LTCG (${lot.daysHeld}d)` : `STCG (LTCG in ${lot.daysToLtcg}d)`}
-              </span>
-            </span>
-          </div>`).join('')}
+          <details class="tax-lot-item">
+            <summary>
+              <div style="min-width:0;flex:1">
+                <div class="row" style="align-items:center;gap:6px">
+                  <span style="font-weight:600;font-size:13px;color:var(--on-surface)">${units(lot.remainingUnits)} units @ ${money(lot.buyPrice)}</span>
+                </div>
+                <div class="caption" style="font-size:11.5px;margin-top:2px;color:var(--on-surface-variant)">
+                  Bought ${h(lot.buyDate)} · Held ${lot.daysHeld} days
+                </div>
+              </div>
+              <div style="text-align:right;flex-shrink:0;display:flex;align-items:center;gap:8px">
+                <span class="badge" style="${lot.isLtcg ? 'background:var(--accent-container);color:var(--on-accent-container)' : 'background:var(--surface-container-highest);color:var(--on-surface-variant)'};font-size:11px;font-weight:700;padding:2px 8px;border-radius:var(--radius-full)">
+                  ${lot.isLtcg ? `LTCG (${lot.daysHeld}d)` : `STCG (${lot.daysToLtcg}d to LTCG)`}
+                </span>
+                <span class="history-expand-icon">
+                  ${icon('expand_more', 'icon-sm')}
+                </span>
+              </div>
+            </summary>
+            <div class="tax-lot-details">
+              <div class="grid-2" style="gap:8px;row-gap:8px">
+                <div><span class="caption" style="font-size:11px">Acquisition Cost</span><div class="numeric" style="font-weight:600">${money(Number(lot.remainingUnits) * Number(lot.buyPrice))}</div></div>
+                <div><span class="caption" style="font-size:11px">Current Value</span><div class="numeric" style="font-weight:600">${money(Number(lot.remainingUnits) * Number(holding.nav || 0))}</div></div>
+                ${lot.fmvPrice ? `<div><span class="caption" style="font-size:11px">31-Jan-2018 FMV NAV</span><div class="numeric" style="font-weight:600">${money(lot.fmvPrice)}</div></div>` : ''}
+                <div><span class="caption" style="font-size:11px">Tax Status</span><div style="font-weight:600;color:${lot.isLtcg ? 'var(--income)' : 'var(--on-surface)'}">${lot.isLtcg ? 'Long Term (> 1 year)' : 'Short Term (<= 1 year)'}</div></div>
+              </div>
+            </div>
+          </details>`).join('')}
       </div>
       ${taxDisclaimerCard({ compact: true })}
     ` : ''}
 
     <!-- History Header with Interactive Cards/Chart Toggle -->
     <div class="row-between" style="margin-top:16px;align-items:center">
-      <div class="section-header" style="margin:0"><span class="title">History (${lines.length})</span></div>
+      <div class="row" style="gap:8px;align-items:center">
+        <div class="section-header" style="margin:0"><span class="title">History (${lines.length})</span></div>
+        ${lines.length ? `
+          <button type="button" class="btn btn-xs btn-text" data-toggle-expand-all style="font-size:11px;padding:2px 6px">
+            Expand all
+          </button>` : ''}
+      </div>
       ${lines.length >= 2 ? `
         <div class="row" style="background:var(--surface-container-high);border-radius:var(--radius-full);padding:2px;gap:2px">
           <button type="button" class="btn btn-sm btn-text" data-tab-history="cards" style="padding:3px 10px;border-radius:var(--radius-full);font-size:11.5px;background:var(--surface)">Cards</button>
@@ -802,19 +1133,7 @@ async function editCost(container, app, holding) {
     <div data-view-history="cards">
       ${lines.length ? `
         <div class="list" style="margin-top:8px">
-          ${lines.slice(0, 60).map((line) => `
-            <div class="list-row">
-              <span class="list-row-main">
-                <span class="list-row-title">${h(line.description || line.kind || 'Movement')}</span>
-                <span class="list-row-sub">${h(line.date)}${line.nav ? ` · NAV ${money(line.nav)}` : ''}</span>
-              </span>
-              <span class="list-row-main" style="text-align:right;flex:0 0 auto">
-                <span class="list-row-title ${Number(line.amount) < 0 ? 'holdings-loss' : 'holdings-gain'}">
-                  ${money(Math.abs(Number(line.amount)))}
-                </span>
-                <span class="list-row-sub">${units(line.units)} units</span>
-              </span>
-            </div>`).join('')}
+          ${lines.slice(0, 60).map((line) => renderHistoryTransactionItem(line, money)).join('')}
         </div>`
     : `<div class="card-flat" style="margin-top:8px">
            <div class="caption">
@@ -867,6 +1186,110 @@ async function editCost(container, app, holding) {
           tabCards.style.background = 'transparent';
           if (viewCards) viewCards.style.display = 'none';
           if (viewChart) viewChart.style.display = 'block';
+        });
+      }
+
+      // History chart interactive touch scrubber
+      const chartHost = node.querySelector('[data-holding-chart]');
+      if (chartHost) {
+        const scrubberLine = chartHost.querySelector('[data-chart-scrubber]');
+        const scrubberVal = chartHost.querySelector('[data-chart-scrubber-val]');
+        const scrubberInv = chartHost.querySelector('[data-chart-scrubber-inv]');
+        const valText = chartHost.querySelector('[data-chart-val]');
+        const invText = chartHost.querySelector('[data-chart-inv]');
+        const dateText = chartHost.querySelector('[data-chart-date]');
+        const badge = chartHost.querySelector('[data-chart-badge]');
+
+        let activeIdx = null;
+
+        if (valText) valText.dataset.origVal = valText.textContent;
+        if (invText) invText.dataset.origInv = invText.textContent;
+        if (dateText) dateText.dataset.origDate = dateText.textContent;
+        if (badge) {
+          badge.dataset.origBadge = badge.textContent;
+          badge.dataset.origBg = badge.style.background;
+          badge.dataset.origColor = badge.style.color;
+        }
+
+        const resetScrubber = () => {
+          activeIdx = null;
+          if (scrubberLine) scrubberLine.style.display = 'none';
+          if (scrubberVal) scrubberVal.style.display = 'none';
+          if (scrubberInv) scrubberInv.style.display = 'none';
+          if (valText) valText.textContent = valText.dataset.origVal || '';
+          if (invText) invText.textContent = invText.dataset.origInv || '';
+          if (dateText) dateText.textContent = dateText.dataset.origDate || '';
+          if (badge) {
+            badge.textContent = badge.dataset.origBadge || '';
+            badge.style.background = badge.dataset.origBg || '';
+            badge.style.color = badge.dataset.origColor || '';
+          }
+        };
+
+        chartHost.querySelectorAll('[data-point-idx]').forEach((hit) => {
+          hit.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const idx = Number(hit.dataset.pointIdx);
+            if (activeIdx === idx) {
+              resetScrubber();
+              return;
+            }
+
+            activeIdx = idx;
+            const val = Number(hit.dataset.val) || 0;
+            const inv = Number(hit.dataset.inv) || 0;
+            const d = hit.dataset.date || '';
+            const isCur = hit.dataset.isCurrent === '1';
+            const posX = hit.dataset.x;
+            const posYVal = hit.dataset.yVal;
+            const posYInv = hit.dataset.yInv;
+
+            const diff = val - inv;
+            const diffPct = inv > 0 ? (diff / inv) * 100 : 0;
+            const isGain = diff >= 0;
+
+            if (scrubberLine) {
+              scrubberLine.setAttribute('x1', posX);
+              scrubberLine.setAttribute('x2', posX);
+              scrubberLine.style.display = 'block';
+            }
+            if (scrubberVal) {
+              scrubberVal.setAttribute('cx', posX);
+              scrubberVal.setAttribute('cy', posYVal);
+              scrubberVal.setAttribute('fill', isGain ? 'var(--income)' : 'var(--expense)');
+              scrubberVal.style.display = 'block';
+            }
+            if (scrubberInv) {
+              scrubberInv.setAttribute('cx', posX);
+              scrubberInv.setAttribute('cy', posYInv);
+              scrubberInv.style.display = 'block';
+            }
+
+            if (valText) valText.textContent = money(val);
+            if (invText) invText.textContent = money(inv);
+            if (dateText) {
+              const dateFormatted = d.length === 10 ? formatDate(d) : d;
+              dateText.textContent = isCur ? `${dateFormatted} (Latest)` : dateFormatted;
+            }
+            if (badge) {
+              badge.textContent = `${isGain ? '+' : ''}${money(diff)} (${isGain ? '+' : ''}${diffPct.toFixed(1)}%)`;
+              badge.style.background = isGain ? 'var(--income-container)' : 'var(--expense-container)';
+              badge.style.color = isGain ? 'var(--income)' : 'var(--expense)';
+            }
+          });
+        });
+      }
+
+      // Expand all / Collapse all toggle
+      const toggleExpandBtn = node.querySelector('[data-toggle-expand-all]');
+      if (toggleExpandBtn) {
+        let allOpen = false;
+        toggleExpandBtn.addEventListener('click', () => {
+          allOpen = !allOpen;
+          node.querySelectorAll('[data-view-history="cards"] details.history-item').forEach((item) => {
+            item.open = allOpen;
+          });
+          toggleExpandBtn.textContent = allOpen ? 'Collapse all' : 'Expand all';
         });
       }
     },

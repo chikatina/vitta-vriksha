@@ -17,7 +17,9 @@ import { renderLedger } from './views/ledger.js';
 import { renderBudgets } from './views/budgets.js';
 import { renderWealth } from './views/wealth.js';
 import { renderInvestments } from './views/investments.js';
+import { renderSipTracker } from './views/sips.js';
 import { renderMore } from './views/more.js';
+import { renderBuckets } from './views/buckets.js';
 import { renderRecordPage } from './views/records.js';
 import { renderInsights } from './views/insights.js';
 import { renderRecurring } from './views/recurring.js';
@@ -61,13 +63,14 @@ const PAGES = {
   recurring: { parent: 'wealth', title: 'Recurring payments', render: renderRecurring },
   investments: { parent: 'wealth', title: 'Investments', render: renderInvestments },
   accounts: { parent: 'wealth', title: 'Accounts', render: (c, a) => renderRecordPage(c, a, 'account') },
-  sips: { parent: 'wealth', title: 'SIPs', render: (c, a) => renderRecordPage(c, a, 'sip') },
+  sips: { parent: 'wealth', title: 'SIP Tracker', render: renderSipTracker },
   loans: { parent: 'wealth', title: 'Loans', render: (c, a) => renderRecordPage(c, a, 'loan') },
   cards: { parent: 'wealth', title: 'Credit cards', render: (c, a) => renderRecordPage(c, a, 'card') },
   subscriptions: { parent: 'wealth', title: 'Subscriptions', render: (c, a) => renderRecordPage(c, a, 'subscription') },
   goals: { parent: 'wealth', title: 'Goals', render: (c, a) => renderRecordPage(c, a, 'goal') },
   fire: { parent: 'wealth', title: 'Retirement', render: renderFire },
   cas: { parent: 'wealth', title: 'Account statement', render: renderCas },
+  buckets: { parent: 'more', title: 'Buckets & Trips', render: renderBuckets },
   family: { parent: 'more', title: 'Household', render: renderFamily },
   rules: { parent: 'more', title: 'SMS rules', render: renderRules },
   backup: { parent: 'more', title: 'Backup', render: renderBackup },
@@ -540,7 +543,11 @@ class App {
 
   handleNotificationClick(reminderId) {
     if (!reminderId) return;
-    if (reminderId === 'pending-alerts') {
+    if (reminderId === 'quick_add' || reminderId === 'add-expense') {
+      this.addTransaction();
+    } else if (reminderId === 'review-alerts') {
+      this.open('sms_ingest');
+    } else if (reminderId === 'pending-alerts') {
       this.go('home');
     } else if (reminderId === 'daily-spend-review') {
       this.go('home');

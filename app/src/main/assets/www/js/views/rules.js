@@ -2345,7 +2345,7 @@ export async function openDiscoveredAccountSheet(app, item, existingAccounts = [
         });
 
         if (res && res.status === 'success') {
-          toast(isLoan ? 'Successfully linked account to Loan!' : (isDebit ? 'Successfully linked Debit Card to Bank Account!' : 'Successfully combined and linked account!'), 'success');
+          toast(isLoan ? 'Linked account to loan.' : (isDebit ? 'Linked debit card to bank account.' : 'Combined and linked account.'), 'success');
           app.refresh();
         } else {
           toast(res?.message || 'Could not combine account.', 'error');

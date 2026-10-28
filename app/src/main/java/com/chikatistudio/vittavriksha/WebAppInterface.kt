@@ -47,7 +47,7 @@ class WebAppInterface(private val mContext: Context, private val webView: WebVie
          * run to thousands, and every one of them crosses the bridge as text; a few
          * hundred is more than anyone reviews in a sitting.
          */
-        const val MAX_INBOX_MESSAGES = 25000
+        const val MAX_INBOX_MESSAGES = 10000
 
         // Request codes are per permission so the result can be reported back by name.
         const val REQUEST_SMS = 101
@@ -132,6 +132,18 @@ class WebAppInterface(private val mContext: Context, private val webView: WebVie
 
     // ------------------------------------------------------------- permissions
 
+    private val permissionPrefs by lazy {
+        mContext.getSharedPreferences("permission_tracking", Context.MODE_PRIVATE)
+    }
+
+    private fun hasRequestedPermission(permission: String): Boolean {
+        return permissionPrefs.getBoolean("has_requested_$permission", false)
+    }
+
+    private fun markPermissionRequested(permission: String) {
+        permissionPrefs.edit().putBoolean("has_requested_$permission", true).apply()
+    }
+
     @JavascriptInterface
     fun checkPermission(permission: String): Boolean {
         val required = androidPermissionsFor(permission)
@@ -142,33 +154,57 @@ class WebAppInterface(private val mContext: Context, private val webView: WebVie
         }
     }
 
-    @JavascriptInterface
-    fun requestPermission(permission: String) {
-        if (mContext !is AppCompatActivity) return
-
-        val required = androidPermissionsFor(permission)
-        if (required.isEmpty()) {
-            reportPermissionResult(permission, true)
-            return
-        }
-
-        ActivityCompat.requestPermissions(mContext, required, requestCodeFor(permission))
-    }
-
     /**
-     * True when the user has ticked "don't ask again", or when the system will not show
-     * the dialog for some other reason. The UI uses this to point at app settings instead
-     * of asking again pointlessly.
+     * True when the user has denied once and Android recommends explaining why the permission
+     * is needed before prompting again.
      */
     @JavascriptInterface
-    fun permissionIsBlocked(permission: String): Boolean {
-        if (mContext !is AppCompatActivity) return false
+    fun shouldShowRationale(permission: String): Boolean {
+        val activity = mContext as? AppCompatActivity ?: return false
         val required = androidPermissionsFor(permission)
         if (required.isEmpty()) return false
 
         return required.any {
-            ContextCompat.checkSelfPermission(mContext, it) != PackageManager.PERMISSION_GRANTED &&
-                !ActivityCompat.shouldShowRequestPermissionRationale(mContext, it)
+            ActivityCompat.shouldShowRequestPermissionRationale(activity, it)
+        }
+    }
+
+    /**
+     * True when the user has ticked "don't ask again" or Android permanently denied the permission.
+     * Crucially returns false on fresh installs before the permission has been requested.
+     */
+    @JavascriptInterface
+    fun permissionIsBlocked(permission: String): Boolean {
+        val activity = mContext as? AppCompatActivity ?: return false
+        val required = androidPermissionsFor(permission)
+        if (required.isEmpty()) return false
+
+        if (checkPermission(permission)) return false
+        if (!hasRequestedPermission(permission)) return false
+
+        return required.any {
+            !ActivityCompat.shouldShowRequestPermissionRationale(activity, it)
+        }
+    }
+
+    @JavascriptInterface
+    fun requestPermission(permission: String) {
+        val required = androidPermissionsFor(permission)
+        if (required.isEmpty() || checkPermission(permission)) {
+            reportPermissionResult(permission, true)
+            return
+        }
+
+        markPermissionRequested(permission)
+
+        if (mContext is MainActivity) {
+            mContext.runOnUiThread {
+                mContext.requestRuntimePermissions(permission, required)
+            }
+        } else if (mContext is AppCompatActivity) {
+            mContext.runOnUiThread {
+                ActivityCompat.requestPermissions(mContext, required, requestCodeFor(permission))
+            }
         }
     }
 
