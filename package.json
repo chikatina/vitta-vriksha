@@ -1,6 +1,6 @@
 {
   "name": "vitta-vriksha",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "type": "module",
   "private": true,
   "scripts": {
@@ -14,7 +14,11 @@
     "vendor:libs": "python tools/vendor-libs.py",
     "build:android": "cmd.exe /c gradlew.bat assembleDebug",
     "build:release": "powershell -ExecutionPolicy Bypass -File ./tools/build-release.ps1",
-    "deploy:release": "powershell -ExecutionPolicy Bypass -File ./tools/deploy-release.ps1"
+    "deploy:release": "powershell -ExecutionPolicy Bypass -File ./tools/deploy-release.ps1",
+    "bump": "node tools/bump-version.mjs",
+    "bump:patch": "node tools/bump-version.mjs --type patch",
+    "bump:minor": "node tools/bump-version.mjs --type minor",
+    "bump:code": "node tools/bump-version.mjs --type code-only"
   },
   "dependencies": {
     "@chikatina/casparser-js": "^1.1.0"

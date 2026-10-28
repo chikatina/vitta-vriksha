@@ -23,6 +23,17 @@ on:
         required: false
         default: ''
         type: string
+      bump_type:
+        description: 'Auto-bump version before release'
+        required: true
+        default: 'none'
+        type: choice
+        options:
+          - 'none'
+          - 'code-only'
+          - 'patch'
+          - 'minor'
+          - 'major'
       dry_run:
         description: 'Dry Run (build & verify only, do not publish to Play Console or Releases)'
         required: false
@@ -113,13 +124,17 @@ jobs:
             echo "Notice: Signing secrets not configured. Building unsigned release artifacts."
           fi
 
-      - name: Apply Version Override
+      - name: Apply Version Override or Auto-Bump
         env:
           OVERRIDE_CODE: ${{ github.event.inputs.version_code }}
+          BUMP_TYPE: ${{ github.event.inputs.bump_type }}
         run: |
           if [ -n "$OVERRIDE_CODE" ]; then
             echo "Applying override versionCode: $OVERRIDE_CODE"
-            sed -i -E "s/versionCode\s*=?\s*[0-9]+/versionCode = $OVERRIDE_CODE/" app/build.gradle
+            node tools/bump-version.mjs --code "$OVERRIDE_CODE"
+          elif [ "$BUMP_TYPE" != "none" ] && [ -n "$BUMP_TYPE" ]; then
+            echo "Running auto-bump with type: $BUMP_TYPE"
+            node tools/bump-version.mjs --type "$BUMP_TYPE"
           fi
 
       - name: Make Gradlew Executable
