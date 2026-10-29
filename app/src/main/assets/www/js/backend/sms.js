@@ -468,7 +468,7 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
 
   const fallbackAmount = extractTransactionAmount(text);
   const checkText = primaryLower || lower;
-  const isCredit = checkText.includes('credited') || checkText.includes('received') || checkText.includes('deposited');
+  const isCredit = isCreditAlert(text);
   const hasSalarySignal = /\b(?:salary|payroll|stipend|wages|sal\s+for|monthly\s+pay)\b/i.test(checkText);
   const guess = isCredit ? (hasSalarySignal ? 'Salary' : 'Other Income') : 'Shopping';
   const defaultType = known.type || (!isCredit && known.category === 'Investment Outflow' ? 'Investment' : (isCredit ? 'Income' : 'Expense'));
@@ -704,16 +704,28 @@ export function reconcileTransfers(rows, db, { memberId = null, cachedAccounts =
 
     for (const outRow of outflows) {
       if (outRow.classified.type === 'Transfer') continue;
-      const matchingIn = inflows.find((inRow) =>
-        inRow.classified.type !== 'Transfer'
-        && Math.abs(inRow.classified.amount - outRow.classified.amount) < 0.01,
-      );
+      const instOut = outRow.classified.loan_id ? `loan:${outRow.classified.loan_id}`
+        : (outRow.classified.card_id ? `card:${outRow.classified.card_id}`
+        : (outRow.classified.account_id ? `acc:${outRow.classified.account_id}`
+        : (outRow.classified.account_last4 ? `last4:${outRow.classified.account_last4}` : null)));
+
+      const matchingIn = inflows.find((inRow) => {
+        if (inRow.classified.type === 'Transfer') return false;
+        if (Math.abs(inRow.classified.amount - outRow.classified.amount) >= 0.01) return false;
+        const instIn = inRow.classified.loan_id ? `loan:${inRow.classified.loan_id}`
+          : (inRow.classified.card_id ? `card:${inRow.classified.card_id}`
+          : (inRow.classified.account_id ? `acc:${inRow.classified.account_id}`
+          : (inRow.classified.account_last4 ? `last4:${inRow.classified.account_last4}` : null)));
+        // Same account/card debit and credit sharing UTR is a refund/reversal, not an inter-account transfer
+        if (instOut && instIn && instOut === instIn) return false;
+        return true;
+      });
       if (matchingIn) {
         const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(outRow.body || outRow.raw_sms || '')
           || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(matchingIn.body || matchingIn.raw_sms || '');
         const hasLoan = Boolean(outRow.classified.loan_id || matchingIn.classified.loan_id || outRow.classified.is_loan || matchingIn.classified.is_loan) || isLoanOrEmi;
-        const isCard = !isLoanOrEmi && Boolean(outRow.classified.card_id || matchingIn.classified.card_id || outRow.classified.is_credit_card || matchingIn.classified.is_credit_card);
-        const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
+        const hasCard = !hasLoan && Boolean(outRow.classified.card_id || matchingIn.classified.card_id || outRow.classified.is_credit_card || matchingIn.classified.is_credit_card);
+        const cat = hasLoan ? 'Loans & EMI' : (hasCard ? 'Credit Card' : 'Transfer');
 
         outRow.classified.type = 'Transfer';
         outRow.classified.category = cat;
@@ -744,12 +756,22 @@ export function reconcileTransfers(rows, db, { memberId = null, cachedAccounts =
       if (!utr) continue;
 
       const isOut = row.classified.type === 'Expense' || row.classified.type === 'Investment';
+      const rowInst = row.classified.loan_id ? `loan:${row.classified.loan_id}`
+        : (row.classified.card_id ? `card:${row.classified.card_id}`
+        : (row.classified.account_id ? `acc:${row.classified.account_id}`
+        : (row.classified.account_last4 ? `last4:${row.classified.account_last4}` : null)));
 
       const candidates = db.all(
-        "SELECT id, type, category, card_id, loan_id, raw_sms FROM transactions WHERE amount = ? AND raw_sms IS NOT NULL AND raw_sms != ''",
+        "SELECT id, type, category, account_id, card_id, loan_id, raw_sms FROM transactions WHERE amount = ? AND raw_sms IS NOT NULL AND raw_sms != ''",
         [row.classified.amount],
       );
       for (const cand of candidates) {
+        const candInst = cand.loan_id ? `loan:${cand.loan_id}`
+          : (cand.card_id ? `card:${cand.card_id}`
+          : (cand.account_id ? `acc:${cand.account_id}` : null));
+        if (rowInst && candInst && rowInst === candInst) {
+          continue; // Same account/card refund - keep as Expense and Income
+        }
         const candUtr = extractUtr(cand.raw_sms);
         if (candUtr && candUtr === utr) {
           const candIsOut = cand.type === 'Expense' || cand.type === 'Investment';
@@ -757,8 +779,8 @@ export function reconcileTransfers(rows, db, { memberId = null, cachedAccounts =
             const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(body)
               || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(cand.raw_sms || '');
             const hasLoan = Boolean(row.classified.loan_id || cand.loan_id || row.classified.is_loan) || isLoanOrEmi;
-            const isCard = !isLoanOrEmi && Boolean(row.classified.card_id || cand.card_id || row.classified.is_credit_card);
-            const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
+            const hasCard = !hasLoan && Boolean(row.classified.card_id || cand.card_id || row.classified.is_credit_card);
+            const cat = hasLoan ? 'Loans & EMI' : (hasCard ? 'Credit Card' : 'Transfer');
 
             row.classified.type = 'Transfer';
             row.classified.category = cat;
