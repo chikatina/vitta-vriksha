@@ -11,8 +11,9 @@
  */
 
 import {
-  autoUpdateAccountFromSms, autoUpdateCreditCardFromSms, autoUpdateLoanFromSms, currentCurrency, getDatabase, initDb, learnMerchant,
-  parseAccountDetailsFromText, reconcileExistingTransactions, resolveAccountAndCardFromSms, resolveMemberId,
+  autoUpdateAccountFromSms, autoUpdateCreditCardFromSms, autoUpdateLoanFromSms, currentCurrency, extractAccountBalanceFromText,
+  getDatabase, initDb, learnMerchant, parseAccountDetailsFromText, reconcileExistingTransactions, resolveAccountAndCardFromSms,
+  resolveMemberId,
 } from './database.js';
 import { memberClause } from './periods.js';
 import { readSmsInbox, takePendingAlerts } from './native.js';
@@ -838,6 +839,8 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
   const ctx = buildClassificationContext(db, memberId);
   const txByDateAmount = new Map();
   for (const row of db.all(`SELECT t.id, t.date, t.amount, t.type, t.raw_sms,
+           t.merchant, t.category, t.description, t.account_id, t.card_id,
+           COALESCE(a.name, c.card_name) AS instrument_name,
            COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
     FROM transactions t
     LEFT JOIN asset_accounts a ON t.account_id = a.id
@@ -883,13 +886,20 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
     }
 
     // Two messages for one payment must not become two transactions.
-    // Duplicate detection considers cashflow direction and account so transfers are not dropped.
+    // Duplicate detection considers cashflow direction, account, and balance so transfers
+    // and consecutive ATM cash withdrawals are not dropped.
     const date = isoFromMillis(message.received_at) || classified.date;
     const utr = extractUtr(body);
     const isOutflow = classified.type === 'Expense' || classified.type === 'Investment';
     const flowDir = isOutflow ? 'out' : 'in';
     const accKey = classified.account_last4 || '';
-    const stageKey = utr ? `${date}:${classified.amount}:${flowDir}:${utr}` : `${date}:${classified.amount}:${flowDir}:${accKey}`;
+    const bal = extractAccountBalanceFromText(body);
+    const balKey = (bal !== null && bal !== undefined) ? String(bal) : '';
+    const stageKey = utr
+      ? `${date}:${classified.amount}:${flowDir}:${utr}`
+      : (balKey
+        ? `${date}:${classified.amount}:${flowDir}:${accKey}:bal:${balKey}`
+        : `${date}:${classified.amount}:${flowDir}:${accKey}`);
 
     if (duplicateOfFast(txByDateAmount, {
       date,
@@ -1072,6 +1082,8 @@ async function reimportInbox(db, args) {
   const ctx = buildClassificationContext(db, memberId);
   const txByDateAmount = new Map();
   for (const row of db.all(`SELECT t.id, t.date, t.amount, t.type, t.raw_sms,
+           t.merchant, t.category, t.description, t.account_id, t.card_id,
+           COALESCE(a.name, c.card_name) AS instrument_name,
            COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
     FROM transactions t
     LEFT JOIN asset_accounts a ON t.account_id = a.id
@@ -1118,13 +1130,20 @@ async function reimportInbox(db, args) {
     }
 
     // Two messages for one payment must not become two transactions.
-    // Duplicate detection considers cashflow direction and account so transfers are not dropped.
+    // Duplicate detection considers cashflow direction, account, and balance so transfers
+    // and consecutive ATM cash withdrawals are not dropped.
     const date = isoFromMillis(message.received_at) || classified.date;
     const utr = extractUtr(body);
     const isOutflow = classified.type === 'Expense' || classified.type === 'Investment';
     const flowDir = isOutflow ? 'out' : 'in';
     const accKey = classified.account_last4 || '';
-    const stageKey = utr ? `${date}:${classified.amount}:${flowDir}:${utr}` : `${date}:${classified.amount}:${flowDir}:${accKey}`;
+    const bal = extractAccountBalanceFromText(body);
+    const balKey = (bal !== null && bal !== undefined) ? String(bal) : '';
+    const stageKey = utr
+      ? `${date}:${classified.amount}:${flowDir}:${utr}`
+      : (balKey
+        ? `${date}:${classified.amount}:${flowDir}:${accKey}:bal:${balKey}`
+        : `${date}:${classified.amount}:${flowDir}:${accKey}`);
 
     const twin = duplicateOfFast(txByDateAmount, {
       date,
@@ -1288,7 +1307,7 @@ export function duplicateOf(db, { date, amount, body, type = null, accountLast4 
   }
   if (!candidates.length) return null;
 
-  let match = candidates[0];
+  let match = null;
   let isExactUtr = false;
   if (incomingUtr) {
     const utrMatch = candidates.find((r) => {
@@ -1300,6 +1319,21 @@ export function duplicateOf(db, { date, amount, body, type = null, accountLast4 
       isExactUtr = true;
     }
   }
+
+  if (!match) {
+    const incomingBal = extractAccountBalanceFromText(body);
+    match = candidates.find((r) => {
+      if (incomingBal !== null && incomingBal !== undefined) {
+        const candidateBal = extractAccountBalanceFromText(r.raw_sms);
+        if (candidateBal !== null && candidateBal !== undefined && candidateBal !== incomingBal) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+
+  if (!match) return null;
 
   const matchUtr = extractUtr(match.raw_sms);
   return {
@@ -1349,7 +1383,17 @@ export function duplicateOfFast(txByDateAmount, { date, amount, body, type = nul
   }
 
   if (!found) {
-    found = candidates.find((row) => !row.raw_sms || row.raw_sms !== (body || ''));
+    const incomingBal = extractAccountBalanceFromText(body);
+    found = candidates.find((row) => {
+      if (row.raw_sms && row.raw_sms === (body || '')) return false;
+      if (incomingBal !== null && incomingBal !== undefined) {
+        const candidateBal = extractAccountBalanceFromText(row.raw_sms);
+        if (candidateBal !== null && candidateBal !== undefined && candidateBal !== incomingBal) {
+          return false;
+        }
+      }
+      return true;
+    });
   }
 
   if (!found) return null;

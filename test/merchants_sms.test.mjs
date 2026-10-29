@@ -1213,4 +1213,51 @@ describe('sms.js SMS classifier and dispatcher', () => {
     assert.equal(extractUtr('Info:NEFT-N12345678901-AMIT R credited to a/c XX386'), 'N12345678901');
     assert.equal(extractUtr('IMPS Ref. no. 556677889900 sent to beneficiary'), '556677889900');
   });
+
+  it('extracts ATM Cash Withdrawal merchant from CAM and ATM machine patterns', () => {
+    assert.equal(
+      extractMerchant('ICICI Bank Acc XX712 debited Rs. 10,000.00 on 27-Oct-26 CAM*07811SRY*. Avb Bal Rs. 1,10,050.80. To dispute Call 18002662 or SMS BLOCK 712 to 9215676766 .'),
+      'ATM Cash Withdrawal',
+    );
+    assert.equal(
+      extractMerchant('ICICI Bank Acc XX386 debited with INR 5,000.00 on 02-Jun-23. ATM*S1CPN182*.Avb Bal: INR5,59,124.42. For dispute,Call 18002662 or SMS BLOCK 386 to 9215676766'),
+      'ATM Cash Withdrawal',
+    );
+    assert.equal(
+      extractMerchant('Your a/c XX2219 is debited on 29/08/2026 by INR 10,000 towards ATM cash withdrawal. Avl Bal: INR 325,083.61. Call 18002586465 if not done by you - StanChart'),
+      'ATM Cash Withdrawal',
+    );
+  });
+
+  it('distinguishes consecutive ATM cash withdrawals with different balances and flags true identical retries', async () => {
+    const raw1 = 'ICICI Bank Acc XX712 debited Rs. 10,000.00 on 27-Oct-26 CAM*07811SRY*. Avb Bal Rs. 1,10,050.80. To dispute Call 18002662 or SMS BLOCK 712 to 9215676766 .';
+    const raw2 = 'ICICI Bank Acc XX712 debited Rs. 10,000.00 on 27-Oct-26 CAM*07811SRY*. Avb Bal Rs. 1,00,050.80. To dispute Call 18002662 or SMS BLOCK 712 to 9215676766 .';
+    const raw1Retry = 'ICICI Bank Acc XX712 debited Rs. 10,000.00 on 27-Oct-26 CAM*07811SRY*. Avb Bal Rs. 1,10,050.80. To dispute Call 18002662 or SMS BLOCK 712 to 9215676766 . [NETWORK RETRY]';
+
+    globalThis.window = {
+      AndroidBridge: {
+        readSmsInbox: () => JSON.stringify([
+          { sender: 'VM-ICICIB', body: raw1, received_at: 1793113740000 },
+          { sender: 'VM-ICICIB', body: raw2, received_at: 1793113800000 },
+          { sender: 'VM-ICICIB', body: raw1Retry, received_at: 1793113860000 },
+        ]),
+      },
+    };
+
+    const res = await handleSmsAction({ action: 'reimport', days: 30, member_id: 1 });
+    assert.equal(res.status, 'success');
+    assert.equal(res.read, 3);
+    assert.equal(res.imported, 2, 'Both genuine withdrawals must be imported');
+    assert.equal(res.duplicates, 1, 'The duplicate network retry must be dropped');
+
+    const txs = db.all('SELECT amount, merchant, type, raw_sms FROM transactions WHERE date = ? AND amount = ?', ['2026-10-27', 10000]);
+    assert.equal(txs.length, 2);
+    assert.equal(txs[0].merchant, 'ATM Cash Withdrawal');
+    assert.equal(txs[1].merchant, 'ATM Cash Withdrawal');
+    assert.equal(txs[0].type, 'Expense');
+    assert.equal(txs[1].type, 'Expense');
+
+    delete globalThis.window;
+  });
 });
+

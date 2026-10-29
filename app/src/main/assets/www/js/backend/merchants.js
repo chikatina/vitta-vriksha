@@ -760,6 +760,9 @@ export function extractMerchant(body) {
   let text = String(body || '');
   // Strip bank safety / dispute boilerplate before seeking counterparty name
   text = text.replace(/\b(?:call\s+\d+|to dispute|for dispute|if not (?:done by |you|authorized)|report fraud|sms block\b).*/i, '').trim();
+  if (/\b(?:ATM|CAM)\*[A-Za-z0-9]+\*|\b(?:towards\s+)?ATM(?:\s+cash)?\s+withdrawal\b/i.test(text)) {
+    return 'ATM Cash Withdrawal';
+  }
   for (const pattern of MERCHANT_PATTERNS) {
     const match = pattern.exec(text);
     if (!match) continue;
