@@ -4250,6 +4250,7 @@ export function parseAccountDetailsFromText(text = '', sender = '') {
     /credit\s*card|creditcard|cc ending|\bcc\b|cardholder|limit avl|total due|min due|statement generated/i.test(combined)
     || /infinia|regalia|millennia|coral|rubyx|sapphiro|simplyclick|simplysave|magnus|atlas|onecard|scapia|slice/i.test(combined)
     || (/spent on .*card|card ending|card \*\*/i.test(combined) && !/debit|a\/c|account/i.test(combined))
+    || (/spent using .*\bcard\b|\bavl\.?\s*limit\b|\bavailable\s+limit\b/i.test(combined) && !/debit|a\/c|account/i.test(combined))
     || (/amazon pay|flipkart axis|tata neu|swiggy hdfc/i.test(combined) && /card/i.test(combined))
   );
 
