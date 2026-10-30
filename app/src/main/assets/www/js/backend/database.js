@@ -4731,6 +4731,40 @@ export function discoverAccountsFromSms(db) {
     }
   }
 
+  // Merge same-bank suffix variants (e.g. 3-digit vs 4-digit masking like 386 and 8386)
+  for (const [key, entry] of [...map.entries()]) {
+    if (entry.last4 && /^\d{3,4}$/.test(entry.last4)) {
+      for (const [otherKey, otherEntry] of map.entries()) {
+        if (otherKey !== key
+          && otherEntry.info.issuer === entry.info.issuer
+          && otherEntry.instrument_type === entry.instrument_type
+          && otherEntry.last4
+          && /^\d{3,4}$/.test(otherEntry.last4)) {
+          // If otherEntry has longer digits and ends with entry.last4 (e.g. 8386 ends with 386)
+          if (otherEntry.last4.length > entry.last4.length && otherEntry.last4.endsWith(entry.last4)) {
+            otherEntry.txn_count += entry.txn_count;
+            otherEntry.total_spent += entry.total_spent;
+            otherEntry.total_received += entry.total_received;
+            if (entry.last_balance_date && (!otherEntry.last_balance_date || entry.last_balance_date >= otherEntry.last_balance_date)) {
+              otherEntry.balance = entry.balance;
+              otherEntry.last_balance_date = entry.last_balance_date;
+            } else if (!otherEntry.balance && entry.balance) {
+              otherEntry.balance = entry.balance;
+            }
+            if (entry.txn_count > otherEntry.txn_count) {
+              otherEntry.sample_sms = entry.sample_sms;
+            }
+            if (entry.last_seen && (!otherEntry.last_seen || entry.last_seen > otherEntry.last_seen)) {
+              otherEntry.last_seen = entry.last_seen;
+            }
+            map.delete(key);
+            break;
+          }
+        }
+      }
+    }
+  }
+
   for (const entry of map.values()) {
     const { info, last4, instrument_type } = entry;
 
@@ -4907,9 +4941,14 @@ export function discoverAccountsFromSms(db) {
       const alreadyHas = existingAccountLast4Set.has(last4)
         || existingDebitCardLast4Set.has(last4)
         || existingCardLast4Set.has(last4)
-        || existingAccounts.some((a) =>
-          (a.account_number && a.account_number.endsWith(last4))
-          || (a.name && a.name.includes(last4)));
+        || existingAccounts.some((a) => {
+          if (a.name && a.name.includes(last4)) return true;
+          if (!a.account_number) return false;
+          const aNum = String(a.account_number).trim();
+          if (aNum.endsWith(last4)) return true;
+          const isSameBank = !a.institution || !info.issuer || a.institution.toLowerCase() === info.issuer.toLowerCase();
+          return isSameBank && last4.length >= 3 && aNum.length >= 3 && last4.endsWith(aNum);
+        });
       if (!alreadyHas) {
         discovered.push({
           kind: 'account',

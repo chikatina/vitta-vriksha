@@ -732,6 +732,33 @@ describe('sms.js SMS classifier and dispatcher', () => {
     delete globalThis.window;
   });
 
+  it('merges 3-digit and 4-digit same-bank suffix variants during account discovery', async () => {
+    const sms3 = 'ICICI Bank Acct XX386 debited for Rs 500.00 on 20-Oct-26. Info: UPI/123456789012. Bal: Rs 50,000.00.';
+    const sms4 = 'ICICI Bank Acct XX8386 credited for Rs 1000.00 on 22-Oct-26. UPI/987654321098. Bal: Rs 51,000.00.';
+
+    globalThis.window = {
+      AndroidBridge: {
+        readSmsInbox: () => JSON.stringify([
+          { sender: 'VM-ICICIB', body: sms3, received_at: 1785400000000 },
+          { sender: 'VM-ICICIB', body: sms4, received_at: 1785500000000 },
+        ]),
+      },
+    };
+
+    const res = await handleSmsAction({ action: 'reimport', days: 0, member_id: 1 });
+    assert.equal(res.status, 'success');
+
+    const disc = await handleDbAction({ action: 'discover_accounts_from_sms' });
+    assert.equal(disc.status, 'success');
+
+    const iciciAccounts = disc.discovered.filter((d) => d.bank === 'ICICI Bank' && d.kind === 'account');
+    assert.equal(iciciAccounts.length, 1, 'Must merge 386 and 8386 into a single discovered account');
+    assert.equal(iciciAccounts[0].last_4, '8386', 'Must keep the longer 4-digit identifier');
+    assert.equal(iciciAccounts[0].txn_count, 2, 'Must combine transaction counts across both suffixes');
+
+    delete globalThis.window;
+  });
+
   it('provides duplicate_twin with raw_sms and details in review alerts for side-by-side comparison', async () => {
     const originalSms = 'INR 422.00 spent on ICICI Bank Card XX5004 on 30-Jul-2026 at IND*Amazon.in. Avl Lmt: INR 4,00,000.00.';
     const duplicateSms = 'INR 422.00 spent on ICICI Bank Card XX5004 on 30-Jul-2026 at IND*Amazon.in. Avl Lmt: INR 3,99,578.00.';
