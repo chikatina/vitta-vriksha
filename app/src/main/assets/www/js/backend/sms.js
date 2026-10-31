@@ -24,7 +24,7 @@ import { fail } from './errors.js';
 
 const DEFAULT_AMOUNT_RE = /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i;
 const FALLBACK_AMOUNT_RE = /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i;
-const ACCOUNT_RE = /(?:card|a\/c|acct|account|wallet|vpa)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s]*([0-9]{3,4})\b/i;
+const ACCOUNT_RE = /(?:card|a\/c|acct|account|wallet|vpa)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s]*([0-9]{3,18})\b/i;
 
 export function candidateAccountDigits(r) {
   if (!r) return '';
@@ -1106,7 +1106,7 @@ async function reimportInbox(db, args) {
   // Classify first, write after. Reading a rule for every message inside a write
   // transaction would hold it open for the length of the whole inbox.
   const rows = [];
-  const staged = new Set();
+  const staged = new Map();
   const duplicateItems = [];
   let processed = 0;
 
@@ -1152,7 +1152,9 @@ async function reimportInbox(db, args) {
       type: classified.type,
       accountLast4: classified.account_last4,
     });
-    if (twin || staged.has(stageKey)) {
+    const stagedTwin = staged.get(stageKey);
+    const resolvedTwin = twin || stagedTwin || null;
+    if (resolvedTwin || staged.has(stageKey)) {
       duplicates += 1;
       duplicateItems.push({
         state: 'pending',
@@ -1160,7 +1162,7 @@ async function reimportInbox(db, args) {
         sender: message.sender ?? '',
         date,
         duplicate_of: twin ? twin.id : 0,
-        duplicate_twin: twin || null,
+        duplicate_twin: resolvedTwin,
         reason: 'possible-duplicate',
         amount: classified.amount,
         merchant: classified.merchant || '',
@@ -1174,9 +1176,58 @@ async function reimportInbox(db, args) {
       continue;
     }
 
+    let accountId = classified.account_id ?? null;
+    let cardId = classified.card_id ?? null;
+    let loanId = classified.loan_id ?? null;
+    let instrumentName = '';
+    if (accountId && ctx.cachedAccounts) {
+      const acc = ctx.cachedAccounts.find((a) => a.id === accountId);
+      if (acc) instrumentName = acc.name;
+    } else if (cardId && ctx.cachedCards) {
+      const card = ctx.cachedCards.find((c) => c.id === cardId);
+      if (card) instrumentName = card.card_name;
+    } else if (loanId && ctx.cachedLoans) {
+      const loan = ctx.cachedLoans.find((l) => l.id === loanId);
+      if (loan) instrumentName = loan.name;
+    }
+    if (!instrumentName) {
+      const resolved = resolveAccountAndCardFromSms(db, body, message.sender ?? '', {
+        memberId,
+        cachedAccounts: ctx.cachedAccounts,
+        cachedCards: ctx.cachedCards,
+        cachedLoans: ctx.cachedLoans,
+      });
+      instrumentName = resolved.account?.name
+        || resolved.card?.card_name
+        || resolved.loan?.name
+        || (resolved.info?.issuer && resolved.info.issuer !== 'Bank' ? `${resolved.info.issuer} Account` : '');
+    }
+
+    const stagedEntry = {
+      id: 0,
+      amount: classified.amount,
+      date,
+      merchant: classified.merchant || '',
+      raw_sms: body,
+      body,
+      type: classified.type,
+      category: classified.category || '',
+      description: classified.description || '',
+      account_id: accountId,
+      card_id: cardId,
+      instrument_name: instrumentName,
+      account_last4: classified.account_last4 || '',
+      utr: utr || '',
+      match_reason: utr ? 'exact-utr' : 'same-batch-alert',
+    };
+
     rows.push({ body, classified, receivedAt: message.received_at, sender: message.sender ?? '' });
     seen.add(body);
-    staged.add(stageKey);
+    staged.set(stageKey, stagedEntry);
+
+    const txKey = `${date}:${classified.amount}:${classified.type}`;
+    if (!txByDateAmount.has(txKey)) txByDateAmount.set(txKey, []);
+    txByDateAmount.get(txKey).push(stagedEntry);
   }
 
   reconcileTransfers(rows, db, { memberId, cachedAccounts: ctx.cachedAccounts });

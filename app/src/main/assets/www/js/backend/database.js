@@ -4260,8 +4260,11 @@ export function parseAccountDetailsFromText(text = '', sender = '') {
   let creditCardLast4 = '';
   let generalLast4 = '';
 
-  const acctMatch = /(?:a\/c|acct|account)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{3,4})\b/i.exec(t);
-  if (acctMatch && acctMatch[1] && isValid4Digits(acctMatch[1], t)) accountLast4 = acctMatch[1];
+  const acctMatch = /(?:a\/c|acct|account)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{3,18})\b/i.exec(t);
+  if (acctMatch && acctMatch[1]) {
+    const d = acctMatch[1].slice(-4);
+    if (isValid4Digits(d, t)) accountLast4 = d;
+  }
 
   const dcMatch = /(?:debit\s*card|dc)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/i.exec(t);
   if (dcMatch && dcMatch[1] && isValid4Digits(dcMatch[1], t)) debitCardLast4 = dcMatch[1];
@@ -4562,7 +4565,7 @@ export function autoUpdateCreditCardFromSms(db, text = '', sender = '', matchedC
 }
 
 export function discoverAccountsFromSms(db) {
-  const transactions = db.all("SELECT raw_sms, sender, type, amount, date, id FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' ORDER BY date DESC, id DESC LIMIT 1500");
+  const transactions = db.all("SELECT raw_sms, sender, type, amount, date, id FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' ORDER BY date DESC, id DESC");
   const existingAccounts = db.all('SELECT id, name, category, institution, account_number, debit_card_last_4 FROM asset_accounts');
   const existingCards = db.all('SELECT id, card_name, bank, last_4 FROM credit_cards');
   const existingLoans = db.all('SELECT id, name, lender, account_number, last_4, current_outstanding, monthly_emi, debit_day FROM loans');

@@ -120,21 +120,21 @@ describe('cashflow.js: Safe-to-Spend, Runway, Salary Checklist & Weekend Analysi
 
   it('analyzes Weekend vs Weekday spending intensity and top categories', async (t) => {
     // Record transactions on specific dates (both weekend and weekday)
-    // 2026-08-01 was Saturday (weekend)
+    // 2026-09-05 was Saturday (weekend)
     await ok(t, 'save_transaction', {
-      transaction: { date: '2026-08-01', amount: 3500, category: 'Dining', type: 'Expense', merchant: 'Fine Dine' },
+      transaction: { date: '2026-09-05', amount: 3500, category: 'Dining', type: 'Expense', merchant: 'Fine Dine' },
     });
-    // 2026-08-02 was Sunday (weekend)
+    // 2026-09-06 was Sunday (weekend)
     await ok(t, 'save_transaction', {
-      transaction: { date: '2026-08-02', amount: 2500, category: 'Movies', type: 'Expense', merchant: 'Cinema' },
+      transaction: { date: '2026-09-06', amount: 2500, category: 'Movies', type: 'Expense', merchant: 'Cinema' },
     });
-    // 2026-08-03 was Monday (weekday)
+    // 2026-09-07 was Monday (weekday)
     await ok(t, 'save_transaction', {
-      transaction: { date: '2026-08-03', amount: 400, category: 'Groceries', type: 'Expense', merchant: 'Mart' },
+      transaction: { date: '2026-09-07', amount: 400, category: 'Groceries', type: 'Expense', merchant: 'Mart' },
     });
-    // 2026-08-04 was Tuesday (weekday)
+    // 2026-09-08 was Tuesday (weekday)
     await ok(t, 'save_transaction', {
-      transaction: { date: '2026-08-04', amount: 600, category: 'Groceries', type: 'Expense', merchant: 'Supermarket' },
+      transaction: { date: '2026-09-08', amount: 600, category: 'Groceries', type: 'Expense', merchant: 'Supermarket' },
     });
 
     const analysis = await ok(t, 'get_weekend_spend_analysis', {});
