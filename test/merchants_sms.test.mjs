@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 import { freshBackend, ok } from './_harness.mjs';
 import {
-  merchantKey, notATransaction, extractMerchant, categoryForMerchant,
+  merchantKey, notATransaction, extractMerchant, categoryForMerchant, extractUtr,
 } from '../app/src/main/assets/www/js/backend/merchants.js';
 import {
   parseSmsText, handleSmsAction, duplicateOf,
 } from '../app/src/main/assets/www/js/backend/sms.js';
-import { handleDbAction } from '../app/src/main/assets/www/js/backend/database.js';
+import { handleDbAction, reconcileExistingTransactions } from '../app/src/main/assets/www/js/backend/database.js';
 
 let db;
 
@@ -732,6 +732,33 @@ describe('sms.js SMS classifier and dispatcher', () => {
     delete globalThis.window;
   });
 
+  it('merges 3-digit and 4-digit same-bank suffix variants during account discovery', async () => {
+    const sms3 = 'ICICI Bank Acct XX386 debited for Rs 500.00 on 20-Oct-26. Info: UPI/123456789012. Bal: Rs 50,000.00.';
+    const sms4 = 'ICICI Bank Acct XX8386 credited for Rs 1000.00 on 22-Oct-26. UPI/987654321098. Bal: Rs 51,000.00.';
+
+    globalThis.window = {
+      AndroidBridge: {
+        readSmsInbox: () => JSON.stringify([
+          { sender: 'VM-ICICIB', body: sms3, received_at: 1785400000000 },
+          { sender: 'VM-ICICIB', body: sms4, received_at: 1785500000000 },
+        ]),
+      },
+    };
+
+    const res = await handleSmsAction({ action: 'reimport', days: 0, member_id: 1 });
+    assert.equal(res.status, 'success');
+
+    const disc = await handleDbAction({ action: 'discover_accounts_from_sms' });
+    assert.equal(disc.status, 'success');
+
+    const iciciAccounts = disc.discovered.filter((d) => d.bank === 'ICICI Bank' && d.kind === 'account');
+    assert.equal(iciciAccounts.length, 1, 'Must merge 386 and 8386 into a single discovered account');
+    assert.equal(iciciAccounts[0].last_4, '8386', 'Must keep the longer 4-digit identifier');
+    assert.equal(iciciAccounts[0].txn_count, 2, 'Must combine transaction counts across both suffixes');
+
+    delete globalThis.window;
+  });
+
   it('provides duplicate_twin with raw_sms and details in review alerts for side-by-side comparison', async () => {
     const originalSms = 'INR 422.00 spent on ICICI Bank Card XX5004 on 30-Jul-2026 at IND*Amazon.in. Avl Lmt: INR 4,00,000.00.';
     const duplicateSms = 'INR 422.00 spent on ICICI Bank Card XX5004 on 30-Jul-2026 at IND*Amazon.in. Avl Lmt: INR 3,99,578.00.';
@@ -1026,4 +1053,238 @@ describe('sms.js SMS classifier and dispatcher', () => {
 
     assert.equal(isDup, null, 'Transactions on different cards must not be marked as duplicates');
   });
+
+  it('classifies Zerodha fund top-up debit as Investment Outflow and prevents flip to Interest & Dividends', async () => {
+    const rawSms = 'ICICI Bank Acct XX386 debited for Rs 150.00 on 28-Oct-26; ZERODHA BROKING credited. UPI:151483518701. Call 18002662 for dispute. SMS BLOCK 386 to 9215676766.';
+    const parsed = await parseSmsText(rawSms, 'VM-ICICI');
+    assert.equal(parsed.amount, 150);
+    assert.equal(parsed.type, 'Investment');
+    assert.equal(parsed.category, 'Investment Outflow');
+
+    // Save as transaction in DB
+    const saveRes = await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-10-28',
+        amount: 150,
+        type: parsed.type,
+        category: parsed.category,
+        raw_sms: rawSms,
+        is_investment_outflow: 1,
+      },
+    });
+    assert.equal(saveRes.status, 'success');
+    const txId = saveRes.transaction_id;
+
+    // Run reconciliation - it MUST NOT turn it into Income / Interest & Dividends
+    reconcileExistingTransactions(db);
+
+    const tx = db.get('SELECT type, category, is_investment_outflow FROM transactions WHERE id = ?', [txId]);
+    assert.equal(tx.type, 'Investment');
+    assert.equal(tx.category, 'Investment Outflow');
+    assert.equal(tx.is_investment_outflow, 1);
+
+    // Self-healing: if an old row was corrupted as Income / Interest & Dividends with debit raw_sms
+    db.run("UPDATE transactions SET type = 'Income', category = 'Interest & Dividends', is_investment_outflow = 0 WHERE id = ?", [txId]);
+    reconcileExistingTransactions(db);
+
+    const healedTx = db.get('SELECT type, category, is_investment_outflow FROM transactions WHERE id = ?', [txId]);
+    assert.equal(healedTx.type, 'Investment');
+    assert.equal(healedTx.category, 'Investment Outflow');
+    assert.equal(healedTx.is_investment_outflow, 1);
+  });
+
+  it('keeps same-card purchase and refund sharing UTR as Expense and Income, not Transfer', async () => {
+    // Create card
+    const cardRes = await handleDbAction({
+      action: 'save_record',
+      type: 'card',
+      record: { card_name: 'HDFC Credit Card', bank: 'HDFC Bank', last_4: '8635', total_limit: 100000 },
+    });
+    const cardId = cardRes.id;
+
+    // Outflow: Spend of Rs 15 on card 8635
+    const spendRes = await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-08-01',
+        amount: 15,
+        type: 'Expense',
+        category: 'Shopping',
+        card_id: cardId,
+        raw_sms: 'Rs 15.00 spent on HDFC Bank Card ending 8635 at DHANAWAD on 01-Aug-2026. Ref no: 522904360144.',
+      },
+    });
+
+    // Inflow: Refund of Rs 15 on card 8635 sharing same UTR
+    const refundRes = await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-08-01',
+        amount: 15,
+        type: 'Income',
+        category: 'Refunds & Cashback',
+        card_id: cardId,
+        raw_sms: 'Rs 15.00 refunded on HDFC Bank Card ending 8635 from DHANAWAD on 01-Aug-2026. Ref no: 522904360144.',
+      },
+    });
+
+    reconcileExistingTransactions(db);
+
+    const spendTx = db.get('SELECT type, category FROM transactions WHERE id = ?', [spendRes.transaction_id]);
+    const refundTx = db.get('SELECT type, category FROM transactions WHERE id = ?', [refundRes.transaction_id]);
+
+    assert.equal(spendTx.type, 'Expense', 'Spend on card must remain Expense');
+    assert.equal(spendTx.category, 'Shopping');
+    assert.equal(refundTx.type, 'Income', 'Refund on card must remain Income');
+    assert.equal(refundTx.category, 'Refunds & Cashback');
+  });
+
+  it('pairs genuine inter-bank transfer sharing UTR into Transfer category', async () => {
+    const acc1 = await handleDbAction({
+      action: 'save_record',
+      type: 'account',
+      record: { name: 'StanChart Bank', category: 'Bank', institution: 'Standard Chartered', account_number: '2219' },
+    });
+    const acc2 = await handleDbAction({
+      action: 'save_record',
+      type: 'account',
+      record: { name: 'ICICI Bank', category: 'Bank', institution: 'ICICI Bank', account_number: '8386' },
+    });
+
+    const outTx = await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-09-15',
+        amount: 4600,
+        type: 'Expense',
+        category: 'Shopping',
+        account_id: acc1.id,
+        raw_sms: 'Your a/c XX2219 is debited for Rs. 4600.00 on 15-09-2026 14:50 and credited to a/c XX8386 (UPI Ref no 625814581581).',
+      },
+    });
+
+    const inTx = await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-09-15',
+        amount: 4600,
+        type: 'Income',
+        category: 'Other Income',
+        account_id: acc2.id,
+        raw_sms: 'ICICI Bank Acct XX386 credited for Rs 4600.00 on 15-Sep-26 by UPI: 625814581581.',
+      },
+    });
+
+    reconcileExistingTransactions(db);
+
+    const t1 = db.get('SELECT type, category FROM transactions WHERE id = ?', [outTx.transaction_id]);
+    const t2 = db.get('SELECT type, category FROM transactions WHERE id = ?', [inTx.transaction_id]);
+
+    assert.equal(t1.type, 'Transfer');
+    assert.equal(t1.category, 'Transfer');
+    assert.equal(t2.type, 'Transfer');
+    assert.equal(t2.category, 'Transfer');
+  });
+
+  it('does not pair unrelated bank transactions with matching amount within 48h without matching UTR', async () => {
+    const acc1 = await handleDbAction({
+      action: 'save_record',
+      type: 'account',
+      record: { name: 'ICICI Bank', category: 'Bank', institution: 'ICICI Bank', account_number: '8386' },
+    });
+    const acc2 = await handleDbAction({
+      action: 'save_record',
+      type: 'account',
+      record: { name: 'StanChart Bank', category: 'Bank', institution: 'Standard Chartered', account_number: '2219' },
+    });
+
+    // ICICI debit of Rs 20000 on 02-Aug to Ravindra (UPI 705920521721)
+    const outTx = await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-08-02',
+        amount: 20000,
+        type: 'Expense',
+        category: 'Shopping',
+        account_id: acc1.id,
+        raw_sms: 'ICICI Bank Acct XX386 debited with INR 20000.00 on 02-Aug-26. Acct XX123 credited.UPI:705920521721.',
+      },
+    });
+
+    // StanChart credit of Rs 20000 on 03-Aug from Ravindra (UPI 846066954468)
+    const inTx = await handleDbAction({
+      action: 'save_transaction',
+      transaction: {
+        date: '2026-08-03',
+        amount: 20000,
+        type: 'Income',
+        category: 'Other Income',
+        account_id: acc2.id,
+        raw_sms: 'Your a/c no. XXXXXXX2219 is credited for Rs. 20000.00 on 03-08-2026 10:15 (UPI Ref no 846066954468).',
+      },
+    });
+
+    reconcileExistingTransactions(db);
+
+    const t1 = db.get('SELECT type, category FROM transactions WHERE id = ?', [outTx.transaction_id]);
+    const t2 = db.get('SELECT type, category FROM transactions WHERE id = ?', [inTx.transaction_id]);
+
+    assert.equal(t1.type, 'Expense', 'Unrelated external debit must remain Expense');
+    assert.equal(t2.type, 'Income', 'Unrelated external credit must remain Income');
+  });
+
+  it('extracts IMPS and NEFT reference numbers correctly', () => {
+    assert.equal(extractUtr('ICICI Bank Acct XX386 debited with Rs 150,000.00 on 30-May-26 & Acct XX875 credited.IMPS:615023284440.'), '615023284440');
+    assert.equal(extractUtr('NEFT Ref no 987654321098 credited to your account'), '987654321098');
+    assert.equal(extractUtr('Info:NEFT-N12345678901-AMIT R credited to a/c XX386'), 'N12345678901');
+    assert.equal(extractUtr('IMPS Ref. no. 556677889900 sent to beneficiary'), '556677889900');
+  });
+
+  it('extracts ATM Cash Withdrawal merchant from CAM and ATM machine patterns', () => {
+    assert.equal(
+      extractMerchant('ICICI Bank Acc XX712 debited Rs. 10,000.00 on 27-Oct-26 CAM*07811SRY*. Avb Bal Rs. 1,10,050.80. To dispute Call 18002662 or SMS BLOCK 712 to 9215676766 .'),
+      'ATM Cash Withdrawal',
+    );
+    assert.equal(
+      extractMerchant('ICICI Bank Acc XX386 debited with INR 5,000.00 on 02-Jun-23. ATM*S1CPN182*.Avb Bal: INR5,59,124.42. For dispute,Call 18002662 or SMS BLOCK 386 to 9215676766'),
+      'ATM Cash Withdrawal',
+    );
+    assert.equal(
+      extractMerchant('Your a/c XX2219 is debited on 29/08/2026 by INR 10,000 towards ATM cash withdrawal. Avl Bal: INR 325,083.61. Call 18002586465 if not done by you - StanChart'),
+      'ATM Cash Withdrawal',
+    );
+  });
+
+  it('distinguishes consecutive ATM cash withdrawals with different balances and flags true identical retries', async () => {
+    const raw1 = 'ICICI Bank Acc XX712 debited Rs. 10,000.00 on 27-Oct-26 CAM*07811SRY*. Avb Bal Rs. 1,10,050.80. To dispute Call 18002662 or SMS BLOCK 712 to 9215676766 .';
+    const raw2 = 'ICICI Bank Acc XX712 debited Rs. 10,000.00 on 27-Oct-26 CAM*07811SRY*. Avb Bal Rs. 1,00,050.80. To dispute Call 18002662 or SMS BLOCK 712 to 9215676766 .';
+    const raw1Retry = 'ICICI Bank Acc XX712 debited Rs. 10,000.00 on 27-Oct-26 CAM*07811SRY*. Avb Bal Rs. 1,10,050.80. To dispute Call 18002662 or SMS BLOCK 712 to 9215676766 . [NETWORK RETRY]';
+
+    globalThis.window = {
+      AndroidBridge: {
+        readSmsInbox: () => JSON.stringify([
+          { sender: 'VM-ICICIB', body: raw1, received_at: 1793113740000 },
+          { sender: 'VM-ICICIB', body: raw2, received_at: 1793113800000 },
+          { sender: 'VM-ICICIB', body: raw1Retry, received_at: 1793113860000 },
+        ]),
+      },
+    };
+
+    const res = await handleSmsAction({ action: 'reimport', days: 30, member_id: 1 });
+    assert.equal(res.status, 'success');
+    assert.equal(res.read, 3);
+    assert.equal(res.imported, 2, 'Both genuine withdrawals must be imported');
+    assert.equal(res.duplicates, 1, 'The duplicate network retry must be dropped');
+
+    const txs = db.all('SELECT amount, merchant, type, raw_sms FROM transactions WHERE date = ? AND amount = ?', ['2026-10-27', 10000]);
+    assert.equal(txs.length, 2);
+    assert.equal(txs[0].merchant, 'ATM Cash Withdrawal');
+    assert.equal(txs[1].merchant, 'ATM Cash Withdrawal');
+    assert.equal(txs[0].type, 'Expense');
+    assert.equal(txs[1].type, 'Expense');
+
+    delete globalThis.window;
+  });
 });
+

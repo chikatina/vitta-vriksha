@@ -11,8 +11,9 @@
  */
 
 import {
-  autoUpdateAccountFromSms, autoUpdateCreditCardFromSms, autoUpdateLoanFromSms, currentCurrency, getDatabase, initDb, learnMerchant,
-  parseAccountDetailsFromText, reconcileExistingTransactions, resolveAccountAndCardFromSms, resolveMemberId,
+  autoUpdateAccountFromSms, autoUpdateCreditCardFromSms, autoUpdateLoanFromSms, currentCurrency, extractAccountBalanceFromText,
+  getDatabase, initDb, learnMerchant, parseAccountDetailsFromText, reconcileExistingTransactions, resolveAccountAndCardFromSms,
+  resolveMemberId,
 } from './database.js';
 import { memberClause } from './periods.js';
 import { readSmsInbox, takePendingAlerts } from './native.js';
@@ -23,7 +24,7 @@ import { fail } from './errors.js';
 
 const DEFAULT_AMOUNT_RE = /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i;
 const FALLBACK_AMOUNT_RE = /(?:rs\.?|inr|₹)\s*([0-9,]+(?:\.[0-9]+)?)/i;
-const ACCOUNT_RE = /(?:card|a\/c|acct|account|wallet|vpa)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s]*([0-9]{3,4})\b/i;
+const ACCOUNT_RE = /(?:card|a\/c|acct|account|wallet|vpa)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s]*([0-9]{3,18})\b/i;
 
 export function candidateAccountDigits(r) {
   if (!r) return '';
@@ -468,7 +469,7 @@ export async function parseSmsText(text, sender = '', receivedAt = null, context
 
   const fallbackAmount = extractTransactionAmount(text);
   const checkText = primaryLower || lower;
-  const isCredit = checkText.includes('credited') || checkText.includes('received') || checkText.includes('deposited');
+  const isCredit = isCreditAlert(text);
   const hasSalarySignal = /\b(?:salary|payroll|stipend|wages|sal\s+for|monthly\s+pay)\b/i.test(checkText);
   const guess = isCredit ? (hasSalarySignal ? 'Salary' : 'Other Income') : 'Shopping';
   const defaultType = known.type || (!isCredit && known.category === 'Investment Outflow' ? 'Investment' : (isCredit ? 'Income' : 'Expense'));
@@ -704,16 +705,28 @@ export function reconcileTransfers(rows, db, { memberId = null, cachedAccounts =
 
     for (const outRow of outflows) {
       if (outRow.classified.type === 'Transfer') continue;
-      const matchingIn = inflows.find((inRow) =>
-        inRow.classified.type !== 'Transfer'
-        && Math.abs(inRow.classified.amount - outRow.classified.amount) < 0.01,
-      );
+      const instOut = outRow.classified.loan_id ? `loan:${outRow.classified.loan_id}`
+        : (outRow.classified.card_id ? `card:${outRow.classified.card_id}`
+        : (outRow.classified.account_id ? `acc:${outRow.classified.account_id}`
+        : (outRow.classified.account_last4 ? `last4:${outRow.classified.account_last4}` : null)));
+
+      const matchingIn = inflows.find((inRow) => {
+        if (inRow.classified.type === 'Transfer') return false;
+        if (Math.abs(inRow.classified.amount - outRow.classified.amount) >= 0.01) return false;
+        const instIn = inRow.classified.loan_id ? `loan:${inRow.classified.loan_id}`
+          : (inRow.classified.card_id ? `card:${inRow.classified.card_id}`
+          : (inRow.classified.account_id ? `acc:${inRow.classified.account_id}`
+          : (inRow.classified.account_last4 ? `last4:${inRow.classified.account_last4}` : null)));
+        // Same account/card debit and credit sharing UTR is a refund/reversal, not an inter-account transfer
+        if (instOut && instIn && instOut === instIn) return false;
+        return true;
+      });
       if (matchingIn) {
         const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(outRow.body || outRow.raw_sms || '')
           || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(matchingIn.body || matchingIn.raw_sms || '');
         const hasLoan = Boolean(outRow.classified.loan_id || matchingIn.classified.loan_id || outRow.classified.is_loan || matchingIn.classified.is_loan) || isLoanOrEmi;
-        const isCard = !isLoanOrEmi && Boolean(outRow.classified.card_id || matchingIn.classified.card_id || outRow.classified.is_credit_card || matchingIn.classified.is_credit_card);
-        const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
+        const hasCard = !hasLoan && Boolean(outRow.classified.card_id || matchingIn.classified.card_id || outRow.classified.is_credit_card || matchingIn.classified.is_credit_card);
+        const cat = hasLoan ? 'Loans & EMI' : (hasCard ? 'Credit Card' : 'Transfer');
 
         outRow.classified.type = 'Transfer';
         outRow.classified.category = cat;
@@ -744,12 +757,22 @@ export function reconcileTransfers(rows, db, { memberId = null, cachedAccounts =
       if (!utr) continue;
 
       const isOut = row.classified.type === 'Expense' || row.classified.type === 'Investment';
+      const rowInst = row.classified.loan_id ? `loan:${row.classified.loan_id}`
+        : (row.classified.card_id ? `card:${row.classified.card_id}`
+        : (row.classified.account_id ? `acc:${row.classified.account_id}`
+        : (row.classified.account_last4 ? `last4:${row.classified.account_last4}` : null)));
 
       const candidates = db.all(
-        "SELECT id, type, category, card_id, loan_id, raw_sms FROM transactions WHERE amount = ? AND raw_sms IS NOT NULL AND raw_sms != ''",
+        "SELECT id, type, category, account_id, card_id, loan_id, raw_sms FROM transactions WHERE amount = ? AND raw_sms IS NOT NULL AND raw_sms != ''",
         [row.classified.amount],
       );
       for (const cand of candidates) {
+        const candInst = cand.loan_id ? `loan:${cand.loan_id}`
+          : (cand.card_id ? `card:${cand.card_id}`
+          : (cand.account_id ? `acc:${cand.account_id}` : null));
+        if (rowInst && candInst && rowInst === candInst) {
+          continue; // Same account/card refund - keep as Expense and Income
+        }
         const candUtr = extractUtr(cand.raw_sms);
         if (candUtr && candUtr === utr) {
           const candIsOut = cand.type === 'Expense' || cand.type === 'Investment';
@@ -757,8 +780,8 @@ export function reconcileTransfers(rows, db, { memberId = null, cachedAccounts =
             const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(body)
               || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(cand.raw_sms || '');
             const hasLoan = Boolean(row.classified.loan_id || cand.loan_id || row.classified.is_loan) || isLoanOrEmi;
-            const isCard = !isLoanOrEmi && Boolean(row.classified.card_id || cand.card_id || row.classified.is_credit_card);
-            const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
+            const hasCard = !hasLoan && Boolean(row.classified.card_id || cand.card_id || row.classified.is_credit_card);
+            const cat = hasLoan ? 'Loans & EMI' : (hasCard ? 'Credit Card' : 'Transfer');
 
             row.classified.type = 'Transfer';
             row.classified.category = cat;
@@ -816,6 +839,8 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
   const ctx = buildClassificationContext(db, memberId);
   const txByDateAmount = new Map();
   for (const row of db.all(`SELECT t.id, t.date, t.amount, t.type, t.raw_sms,
+           t.merchant, t.category, t.description, t.account_id, t.card_id,
+           COALESCE(a.name, c.card_name) AS instrument_name,
            COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
     FROM transactions t
     LEFT JOIN asset_accounts a ON t.account_id = a.id
@@ -861,13 +886,20 @@ async function importInbox(db, { days = 0, memberId = 1 } = {}) {
     }
 
     // Two messages for one payment must not become two transactions.
-    // Duplicate detection considers cashflow direction and account so transfers are not dropped.
+    // Duplicate detection considers cashflow direction, account, and balance so transfers
+    // and consecutive ATM cash withdrawals are not dropped.
     const date = isoFromMillis(message.received_at) || classified.date;
     const utr = extractUtr(body);
     const isOutflow = classified.type === 'Expense' || classified.type === 'Investment';
     const flowDir = isOutflow ? 'out' : 'in';
     const accKey = classified.account_last4 || '';
-    const stageKey = utr ? `${date}:${classified.amount}:${flowDir}:${utr}` : `${date}:${classified.amount}:${flowDir}:${accKey}`;
+    const bal = extractAccountBalanceFromText(body);
+    const balKey = (bal !== null && bal !== undefined) ? String(bal) : '';
+    const stageKey = utr
+      ? `${date}:${classified.amount}:${flowDir}:${utr}`
+      : (balKey
+        ? `${date}:${classified.amount}:${flowDir}:${accKey}:bal:${balKey}`
+        : `${date}:${classified.amount}:${flowDir}:${accKey}`);
 
     if (duplicateOfFast(txByDateAmount, {
       date,
@@ -1050,6 +1082,8 @@ async function reimportInbox(db, args) {
   const ctx = buildClassificationContext(db, memberId);
   const txByDateAmount = new Map();
   for (const row of db.all(`SELECT t.id, t.date, t.amount, t.type, t.raw_sms,
+           t.merchant, t.category, t.description, t.account_id, t.card_id,
+           COALESCE(a.name, c.card_name) AS instrument_name,
            COALESCE(NULLIF(a.account_number, ''), NULLIF(a.debit_card_last_4, ''), NULLIF(c.last_4, '')) AS instrument_digits
     FROM transactions t
     LEFT JOIN asset_accounts a ON t.account_id = a.id
@@ -1072,7 +1106,7 @@ async function reimportInbox(db, args) {
   // Classify first, write after. Reading a rule for every message inside a write
   // transaction would hold it open for the length of the whole inbox.
   const rows = [];
-  const staged = new Set();
+  const staged = new Map();
   const duplicateItems = [];
   let processed = 0;
 
@@ -1096,13 +1130,20 @@ async function reimportInbox(db, args) {
     }
 
     // Two messages for one payment must not become two transactions.
-    // Duplicate detection considers cashflow direction and account so transfers are not dropped.
+    // Duplicate detection considers cashflow direction, account, and balance so transfers
+    // and consecutive ATM cash withdrawals are not dropped.
     const date = isoFromMillis(message.received_at) || classified.date;
     const utr = extractUtr(body);
     const isOutflow = classified.type === 'Expense' || classified.type === 'Investment';
     const flowDir = isOutflow ? 'out' : 'in';
     const accKey = classified.account_last4 || '';
-    const stageKey = utr ? `${date}:${classified.amount}:${flowDir}:${utr}` : `${date}:${classified.amount}:${flowDir}:${accKey}`;
+    const bal = extractAccountBalanceFromText(body);
+    const balKey = (bal !== null && bal !== undefined) ? String(bal) : '';
+    const stageKey = utr
+      ? `${date}:${classified.amount}:${flowDir}:${utr}`
+      : (balKey
+        ? `${date}:${classified.amount}:${flowDir}:${accKey}:bal:${balKey}`
+        : `${date}:${classified.amount}:${flowDir}:${accKey}`);
 
     const twin = duplicateOfFast(txByDateAmount, {
       date,
@@ -1111,7 +1152,9 @@ async function reimportInbox(db, args) {
       type: classified.type,
       accountLast4: classified.account_last4,
     });
-    if (twin || staged.has(stageKey)) {
+    const stagedTwin = staged.get(stageKey);
+    const resolvedTwin = twin || stagedTwin || null;
+    if (resolvedTwin || staged.has(stageKey)) {
       duplicates += 1;
       duplicateItems.push({
         state: 'pending',
@@ -1119,7 +1162,7 @@ async function reimportInbox(db, args) {
         sender: message.sender ?? '',
         date,
         duplicate_of: twin ? twin.id : 0,
-        duplicate_twin: twin || null,
+        duplicate_twin: resolvedTwin,
         reason: 'possible-duplicate',
         amount: classified.amount,
         merchant: classified.merchant || '',
@@ -1133,9 +1176,58 @@ async function reimportInbox(db, args) {
       continue;
     }
 
+    let accountId = classified.account_id ?? null;
+    let cardId = classified.card_id ?? null;
+    let loanId = classified.loan_id ?? null;
+    let instrumentName = '';
+    if (accountId && ctx.cachedAccounts) {
+      const acc = ctx.cachedAccounts.find((a) => a.id === accountId);
+      if (acc) instrumentName = acc.name;
+    } else if (cardId && ctx.cachedCards) {
+      const card = ctx.cachedCards.find((c) => c.id === cardId);
+      if (card) instrumentName = card.card_name;
+    } else if (loanId && ctx.cachedLoans) {
+      const loan = ctx.cachedLoans.find((l) => l.id === loanId);
+      if (loan) instrumentName = loan.name;
+    }
+    if (!instrumentName) {
+      const resolved = resolveAccountAndCardFromSms(db, body, message.sender ?? '', {
+        memberId,
+        cachedAccounts: ctx.cachedAccounts,
+        cachedCards: ctx.cachedCards,
+        cachedLoans: ctx.cachedLoans,
+      });
+      instrumentName = resolved.account?.name
+        || resolved.card?.card_name
+        || resolved.loan?.name
+        || (resolved.info?.issuer && resolved.info.issuer !== 'Bank' ? `${resolved.info.issuer} Account` : '');
+    }
+
+    const stagedEntry = {
+      id: 0,
+      amount: classified.amount,
+      date,
+      merchant: classified.merchant || '',
+      raw_sms: body,
+      body,
+      type: classified.type,
+      category: classified.category || '',
+      description: classified.description || '',
+      account_id: accountId,
+      card_id: cardId,
+      instrument_name: instrumentName,
+      account_last4: classified.account_last4 || '',
+      utr: utr || '',
+      match_reason: utr ? 'exact-utr' : 'same-batch-alert',
+    };
+
     rows.push({ body, classified, receivedAt: message.received_at, sender: message.sender ?? '' });
     seen.add(body);
-    staged.add(stageKey);
+    staged.set(stageKey, stagedEntry);
+
+    const txKey = `${date}:${classified.amount}:${classified.type}`;
+    if (!txByDateAmount.has(txKey)) txByDateAmount.set(txKey, []);
+    txByDateAmount.get(txKey).push(stagedEntry);
   }
 
   reconcileTransfers(rows, db, { memberId, cachedAccounts: ctx.cachedAccounts });
@@ -1266,7 +1358,7 @@ export function duplicateOf(db, { date, amount, body, type = null, accountLast4 
   }
   if (!candidates.length) return null;
 
-  let match = candidates[0];
+  let match = null;
   let isExactUtr = false;
   if (incomingUtr) {
     const utrMatch = candidates.find((r) => {
@@ -1278,6 +1370,21 @@ export function duplicateOf(db, { date, amount, body, type = null, accountLast4 
       isExactUtr = true;
     }
   }
+
+  if (!match) {
+    const incomingBal = extractAccountBalanceFromText(body);
+    match = candidates.find((r) => {
+      if (incomingBal !== null && incomingBal !== undefined) {
+        const candidateBal = extractAccountBalanceFromText(r.raw_sms);
+        if (candidateBal !== null && candidateBal !== undefined && candidateBal !== incomingBal) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+
+  if (!match) return null;
 
   const matchUtr = extractUtr(match.raw_sms);
   return {
@@ -1327,7 +1434,17 @@ export function duplicateOfFast(txByDateAmount, { date, amount, body, type = nul
   }
 
   if (!found) {
-    found = candidates.find((row) => !row.raw_sms || row.raw_sms !== (body || ''));
+    const incomingBal = extractAccountBalanceFromText(body);
+    found = candidates.find((row) => {
+      if (row.raw_sms && row.raw_sms === (body || '')) return false;
+      if (incomingBal !== null && incomingBal !== undefined) {
+        const candidateBal = extractAccountBalanceFromText(row.raw_sms);
+        if (candidateBal !== null && candidateBal !== undefined && candidateBal !== incomingBal) {
+          return false;
+        }
+      }
+      return true;
+    });
   }
 
   if (!found) return null;

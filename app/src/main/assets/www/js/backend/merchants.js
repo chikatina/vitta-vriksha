@@ -616,6 +616,30 @@ const HEDGED = new RegExp(
   'i',
 );
 
+const UTR_PATTERNS = [
+  /\bupi(?:\/|\s*(?:ref|txn|reference)?\s*(?:no\.?|id|num)?[:\s\/-]+)([A-Za-z0-9]{6,24})\b/i,
+  /\b(?:ref(?:\s*no\.?|\s*id|\s*num)?|rrn|utr(?:\s*no\.?)?|txn\s*id|transaction\s*id|reference\s*no\.?)[:\s\/-]+([A-Za-z0-9]{6,24})\b/i,
+  /\bimps(?:\s*ref(?:\.?\s*no\.?)?|\s*id)?[:\s\/-]+([A-Za-z0-9]{6,24})\b/i,
+  /\bneft(?:\s*ref(?:\.?\s*no\.?)?|\s*txn\s*id|\s*id|\s*num)?[:\s\/-]+([A-Za-z0-9]{6,24})\b/i,
+  /\b(?:info|via)[:\s]+[A-Za-z0-9\s-]*\/\s*([0-9]{6,24})\b/i,
+  /\bupi\/\s*([0-9]{6,24})\b/i,
+];
+
+/** Extracts UPI, IMPS, NEFT or bank reference numbers from SMS text. */
+export function extractUtr(text) {
+  if (!text || typeof text !== 'string') return '';
+  for (const pattern of UTR_PATTERNS) {
+    const match = pattern.exec(text);
+    if (match && match[1]) {
+      const val = match[1].trim();
+      if (val.length >= 6 && /\d/.test(val) && !/^(success|pending|completed|declined|reversed)$/i.test(val)) {
+        return val;
+      }
+    }
+  }
+  return '';
+}
+
 /**
  * Isolates the primary clause describing what happened to the user's account.
  * Modern Indian banking alerts often mention both accounts (e.g. "Your a/c XX2219 is debited
@@ -624,7 +648,7 @@ const HEDGED = new RegExp(
  */
 export function extractPrimaryClause(text) {
   if (!text) return '';
-  const counterpartyRe = /(?:[\s,;&]+(?:and|&)\s+(?:debited\s+from|credited\s+to)\b|;\s*[^;.]+?\s+(?:credited|debited)\b|[\s,;&]+(?:and|&)\s+[^;.]+?\s+(?:credited|debited)\b)/i;
+  const counterpartyRe = /(?:[\s,;&]+(?:and|&)\s+(?:debited\s+from|credited\s+to)\b|;\s*[^;.]+?\s+(?:credited|debited)\b|(?<!\b(?:no|ref|rs|inr|a\/c|acct))\.\s+[^;.]+?\s+(?:credited|debited)\b|[\s,;&]+(?:and|&)\s+[^;.]+?\s+(?:credited|debited)\b)/i;
   const match = counterpartyRe.exec(text);
   if (match) {
     return text.slice(0, match.index).trim();
@@ -736,6 +760,9 @@ export function extractMerchant(body) {
   let text = String(body || '');
   // Strip bank safety / dispute boilerplate before seeking counterparty name
   text = text.replace(/\b(?:call\s+\d+|to dispute|for dispute|if not (?:done by |you|authorized)|report fraud|sms block\b).*/i, '').trim();
+  if (/\b(?:ATM|CAM)\*[A-Za-z0-9]+\*|\b(?:towards\s+)?ATM(?:\s+cash)?\s+withdrawal\b/i.test(text)) {
+    return 'ATM Cash Withdrawal';
+  }
   for (const pattern of MERCHANT_PATTERNS) {
     const match = pattern.exec(text);
     if (!match) continue;
@@ -766,25 +793,4 @@ export function categoryForMerchant(merchant, body = '') {
   }
   const cleanBody = bodyText.replace(/(?:https?:\/\/|www\.)[^\s,;]+|[a-z0-9-]+\.(?:com|in|co\.in|org|net|io|app)\/[^\s,;]*/gi, ' ');
   return cleanBody.trim() ? keywords().find(cleanBody) : '';
-}
-
-const UTR_PATTERNS = [
-  /\bupi(?:\/|\s*(?:ref|txn|reference)?\s*(?:no\.?|id|num)?[:\s\/-]+)([A-Za-z0-9]{6,24})\b/i,
-  /\b(?:ref(?:\s*no\.?|\s*id|\s*num)?|rrn|utr(?:\s*no\.?)?|txn\s*id|transaction\s*id|reference\s*no\.?)[:\s\/-]+([A-Za-z0-9]{6,24})\b/i,
-  /\b(?:info|via)[:\s]+[A-Za-z0-9\s-]*\/\s*([0-9]{6,24})\b/i,
-  /\bupi\/\s*([0-9]{6,24})\b/i,
-];
-
-export function extractUtr(text) {
-  if (!text || typeof text !== 'string') return '';
-  for (const pattern of UTR_PATTERNS) {
-    const match = pattern.exec(text);
-    if (match && match[1]) {
-      const val = match[1].trim();
-      if (val.length >= 6 && /\d/.test(val) && !/^(success|pending|completed|declined|reversed)$/i.test(val)) {
-        return val;
-      }
-    }
-  }
-  return '';
 }

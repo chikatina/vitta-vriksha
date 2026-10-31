@@ -4250,6 +4250,7 @@ export function parseAccountDetailsFromText(text = '', sender = '') {
     /credit\s*card|creditcard|cc ending|\bcc\b|cardholder|limit avl|total due|min due|statement generated/i.test(combined)
     || /infinia|regalia|millennia|coral|rubyx|sapphiro|simplyclick|simplysave|magnus|atlas|onecard|scapia|slice/i.test(combined)
     || (/spent on .*card|card ending|card \*\*/i.test(combined) && !/debit|a\/c|account/i.test(combined))
+    || (/spent using .*\bcard\b|\bavl\.?\s*limit\b|\bavailable\s+limit\b/i.test(combined) && !/debit|a\/c|account/i.test(combined))
     || (/amazon pay|flipkart axis|tata neu|swiggy hdfc/i.test(combined) && /card/i.test(combined))
   );
 
@@ -4259,8 +4260,11 @@ export function parseAccountDetailsFromText(text = '', sender = '') {
   let creditCardLast4 = '';
   let generalLast4 = '';
 
-  const acctMatch = /(?:a\/c|acct|account)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{3,4})\b/i.exec(t);
-  if (acctMatch && acctMatch[1] && isValid4Digits(acctMatch[1], t)) accountLast4 = acctMatch[1];
+  const acctMatch = /(?:a\/c|acct|account)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{3,18})\b/i.exec(t);
+  if (acctMatch && acctMatch[1]) {
+    const d = acctMatch[1].slice(-4);
+    if (isValid4Digits(d, t)) accountLast4 = d;
+  }
 
   const dcMatch = /(?:debit\s*card|dc)\s*(?:no\.?|ending(?:\s*(?:in|with))?|number)?\s*[*Xx#\s.]*([0-9]{4})\b/i.exec(t);
   if (dcMatch && dcMatch[1] && isValid4Digits(dcMatch[1], t)) debitCardLast4 = dcMatch[1];
@@ -4561,7 +4565,7 @@ export function autoUpdateCreditCardFromSms(db, text = '', sender = '', matchedC
 }
 
 export function discoverAccountsFromSms(db) {
-  const transactions = db.all("SELECT raw_sms, sender, type, amount, date, id FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' ORDER BY date DESC, id DESC LIMIT 1500");
+  const transactions = db.all("SELECT raw_sms, sender, type, amount, date, id FROM transactions WHERE raw_sms IS NOT NULL AND raw_sms != '' ORDER BY date DESC, id DESC");
   const existingAccounts = db.all('SELECT id, name, category, institution, account_number, debit_card_last_4 FROM asset_accounts');
   const existingCards = db.all('SELECT id, card_name, bank, last_4 FROM credit_cards');
   const existingLoans = db.all('SELECT id, name, lender, account_number, last_4, current_outstanding, monthly_emi, debit_day FROM loans');
@@ -4725,6 +4729,40 @@ export function discoverAccountsFromSms(db) {
           }
           map.delete(key);
           break;
+        }
+      }
+    }
+  }
+
+  // Merge same-bank suffix variants (e.g. 3-digit vs 4-digit masking like 386 and 8386)
+  for (const [key, entry] of [...map.entries()]) {
+    if (entry.last4 && /^\d{3,4}$/.test(entry.last4)) {
+      for (const [otherKey, otherEntry] of map.entries()) {
+        if (otherKey !== key
+          && otherEntry.info.issuer === entry.info.issuer
+          && otherEntry.instrument_type === entry.instrument_type
+          && otherEntry.last4
+          && /^\d{3,4}$/.test(otherEntry.last4)) {
+          // If otherEntry has longer digits and ends with entry.last4 (e.g. 8386 ends with 386)
+          if (otherEntry.last4.length > entry.last4.length && otherEntry.last4.endsWith(entry.last4)) {
+            otherEntry.txn_count += entry.txn_count;
+            otherEntry.total_spent += entry.total_spent;
+            otherEntry.total_received += entry.total_received;
+            if (entry.last_balance_date && (!otherEntry.last_balance_date || entry.last_balance_date >= otherEntry.last_balance_date)) {
+              otherEntry.balance = entry.balance;
+              otherEntry.last_balance_date = entry.last_balance_date;
+            } else if (!otherEntry.balance && entry.balance) {
+              otherEntry.balance = entry.balance;
+            }
+            if (entry.txn_count > otherEntry.txn_count) {
+              otherEntry.sample_sms = entry.sample_sms;
+            }
+            if (entry.last_seen && (!otherEntry.last_seen || entry.last_seen > otherEntry.last_seen)) {
+              otherEntry.last_seen = entry.last_seen;
+            }
+            map.delete(key);
+            break;
+          }
         }
       }
     }
@@ -4906,9 +4944,14 @@ export function discoverAccountsFromSms(db) {
       const alreadyHas = existingAccountLast4Set.has(last4)
         || existingDebitCardLast4Set.has(last4)
         || existingCardLast4Set.has(last4)
-        || existingAccounts.some((a) =>
-          (a.account_number && a.account_number.endsWith(last4))
-          || (a.name && a.name.includes(last4)));
+        || existingAccounts.some((a) => {
+          if (a.name && a.name.includes(last4)) return true;
+          if (!a.account_number) return false;
+          const aNum = String(a.account_number).trim();
+          if (aNum.endsWith(last4)) return true;
+          const isSameBank = !a.institution || !info.issuer || a.institution.toLowerCase() === info.issuer.toLowerCase();
+          return isSameBank && last4.length >= 3 && aNum.length >= 3 && last4.endsWith(aNum);
+        });
       if (!alreadyHas) {
         discovered.push({
           kind: 'account',
@@ -5613,11 +5656,31 @@ export function reconcileExistingTransactions(db) {
   }
 
   // 2. Fix inverted investment credits (e.g. NSE clearing payouts credited to bank)
-  db.run(
-    "UPDATE transactions SET type = 'Income', category = 'Interest & Dividends', is_investment_outflow = 0"
-    + " WHERE (type = 'Investment' OR category = 'Investment Outflow' OR COALESCE(is_investment_outflow, 0) = 1)"
+  const candidateInvestments = db.all(
+    "SELECT id, raw_sms FROM transactions WHERE (type = 'Investment' OR category = 'Investment Outflow' OR COALESCE(is_investment_outflow, 0) = 1)"
     + " AND raw_sms IS NOT NULL AND (lower(raw_sms) LIKE '%credited%' OR lower(raw_sms) LIKE '%deposited%')"
   );
+  for (const row of candidateInvestments) {
+    if (isCreditAlert(row.raw_sms)) {
+      db.run(
+        "UPDATE transactions SET type = 'Income', category = 'Interest & Dividends', is_investment_outflow = 0 WHERE id = ?",
+        [row.id],
+      );
+    }
+  }
+
+  // 2b. Restore any previously corrupted debits that were erroneously flipped to Interest & Dividends
+  const corruptedDebits = db.all(
+    "SELECT id, raw_sms FROM transactions WHERE type = 'Income' AND category = 'Interest & Dividends' AND raw_sms IS NOT NULL AND raw_sms != ''"
+  );
+  for (const row of corruptedDebits) {
+    if (!isCreditAlert(row.raw_sms)) {
+      db.run(
+        "UPDATE transactions SET type = 'Investment', category = 'Investment Outflow', is_investment_outflow = 1 WHERE id = ?",
+        [row.id],
+      );
+    }
+  }
 
   // 3. Link transactions with missing account_id, card_id, or loan_id using resolveAccountAndCardFromSms
   const unlinked = db.all(
@@ -5710,6 +5773,7 @@ export function reconcileExistingTransactions(db) {
         const t2 = group[j];
         const inst1 = t1.loan_id ? `loan:${t1.loan_id}` : (t1.card_id ? `card:${t1.card_id}` : (t1.account_id ? `acc:${t1.account_id}` : null));
         const inst2 = t2.loan_id ? `loan:${t2.loan_id}` : (t2.card_id ? `card:${t2.card_id}` : (t2.account_id ? `acc:${t2.account_id}` : null));
+        // Genuine transfers require distinct accounts/instruments
         if (inst1 && inst2 && inst1 !== inst2) {
           const d1 = new Date(t1.date || t1.created_at).getTime();
           const d2 = new Date(t2.date || t2.created_at).getTime();
@@ -5719,16 +5783,21 @@ export function reconcileExistingTransactions(db) {
             if (isT1Credit !== isT2Credit) {
               const utr1 = extractUtr(t1.raw_sms);
               const utr2 = extractUtr(t2.raw_sms);
-              const shareUtr = Boolean(utr1 && utr2 && utr1 === utr2);
+              const hasMatchingUtr = Boolean(utr1 && utr2 && utr1 === utr2);
               const isLoanOrEmi = /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(t1.raw_sms || '')
                 || /nach\s*dr\s*ow|towards\s*ecs|overdraft|\bhome\s*loan\b|\bstar\s*home\b|\bloan\s*repayment\b|\bemi\b/i.test(t2.raw_sms || '');
               const hasLoan = Boolean(t1.loan_id || t2.loan_id) || isLoanOrEmi;
-              const isCard = !isLoanOrEmi && Boolean(t1.card_id || t2.card_id);
+              const hasCard = !hasLoan && (inst1.startsWith('card:') || inst2.startsWith('card:') || Boolean(t1.card_id || t2.card_id));
 
-              // Require explicit correlation: shared UTR, loan/mandate alert, credit card repayment keyword, prior transfer flag, or counterparty account mention
-              const mentionsTransfer = /self[- ]transfer|transfer to self|own a\/c|trf to|card.*payment|payment.*card|credit card/i.test(t1.raw_sms || '')
-                || /self[- ]transfer|transfer to self|own a\/c|trf to|card.*payment|payment.*card|credit card/i.test(t2.raw_sms || '');
-              const isAlreadyTransfer = t1.type === 'Transfer' || t2.type === 'Transfer';
+              // Card bill payment signals
+              const debitSms = isT1Credit ? (t2.raw_sms || '') : (t1.raw_sms || '');
+              const creditSms = isT1Credit ? (t1.raw_sms || '') : (t2.raw_sms || '');
+              const isCcPayment = hasCard && (
+                /cred\b|billdesk\b|towards\s+card|credit\s+card\s+bill|cc\s+payment|card\s+payment|card\s+ending|payment\s+to\s+card/i.test(debitSms)
+                || /payment\s+received\s+towards\s+card|received\s+payment\s+of|credited\s+towards\s+credit\s+card/i.test(creditSms)
+              );
+
+              // Check if raw_sms explicitly specifies the other account number
               const t1Acc = userAccounts.find((a) => a.id === t1.account_id);
               const t2Acc = userAccounts.find((a) => a.id === t2.account_id);
               const t1Digits = String(t1Acc?.account_number || t1Acc?.debit_card_last_4 || '').slice(-4);
@@ -5736,13 +5805,22 @@ export function reconcileExistingTransactions(db) {
               const mentionsOtherAccount = Boolean(
                 (t2Digits && t1.raw_sms && t1.raw_sms.includes(t2Digits))
                 || (t1Digits && t2.raw_sms && t2.raw_sms.includes(t1Digits))
+                || (t1.raw_sms && t2.raw_sms && (
+                  /(?:credited to|transferred to|sent to)\s+(?:a\/c|acct|account)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\b/i.test(t1.raw_sms)
+                  || /(?:credited to|transferred to|sent to)\s+(?:a\/c|acct|account)\s*(?:no\.?)?\s*[*Xx#\s.]*([0-9]{3,4})\b/i.test(t2.raw_sms)
+                ))
               );
 
-              if (!shareUtr && !hasLoan && !isCard && !mentionsTransfer && !isAlreadyTransfer && !mentionsOtherAccount) {
+              const mentionsTransfer = /self[- ]transfer|transfer to self|own a\/c|trf to|card.*payment|payment.*card|credit card/i.test(t1.raw_sms || '')
+                || /self[- ]transfer|transfer to self|own a\/c|trf to|card.*payment|payment.*card|credit card/i.test(t2.raw_sms || '');
+              const isAlreadyTransfer = t1.type === 'Transfer' || t2.type === 'Transfer';
+
+              const isEligiblePair = hasMatchingUtr || mentionsOtherAccount || hasLoan || isCcPayment || (hasCard && mentionsTransfer) || isAlreadyTransfer;
+              if (!isEligiblePair) {
                 continue;
               }
 
-              const cat = hasLoan ? 'Loans & EMI' : (isCard ? 'Credit Card' : 'Transfer');
+              const cat = hasLoan ? 'Loans & EMI' : (hasCard ? 'Credit Card' : 'Transfer');
               t1.type = 'Transfer';
               t1.category = cat;
               t2.type = 'Transfer';
@@ -5752,9 +5830,9 @@ export function reconcileExistingTransactions(db) {
                 t1.loan_id = matchedLoanId;
                 t2.loan_id = matchedLoanId;
                 db.run("UPDATE transactions SET type = 'Transfer', category = ?, loan_id = ? WHERE id IN (?, ?)", [cat, matchedLoanId, t1.id, t2.id]);
-                const creditSms = isT1Credit ? t1.raw_sms : t2.raw_sms;
-                if (creditSms) {
-                  autoUpdateLoanFromSms(db, creditSms, '', matchedLoanId);
+                const creditText = isT1Credit ? t1.raw_sms : t2.raw_sms;
+                if (creditText) {
+                  autoUpdateLoanFromSms(db, creditText, '', matchedLoanId);
                 }
               } else {
                 db.run("UPDATE transactions SET type = 'Transfer', category = ? WHERE id IN (?, ?)", [cat, t1.id, t2.id]);
