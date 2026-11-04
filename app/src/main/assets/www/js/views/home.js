@@ -93,6 +93,7 @@ export async function renderHome(container, app) {
           </span>
         </div>
 
+        ${Bridge.isAndroid() ? `
         <div class="list-row" data-onboarding-sms style="padding:10px 0;background:transparent">
           <span class="badge ${smsGranted ? 'badge-income' : 'badge-tonal'}" style="width:22px;height:22px;border-radius:50%;padding:0;display:grid;place-items:center">
             ${icon(smsGranted ? 'check' : 'sms', 'icon-sm')}
@@ -102,7 +103,7 @@ export async function renderHome(container, app) {
             <span class="caption">${smsGranted ? 'Active on this device' : 'Auto-track daily debits & credits'}</span>
           </span>
           ${!smsGranted ? `<button class="btn btn-sm btn-tonal btn-sms-prompt" data-action-sms>Enable</button>` : ''}
-        </div>
+        </div>` : ''}
 
         <div class="list-row" data-onboarding-cas style="padding:10px 0;background:transparent">
           <span class="badge ${hasInvestments ? 'badge-income' : 'badge-tonal'}" style="width:22px;height:22px;border-radius:50%;padding:0;display:grid;place-items:center">
@@ -141,7 +142,7 @@ export async function renderHome(container, app) {
 
   const smsPromptDismissed = app.settings?.sms_prompt_dismissed === '1';
   let smsPromptBannerHtml = '';
-  if (!smsPromptDismissed) {
+  if (!smsPromptDismissed && Bridge.isAndroid()) {
     if (!smsGranted) {
       smsPromptBannerHtml = `
         <div class="card" style="border:1px solid var(--outline-variant);background:var(--surface-container-low);margin-bottom:var(--gap-3)" data-sms-prompt-card>
@@ -244,7 +245,7 @@ export async function renderHome(container, app) {
   }
 
   // If user finished initial setup without SMS permission, show prompt once on first home landing
-  if (app.pendingSmsPrompt) {
+  if (app.pendingSmsPrompt && Bridge.isAndroid()) {
     app.pendingSmsPrompt = false;
     setTimeout(async () => {
       const ask = await confirmDialog(

@@ -38,9 +38,9 @@ export async function renderMore(container, app) {
       <div class="list">
         ${navRow('backup', 'backup', 'Backup & Restore', 'Encrypted database backup')}
         ${app.familyEnabled ? navRow('family', 'group', 'Household', 'Family member profiles') : ''}
-        ${navRow('rules', 'sms', 'Bank SMS tracking',
+        ${Bridge.isAndroid() ? navRow('rules', 'sms', 'Bank SMS tracking',
     smsSub,
-    smsGranted ? '' : 'Set up')}
+    smsGranted ? '' : 'Set up') : ''}
         ${navRow('delete-data', 'delete', 'Delete data', 'Erase specific records or reset app')}
       </div>
     </div>

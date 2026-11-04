@@ -84,9 +84,11 @@ function openOverlay(buildNode) {
     document.body.appendChild(scrim);
 
     let settled = false;
+    let onKeyDown = null;
     const close = (value) => {
       if (settled) return;
       settled = true;
+      if (onKeyDown) window.removeEventListener('keydown', onKeyDown);
       scrim.classList.remove('open');
       node.classList.remove('open');
       setTimeout(() => {
@@ -101,6 +103,14 @@ function openOverlay(buildNode) {
       node.classList.add('dialog-on-overlay', 'sheet-on-overlay');
     }
     document.body.appendChild(node);
+
+    onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
 
     scrim.addEventListener('click', () => close(null));
     requestAnimationFrame(() => {

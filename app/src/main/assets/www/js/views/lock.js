@@ -400,7 +400,9 @@ export function renderSetup(app) {
     if (smsGranted) {
       app.open('sms_ingest', { initialSetup: true });
     } else {
-      app.pendingSmsPrompt = true;
+      if (Bridge.isAndroid()) {
+        app.pendingSmsPrompt = true;
+      }
       app.open('home');
     }
   };

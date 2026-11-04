@@ -3,7 +3,7 @@
  * Enables 100% offline-first execution, caching shell, assets, fonts and WebAssembly modules.
  */
 
-const CACHE_NAME = 'vittavriksha-v1.0.9';
+const CACHE_NAME = 'vittavriksha-v1.0.10';
 
 const PRECACHE_URLS = [
   './',

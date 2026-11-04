@@ -130,4 +130,13 @@ if (fs.existsSync(aboutPath)) {
   console.log(`[+] Updated ${aboutPath}`);
 }
 
+// 7. Update app/src/main/assets/www/sw.js if exists
+const swPath = path.join(rootDir, 'app', 'src', 'main', 'assets', 'www', 'sw.js');
+if (fs.existsSync(swPath)) {
+  let swRaw = fs.readFileSync(swPath, 'utf8');
+  swRaw = swRaw.replace(/const CACHE_NAME = 'vittavriksha-v[^']+';/, `const CACHE_NAME = 'vittavriksha-v${newName}';`);
+  fs.writeFileSync(swPath, swRaw, 'utf8');
+  console.log(`[+] Updated ${swPath}`);
+}
+
 console.log(`[+] Version bump complete.`);

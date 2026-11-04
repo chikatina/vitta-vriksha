@@ -3552,3 +3552,79 @@ body.tour-active .nav-item.tour-tab-active .nav-label {
 .holding-quick-chip:active {
   background: var(--accent-container);
 }
+
+
+/* -------------------------------------------------------- responsive layout */
+
+@media (min-width: 640px) {
+  :root {
+    --app-max-width: 680px;
+  }
+
+  .app-bar {
+    max-width: var(--app-max-width);
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .view {
+    max-width: var(--app-max-width);
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .nav-bar {
+    max-width: var(--app-max-width);
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    border: 1px solid var(--outline);
+    border-bottom: none;
+  }
+
+  .fab {
+    right: max(var(--gap-4), calc(50vw - (var(--app-max-width) / 2) + var(--gap-4)));
+  }
+
+  .sheet {
+    left: 50%;
+    right: auto;
+    width: min(580px, calc(100vw - 32px));
+    transform: translate(-50%, 100%);
+    border-radius: var(--radius-xl);
+    bottom: 20px;
+    border: 1px solid var(--outline);
+  }
+
+  .sheet.open {
+    transform: translate(-50%, 0);
+  }
+
+  .dialog {
+    width: min(420px, calc(100vw - 48px));
+  }
+
+  .toast-host {
+    left: 50%;
+    right: auto;
+    width: min(440px, calc(100vw - 32px));
+    transform: translateX(-50%);
+  }
+
+  .setup {
+    max-width: 520px;
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .lock-body {
+    max-width: 380px;
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
