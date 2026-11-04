@@ -9,36 +9,46 @@ test('native storage: IndexedDB operations and legacy migration', async (t) => {
     open: () => {
       const req = {
         result: {
+          close: () => {},
           objectStoreNames: { contains: () => true },
           createObjectStore: () => {},
-          transaction: () => ({
-            objectStore: () => ({
-              get: (k) => {
-                const getReq = {};
-                setTimeout(() => {
-                  getReq.result = idbStore.get(k);
-                  if (getReq.onsuccess) getReq.onsuccess();
-                }, 0);
-                return getReq;
-              },
-              put: (v, k) => {
-                const putReq = {};
-                setTimeout(() => {
-                  idbStore.set(k, v);
-                  if (putReq.onsuccess) putReq.onsuccess();
-                }, 0);
-                return putReq;
-              },
-              delete: (k) => {
-                const delReq = {};
-                setTimeout(() => {
-                  idbStore.delete(k);
-                  if (delReq.onsuccess) delReq.onsuccess();
-                }, 0);
-                return delReq;
-              },
-            }),
-          }),
+          transaction: () => {
+            const tx = {
+              oncomplete: null,
+              onerror: null,
+              onabort: null,
+              objectStore: () => ({
+                get: (k) => {
+                  const getReq = {};
+                  setTimeout(() => {
+                    getReq.result = idbStore.get(k);
+                    if (getReq.onsuccess) getReq.onsuccess();
+                    if (tx.oncomplete) tx.oncomplete();
+                  }, 0);
+                  return getReq;
+                },
+                put: (v, k) => {
+                  const putReq = {};
+                  setTimeout(() => {
+                    idbStore.set(k, v);
+                    if (putReq.onsuccess) putReq.onsuccess();
+                    if (tx.oncomplete) tx.oncomplete();
+                  }, 0);
+                  return putReq;
+                },
+                delete: (k) => {
+                  const delReq = {};
+                  setTimeout(() => {
+                    idbStore.delete(k);
+                    if (delReq.onsuccess) delReq.onsuccess();
+                    if (tx.oncomplete) tx.oncomplete();
+                  }, 0);
+                  return delReq;
+                },
+              }),
+            };
+            return tx;
+          },
         },
       };
       setTimeout(() => {
@@ -100,5 +110,35 @@ test('native storage: IndexedDB operations and legacy migration', async (t) => {
     await deleteDatabase();
     assert.equal(idbStore.has('database'), false);
     assert.equal(mockLs.has('vittavriksha.db'), false);
+  });
+
+  await t.test('falls back to localStorage when IndexedDB write fails', async () => {
+    idbStore.clear();
+    mockLs.clear();
+
+    // Temporarily cause put to fail (simulating QuotaExceededError)
+    const originalOpen = globalThis.indexedDB.open;
+    globalThis.indexedDB = {
+      open: () => {
+        const req = {};
+        setTimeout(() => {
+          if (req.onerror) {
+            req.error = new Error('QuotaExceededError: The quota has been exceeded.');
+            req.onerror();
+          }
+        }, 0);
+        return req;
+      },
+    };
+
+    const fallbackBytes = new Uint8Array([99, 88, 77]);
+    await writeDatabase(fallbackBytes);
+
+    // Should have fallen back to localStorage
+    assert.ok(mockLs.has('vittavriksha.db'), 'Should save to localStorage when IndexedDB fails');
+    const read = await readDatabase();
+    assert.deepEqual(read, fallbackBytes);
+
+    globalThis.indexedDB = mockIdb;
   });
 });

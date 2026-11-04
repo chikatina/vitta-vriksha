@@ -22,15 +22,24 @@ const IDB_KEY = 'database';
 function openIdb() {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null);
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(IDB_NAME, 1);
-    req.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains(IDB_STORE)) {
-        db.createObjectStore(IDB_STORE);
+    try {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) {
+          db.createObjectStore(IDB_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
+      if ('onblocked' in req) {
+        req.onblocked = () => {
+          console.warn('IndexedDB open blocked by existing connection');
+        };
       }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    } catch (err) {
+      reject(err);
+    }
   });
 }
 
@@ -43,8 +52,14 @@ async function idbGet(key) {
       const tx = db.transaction(IDB_STORE, 'readonly');
       const store = tx.objectStore(IDB_STORE);
       const req = store.get(key);
-      req.onsuccess = () => resolve(req.result ?? null);
-      req.onerror = () => reject(req.error);
+      req.onsuccess = () => {
+        db.close?.();
+        resolve(req.result ?? null);
+      };
+      req.onerror = () => {
+        db.close?.();
+        reject(req.error);
+      };
     });
   } catch (err) {
     console.warn('IndexedDB read failed:', err);
@@ -59,9 +74,34 @@ async function idbSet(key, value) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, 'readwrite');
     const store = tx.objectStore(IDB_STORE);
+    let settled = false;
+
+    const finishSuccess = () => {
+      if (settled) return;
+      settled = true;
+      db.close?.();
+      resolve(true);
+    };
+
+    const finishError = (err) => {
+      if (settled) return;
+      settled = true;
+      db.close?.();
+      reject(err);
+    };
+
     const req = store.put(value, key);
-    req.onsuccess = () => resolve(true);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      // In environment without tx.oncomplete (e.g. lightweight mocks), resolve on req.onsuccess
+      if (!tx.oncomplete && typeof tx.addEventListener !== 'function') {
+        finishSuccess();
+      }
+    };
+    req.onerror = () => finishError(req.error || new Error('IndexedDB put failed'));
+
+    tx.oncomplete = () => finishSuccess();
+    tx.onerror = () => finishError(tx.error || new Error('IndexedDB transaction failed'));
+    tx.onabort = () => finishError(tx.error || new Error('IndexedDB transaction aborted'));
   });
 }
 
@@ -73,12 +113,51 @@ async function idbDelete(key) {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(IDB_STORE, 'readwrite');
       const store = tx.objectStore(IDB_STORE);
+      let settled = false;
+
+      const finishSuccess = () => {
+        if (settled) return;
+        settled = true;
+        db.close?.();
+        resolve(true);
+      };
+
+      const finishError = (err) => {
+        if (settled) return;
+        settled = true;
+        db.close?.();
+        reject(err);
+      };
+
       const req = store.delete(key);
-      req.onsuccess = () => resolve(true);
-      req.onerror = () => reject(req.error);
+      req.onsuccess = () => {
+        if (!tx.oncomplete && typeof tx.addEventListener !== 'function') {
+          finishSuccess();
+        }
+      };
+      req.onerror = () => finishError(req.error || new Error('IndexedDB delete failed'));
+
+      tx.oncomplete = () => finishSuccess();
+      tx.onerror = () => finishError(tx.error || new Error('IndexedDB delete transaction failed'));
+      tx.onabort = () => finishError(tx.error || new Error('IndexedDB delete transaction aborted'));
     });
   } catch {
     return false;
+  }
+}
+
+/**
+ * Requests persistent storage from the browser so the database is preserved across
+ * storage pressure and Safari 7-day eviction cycles.
+ */
+export async function requestPersistentStorage() {
+  if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.persist === 'function') {
+    try {
+      const isPersisted = await navigator.storage.persisted();
+      if (!isPersisted) {
+        await navigator.storage.persist();
+      }
+    } catch {}
   }
 }
 
@@ -102,9 +181,13 @@ export async function readDatabase() {
   }
   // In a browser or PWA environment, read directly from IndexedDB (no 5MB storage limit)
   if (typeof indexedDB !== 'undefined') {
-    const idbBytes = await idbGet(IDB_KEY);
-    if (idbBytes) {
-      return idbBytes instanceof Uint8Array ? idbBytes : new Uint8Array(idbBytes);
+    try {
+      const idbBytes = await idbGet(IDB_KEY);
+      if (idbBytes) {
+        return idbBytes instanceof Uint8Array ? idbBytes : new Uint8Array(idbBytes);
+      }
+    } catch (err) {
+      console.warn('IndexedDB read failed, trying localStorage fallback:', err);
     }
   }
   // Migration fallback: check legacy localStorage
@@ -114,8 +197,10 @@ export async function readDatabase() {
       const bytes = decodeBase64(stored);
       if (typeof indexedDB !== 'undefined') {
         try {
-          await idbSet(IDB_KEY, bytes);
-          localStorage.removeItem(STORE_KEY);
+          const saved = await idbSet(IDB_KEY, bytes);
+          if (saved) {
+            localStorage.removeItem(STORE_KEY);
+          }
         } catch {}
       }
       return bytes;
@@ -138,13 +223,29 @@ export async function writeDatabase(bytes) {
     if (!ok) throw new Error('The database could not be saved.');
     return;
   }
+
+  let savedToIdb = false;
   if (typeof indexedDB !== 'undefined') {
-    await idbSet(IDB_KEY, view);
+    try {
+      savedToIdb = await idbSet(IDB_KEY, view);
+    } catch (err) {
+      console.warn('IndexedDB write failed, falling back to localStorage:', err);
+    }
+  }
+  if (savedToIdb) {
     return;
   }
+
   if (typeof localStorage !== 'undefined') {
-    localStorage.setItem(STORE_KEY, encodeBase64(view));
+    try {
+      localStorage.setItem(STORE_KEY, encodeBase64(view));
+      return;
+    } catch (lsErr) {
+      throw new Error('Database could not be saved (storage quota exceeded): ' + (lsErr.message || lsErr));
+    }
   }
+
+  throw new Error('No persistent storage mechanism available.');
 }
 
 /*

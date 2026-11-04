@@ -6,10 +6,13 @@
   <meta name="color-scheme" content="light dark">
   <title>Vitta Vriksha</title>
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Vitta Vriksha">
+  <meta name="format-detection" content="telephone=no">
   <meta name="theme-color" content="#0B1120">
   <link rel="apple-touch-icon" href="images/apple-touch-icon.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="images/apple-touch-icon.png">
   <link rel="icon" type="image/png" sizes="192x192" href="images/icon-192.png">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="css/style.css">
@@ -32,7 +35,9 @@
   <script>
     if ('serviceWorker' in navigator && !window.AndroidBridge) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch(() => {});
+        navigator.serviceWorker.register('./sw.js').then((reg) => {
+          reg.update().catch(() => {});
+        }).catch(() => {});
       });
     }
   </script>
