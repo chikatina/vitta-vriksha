@@ -15,6 +15,7 @@ import { db, invoke } from './backend/index.js';
 import {
   checkPermission, shouldShowRationale, isAndroid, isBiometricAvailable, openAppSettings, permissionIsBlocked,
   requestPermission, saveFile, shareFile, triggerBiometricAuth, verifyBiometric, openEmail, openUrl, isSmsTrackingEnabled, setSmsTrackingEnabled,
+  requestPersistentStorage,
   isDebug,
 } from './backend/native.js';
 
@@ -23,6 +24,7 @@ export const Bridge = {
   isAndroid,
 
   /** Whether the app is running in a debug / developer testing environment. */
+  requestPersistentStorage,
   isDebug,
 
   /** Runs an action against one of the backend modules. */

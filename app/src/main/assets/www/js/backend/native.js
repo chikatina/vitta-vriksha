@@ -14,6 +14,152 @@
  */
 
 const STORE_KEY = 'vittavriksha.db';
+const IDB_NAME = 'vittavriksha';
+const IDB_STORE = 'files';
+const IDB_KEY = 'database';
+
+/** Resolves an open IndexedDB connection, or null when unavailable. */
+function openIdb() {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    try {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) {
+          db.createObjectStore(IDB_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
+      if ('onblocked' in req) {
+        req.onblocked = () => {
+          console.warn('IndexedDB open blocked by existing connection');
+        };
+      }
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+/** Reads a raw value from the IndexedDB files store. */
+async function idbGet(key) {
+  try {
+    const db = await openIdb();
+    if (!db) return null;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, 'readonly');
+      const store = tx.objectStore(IDB_STORE);
+      const req = store.get(key);
+      req.onsuccess = () => {
+        db.close?.();
+        resolve(req.result ?? null);
+      };
+      req.onerror = () => {
+        db.close?.();
+        reject(req.error);
+      };
+    });
+  } catch (err) {
+    console.warn('IndexedDB read failed:', err);
+    return null;
+  }
+}
+
+/** Writes a value to the IndexedDB files store. */
+async function idbSet(key, value) {
+  const db = await openIdb();
+  if (!db) return false;
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    const store = tx.objectStore(IDB_STORE);
+    let settled = false;
+
+    const finishSuccess = () => {
+      if (settled) return;
+      settled = true;
+      db.close?.();
+      resolve(true);
+    };
+
+    const finishError = (err) => {
+      if (settled) return;
+      settled = true;
+      db.close?.();
+      reject(err);
+    };
+
+    const req = store.put(value, key);
+    req.onsuccess = () => {
+      // In environment without tx.oncomplete (e.g. lightweight mocks), resolve on req.onsuccess
+      if (!tx.oncomplete && typeof tx.addEventListener !== 'function') {
+        finishSuccess();
+      }
+    };
+    req.onerror = () => finishError(req.error || new Error('IndexedDB put failed'));
+
+    tx.oncomplete = () => finishSuccess();
+    tx.onerror = () => finishError(tx.error || new Error('IndexedDB transaction failed'));
+    tx.onabort = () => finishError(tx.error || new Error('IndexedDB transaction aborted'));
+  });
+}
+
+/** Deletes a key from the IndexedDB files store. */
+async function idbDelete(key) {
+  try {
+    const db = await openIdb();
+    if (!db) return false;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      const store = tx.objectStore(IDB_STORE);
+      let settled = false;
+
+      const finishSuccess = () => {
+        if (settled) return;
+        settled = true;
+        db.close?.();
+        resolve(true);
+      };
+
+      const finishError = (err) => {
+        if (settled) return;
+        settled = true;
+        db.close?.();
+        reject(err);
+      };
+
+      const req = store.delete(key);
+      req.onsuccess = () => {
+        if (!tx.oncomplete && typeof tx.addEventListener !== 'function') {
+          finishSuccess();
+        }
+      };
+      req.onerror = () => finishError(req.error || new Error('IndexedDB delete failed'));
+
+      tx.oncomplete = () => finishSuccess();
+      tx.onerror = () => finishError(tx.error || new Error('IndexedDB delete transaction failed'));
+      tx.onabort = () => finishError(tx.error || new Error('IndexedDB delete transaction aborted'));
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Requests persistent storage from the browser so the database is preserved across
+ * storage pressure and Safari 7-day eviction cycles.
+ */
+export async function requestPersistentStorage() {
+  if (typeof navigator !== 'undefined' && navigator.storage && typeof navigator.storage.persist === 'function') {
+    try {
+      const isPersisted = await navigator.storage.persisted();
+      if (!isPersisted) {
+        await navigator.storage.persist();
+      }
+    } catch {}
+  }
+}
 
 /** True when the Android shell is present. */
 export function isAndroid() {
@@ -33,8 +179,34 @@ export async function readDatabase() {
     const encoded = bridge().readDatabase();
     return encoded ? decodeBase64(encoded) : null;
   }
-  const stored = localStorage.getItem(STORE_KEY);
-  return stored ? decodeBase64(stored) : null;
+  // In a browser or PWA environment, read directly from IndexedDB (no 5MB storage limit)
+  if (typeof indexedDB !== 'undefined') {
+    try {
+      const idbBytes = await idbGet(IDB_KEY);
+      if (idbBytes) {
+        return idbBytes instanceof Uint8Array ? idbBytes : new Uint8Array(idbBytes);
+      }
+    } catch (err) {
+      console.warn('IndexedDB read failed, trying localStorage fallback:', err);
+    }
+  }
+  // Migration fallback: check legacy localStorage
+  if (typeof localStorage !== 'undefined') {
+    const stored = localStorage.getItem(STORE_KEY);
+    if (stored) {
+      const bytes = decodeBase64(stored);
+      if (typeof indexedDB !== 'undefined') {
+        try {
+          const saved = await idbSet(IDB_KEY, bytes);
+          if (saved) {
+            localStorage.removeItem(STORE_KEY);
+          }
+        } catch {}
+      }
+      return bytes;
+    }
+  }
+  return null;
 }
 
 /**
@@ -44,13 +216,36 @@ export async function readDatabase() {
  * half way leaves the previous file intact rather than a truncated one.
  */
 export async function writeDatabase(bytes) {
-  const encoded = encodeBase64(bytes);
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (isAndroid() && typeof bridge()?.writeDatabase === 'function') {
+    const encoded = encodeBase64(view);
     const ok = bridge().writeDatabase(encoded);
     if (!ok) throw new Error('The database could not be saved.');
     return;
   }
-  localStorage.setItem(STORE_KEY, encoded);
+
+  let savedToIdb = false;
+  if (typeof indexedDB !== 'undefined') {
+    try {
+      savedToIdb = await idbSet(IDB_KEY, view);
+    } catch (err) {
+      console.warn('IndexedDB write failed, falling back to localStorage:', err);
+    }
+  }
+  if (savedToIdb) {
+    return;
+  }
+
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(STORE_KEY, encodeBase64(view));
+      return;
+    } catch (lsErr) {
+      throw new Error('Database could not be saved (storage quota exceeded): ' + (lsErr.message || lsErr));
+    }
+  }
+
+  throw new Error('No persistent storage mechanism available.');
 }
 
 /*
@@ -120,7 +315,12 @@ export async function deleteDatabase() {
     bridge().deleteDatabase();
     return;
   }
-  localStorage.removeItem(STORE_KEY);
+  if (typeof indexedDB !== 'undefined') {
+    await idbDelete(IDB_KEY);
+  }
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem(STORE_KEY);
+  }
 }
 
 /* ---------------------------------------------------------------- biometrics */

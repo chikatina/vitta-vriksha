@@ -139,6 +139,7 @@ class App {
     this.applyAppearance(localStorage.getItem('vv.appearance') || 'system',
       localStorage.getItem('vv.accent') || 'jade');
     this.bindChrome();
+    Bridge.requestPersistentStorage?.();
 
     const vault = await Bridge.db('vault_status');
     if (vault.status !== 'success') {
