@@ -2,6 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 
 // Parse CLI flags
 const args = process.argv.slice(2);
@@ -54,54 +55,113 @@ if (!codeMatch || !nameMatch) {
   process.exit(1);
 }
 
-const currentCode = parseInt(codeMatch[1], 10);
-const currentName = nameMatch[1];
+const localCode = parseInt(codeMatch[1], 10);
+const localName = nameMatch[1];
+
+function compareSemver(a, b) {
+  const pa = a.replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = b.replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+// Discover highest released versionCode and versionName from git tags and GitHub Releases
+let highestCode = localCode;
+let highestName = localName;
+
+// Check local / fetched git tags
+try {
+  const tagsOut = execSync('git tag -l "v*"', { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+  for (const rawTag of tagsOut.split('\n')) {
+    const t = rawTag.trim().replace(/^v/, '');
+    const sem = t.split('-')[0];
+    if (sem && /^\d+\.\d+\.\d+$/.test(sem)) {
+      if (compareSemver(sem, highestName) > 0) {
+        highestName = sem;
+      }
+    }
+  }
+} catch {
+  // Ignore git tag query failures in non-git environments
+}
+
+// Check GitHub Releases API if GITHUB_TOKEN or gh CLI is available
+try {
+  const repo = process.env.GITHUB_REPOSITORY || 'chikatina/vitta-vriksha';
+  let jsonStr = '';
+  if (process.env.GITHUB_TOKEN) {
+    jsonStr = execSync(`curl -s -H "Authorization: Bearer ${process.env.GITHUB_TOKEN}" "https://api.github.com/repos/${repo}/releases?per_page=15"`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+  } else {
+    jsonStr = execSync(`gh api /repos/${repo}/releases?per_page=15`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+  }
+  const releases = JSON.parse(jsonStr);
+  if (Array.isArray(releases)) {
+    for (const r of releases) {
+      const tag = r.tag_name?.trim().replace(/^v/, '').split('-')[0];
+      if (tag && /^\d+\.\d+\.\d+$/.test(tag)) {
+        if (compareSemver(tag, highestName) > 0) {
+          highestName = tag;
+        }
+      }
+      const bMatch = r.body?.match(/Build\s+(\d+)/i);
+      if (bMatch) {
+        const bCode = parseInt(bMatch[1], 10);
+        if (bCode > highestCode) {
+          highestCode = bCode;
+        }
+      }
+    }
+  }
+} catch {
+  // Ignore remote release lookup failures (offline / rate-limited)
+}
 
 if (bumpType === 'none' && !targetCode && !targetName) {
-  console.log(`No version bump requested. Current: v${currentName} (build ${currentCode})`);
+  console.log(`No version bump requested. Current: v${localName} (build ${localCode})`);
   process.exit(0);
 }
 
-// 2. Compute new versionCode
-let newCode = currentCode;
+// 2. Compute new versionCode (strictly greater than highestCode)
+let newCode = highestCode;
 if (targetCode && targetCode > 0) {
   newCode = targetCode;
 } else if (bumpType !== 'none' || targetName) {
-  newCode = currentCode + 1;
+  newCode = highestCode + 1;
 }
 
 // 3. Compute new versionName (X.Y.Z)
-let newName = currentName;
+let newName = highestName;
 if (targetName) {
   newName = targetName.trim().replace(/^v/, '');
 } else if (bumpType === 'code-only' || bumpType === 'none') {
-  newName = currentName;
+  newName = highestName;
 } else {
-  const parts = currentName.split('.').map(p => parseInt(p, 10) || 0);
+  const parts = highestName.split('.').map(p => parseInt(p, 10) || 0);
   let major = parts[0] || 1;
   let minor = parts[1] || 0;
   let patch = parts[2] || 0;
 
   if (bumpType === 'major') {
-    // X bump: 1.0.9 -> 2.0.0
     major += 1;
     minor = 0;
     patch = 0;
   } else if (bumpType === 'minor') {
-    // Y bump: 1.0.9 -> 1.1.0
     minor += 1;
     patch = 0;
   } else if (bumpType === 'patch') {
-    // Z bump: 1.0.9 -> 1.0.10
     patch += 1;
   }
   newName = `${major}.${minor}.${patch}`;
 }
 
 console.log(`Version Bump Result:`);
-console.log(`  Bump selection: ${rawBumpType}`);
-console.log(`  Previous: versionCode ${currentCode} | versionName "${currentName}"`);
-console.log(`  New:      versionCode ${newCode} | versionName "${newName}"`);
+console.log(`  Bump selection:  ${rawBumpType}`);
+console.log(`  Local on disk:   versionCode ${localCode} | versionName "${localName}"`);
+console.log(`  Highest found:   versionCode ${highestCode} | versionName "${highestName}"`);
+console.log(`  New release:     versionCode ${newCode} | versionName "${newName}"`);
 
 // 4. Update app/build.gradle
 let updatedGradle = gradleRaw.replace(/versionCode\s*=?\s*\d+/, `versionCode = ${newCode}`);
