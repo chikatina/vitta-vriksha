@@ -45,9 +45,10 @@
   --ease: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasised: cubic-bezier(0.3, 0, 0, 1);
 
-  /* MainActivity writes the real system bar insets and keyboard height over these. */
-  --inset-top: 36px;
-  --inset-bottom: 24px;
+  /* MainActivity writes the real system bar insets and keyboard height over these.
+     For PWAs, use the platform safe area insets. */
+  --inset-top: max(env(safe-area-inset-top, 0px), 24px);
+  --inset-bottom: max(env(safe-area-inset-bottom, 0px), 20px);
   --keyboard-inset: 0px;
 
   --nav-height: 68px;
