@@ -7,13 +7,16 @@ $ErrorActionPreference = "Stop"
 $stack  = "VittaVrikshaSite"
 $region = "us-east-1"
 
-$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Definition }
-$repoRoot  = Split-Path -Parent $scriptDir
-$wwwDir    = Join-Path $repoRoot "app\src\main\assets\www"
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$wwwDir   = Join-Path $repoRoot "app\src\main\assets\www"
 
 if (-not (Test-Path $wwwDir)) {
   Write-Error "www/ directory not found at $wwwDir"
   exit 1
+}
+
+function Get-RelativePathCompat($basePath, $fullPath) {
+  return $fullPath.Substring($basePath.Length).TrimStart('\', '/').Replace('\', '/')
 }
 
 Write-Host "Fetching CloudFormation outputs from $stack ($region)..." -ForegroundColor Cyan
@@ -64,28 +67,28 @@ if (Test-Path (Join-Path $wwwDir "manifest.webmanifest")) {
 
 # Ensure .mjs ES module files have correct JavaScript MIME type (required for X-Content-Type-Options: nosniff)
 Get-ChildItem -Path $wwwDir -Filter "*.mjs" -Recurse | ForEach-Object {
-  $rel = [System.IO.Path]::GetRelativePath($wwwDir, $_.FullName).Replace("\", "/")
+  $rel = Get-RelativePathCompat $wwwDir $_.FullName
   aws s3 cp $_.FullName "s3://$bucket/$rel" `
     --cache-control $mediumCache --content-type "text/javascript; charset=utf-8" --only-show-errors
 }
 
 # Ensure .wasm files have correct application/wasm MIME type and long cache
 Get-ChildItem -Path $wwwDir -Filter "*.wasm" -Recurse | ForEach-Object {
-  $rel = [System.IO.Path]::GetRelativePath($wwwDir, $_.FullName).Replace("\", "/")
+  $rel = Get-RelativePathCompat $wwwDir $_.FullName
   aws s3 cp $_.FullName "s3://$bucket/$rel" `
     --cache-control $longCache --content-type "application/wasm" --only-show-errors
 }
 
 # Ensure fonts have long cache
 Get-ChildItem -Path $wwwDir -Filter "*.woff2" -Recurse | ForEach-Object {
-  $rel = [System.IO.Path]::GetRelativePath($wwwDir, $_.FullName).Replace("\", "/")
+  $rel = Get-RelativePathCompat $wwwDir $_.FullName
   aws s3 cp $_.FullName "s3://$bucket/$rel" `
     --cache-control $longCache --content-type "font/woff2" --only-show-errors
 }
 
 # Ensure SQLite databases (.db) have application/octet-stream and long cache
 Get-ChildItem -Path $wwwDir -Filter "*.db" -Recurse | ForEach-Object {
-  $rel = [System.IO.Path]::GetRelativePath($wwwDir, $_.FullName).Replace("\", "/")
+  $rel = Get-RelativePathCompat $wwwDir $_.FullName
   aws s3 cp $_.FullName "s3://$bucket/$rel" `
     --cache-control $longCache --content-type "application/octet-stream" --only-show-errors
 }
